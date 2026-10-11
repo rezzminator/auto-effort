@@ -65,6 +65,18 @@ type Inflight = {
   messages: number;
 };
 
+/** What the host keeps per session so a plugin reload does not lose it. */
+export type SessionState = { enabled: boolean; pin: Effort | null };
+
+/** The saved state as it was written; undefined for anything else. */
+export function readSessionState(raw: unknown): SessionState | undefined {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return undefined;
+  const { enabled, pin } = raw as Record<string, unknown>;
+  if (typeof enabled !== 'boolean') return undefined;
+  if (pin === null) return { enabled, pin: null };
+  return isEffort(pin) ? { enabled, pin } : undefined;
+}
+
 export class Controller {
   /** The set_effort tool's full name once the engine registered it. */
   toolName: string | undefined;
@@ -113,6 +125,17 @@ export class Controller {
   setEnabled(on: boolean): void {
     this.enabled = on;
     if (on) this.pin = null;
+  }
+
+  /** What a plugin reload keeps within one session: on or off, and the user's /effort pin. */
+  sessionState(): SessionState {
+    return { enabled: this.enabled, pin: this.pin === null ? null : this.pin.level };
+  }
+
+  /** The state of a session a reload interrupted, given to a controller built afresh. */
+  restoreSession(state: SessionState): void {
+    this.enabled = state.enabled;
+    this.pin = state.pin === null ? null : { level: state.pin };
   }
 
   /** Lifts the cache mark from one model, or every model when none is named. */
@@ -205,6 +228,9 @@ export class Controller {
     if (newTurn && s.userEffortPins && this.pin === null && this.lastSeen !== undefined && this.lastSeen.model === name && this.lastSeen.effort !== effort) {
       this.pin = { level: effort };
       rows.push({ event: 'pin', turnId: input.turnId, model: input.model, level: effort, previous: this.lastSeen.effort });
+    } else if (newTurn && this.pin !== null) {
+      // A pinned session's requests go at the effort they carry: the pin shows that level, after another /effort too.
+      this.pin = { level: effort };
     }
     this.lastSeen = { model: name, effort };
 

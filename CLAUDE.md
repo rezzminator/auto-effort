@@ -6,6 +6,7 @@ A Claude Code function-hooks plugin: automatic reasoning effort for the main cha
 
 - `plugins/auto-effort/`: everything that installs, and nothing else — the directory scans only this folder, so dev files never go in it.
 - `plugins/auto-effort/hooks/auto-effort.ts`: the adapter, the only file that touches `$`. It feeds the hook events to the controller and does what it returns.
+- `plugins/auto-effort/contract.d.ts`: the plugin state the host keeps per session (on/off and the pin), declared for `$.state`; `plugin.json` names it in `types`.
 - `plugins/auto-effort/src/`: every decision, pure and unit-tested. `controller.ts` holds the turn state; `settings.ts` the options and their defaults; `gate.ts` the model gate and the saved marks; `canary.ts` the cache check; `plan.ts` the planning level; `text.ts` every sentence the model or the user reads; `command.ts` `/auto-effort`; `log.ts` the decision log paths.
 - `tests/`: one vitest file per concern; `adapter.test.ts` drives the hooks module over a stand-in engine.
 - `types/claude-code.d.ts`: the plugin API (from `/plugin-types`), the truth for every hook's shape; grep it before using an event.

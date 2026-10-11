@@ -31,12 +31,21 @@ export const SEGMENT_ROWS = 1000;
 
 /**
  * The files to write after `rows` join the newest file `segment` (its text is `existing`): that file filled to `cap`
- * rows, then as many new files as the rest needs. `$.fs` has no append, so a write rewrites its whole file; the cap
- * bounds that. Blank lines are dropped.
+ * rows, then as many new files as the rest needs; a file already at or past the cap is left as it is. `$.fs` has no
+ * append, so a write rewrites its whole file; the cap bounds that. `added` counts the part's rows taken from `rows`.
+ * Blank lines are dropped.
  */
-export function fillSegments(existing: string, segment: number, rows: string[], cap: number): Array<{ segment: number; text: string }> {
-  const all = [...existing.split('\n'), ...rows].filter((line) => line.trim() !== '');
-  const out: Array<{ segment: number; text: string }> = [];
-  for (let at = 0; at < all.length; at += cap) out.push({ segment: segment + out.length, text: all.slice(at, at + cap).join('\n') + '\n' });
+export function fillSegments(existing: string, segment: number, rows: string[], cap: number): Array<{ segment: number; text: string; added: number }> {
+  const kept = existing.split('\n').filter((line) => line.trim() !== '');
+  const fresh = rows.filter((line) => line.trim() !== '');
+  const full = kept.length >= cap;
+  const all = full ? fresh : [...kept, ...fresh];
+  const first = full ? segment + 1 : segment;
+  const old = full ? 0 : kept.length;
+  const out: Array<{ segment: number; text: string; added: number }> = [];
+  for (let at = 0; at < all.length; at += cap) {
+    const part = all.slice(at, at + cap);
+    out.push({ segment: first + out.length, text: part.join('\n') + '\n', added: at + part.length - Math.max(at, old) });
+  }
   return out;
 }

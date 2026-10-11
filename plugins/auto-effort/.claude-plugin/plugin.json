@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "description": "Automatic reasoning effort for the Claude Code main chat: the plugin plans each turn, the model raises or lowers it with set_effort, and a cache check keeps it safe.",
   "license": "MIT",
+  "types": "./contract.d.ts",
   "author": {
     "name": "Reza · Professor",
     "url": "https://github.com/rezzminator/professor"

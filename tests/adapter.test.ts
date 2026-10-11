@@ -21,6 +21,9 @@ function engine(options: Record<string, unknown> = {}, o: { configRows?: unknown
   const commands: any[] = [];
   const configSets: any[] = [];
   const sess = { id: 'sess1' };
+  // The host's plugin state outlives a plugin reload: one value per (plugin, key, id).
+  const state = new Map<string, unknown>();
+  const stateKey = (ref: { plugin: string; key: string; id?: string }) => `${ref.plugin}/${ref.key}/${ref.id ?? ''}`;
   const $ = {
     tool: { register: async (spec: any) => (registered.push(spec), { tool: `mcp__auto-effort__${spec.name}` }) },
     command: { register: async (spec: any) => (commands.push(spec), { name: spec.name }) },
@@ -44,8 +47,13 @@ function engine(options: Record<string, unknown> = {}, o: { configRows?: unknown
       set: async (args: unknown) => (configSets.push(args), { value: (args as { value: unknown }).value }),
     },
     clock: { now: async () => Date.now() },
+    state: {
+      get: async (ref: { plugin: string; key: string; id?: string }) => ({ value: state.get(stateKey(ref)), version: 1 }),
+      set: async (ref: { plugin: string; key: string; id?: string }, value: unknown) => (state.set(stateKey(ref), JSON.parse(JSON.stringify(value))), { isSet: true, version: 2 }),
+    },
   };
-  (register as Hook)((name: string, a: unknown, b?: unknown) => hooks.push(typeof a === 'function' ? { name, fn: a as Hook } : { name, matcher: a as Record<string, unknown>, fn: b as Hook }), options);
+  const load = (opts: Record<string, unknown>) => (register as Hook)((name: string, a: unknown, b?: unknown) => hooks.push(typeof a === 'function' ? { name, fn: a as Hook } : { name, matcher: a as Record<string, unknown>, fn: b as Hook }), opts);
+  load(options);
   const find = (name: string, matcher?: Record<string, unknown>) => {
     const hook = hooks.find((h) => h.name === name && (matcher === undefined || JSON.stringify(h.matcher) === JSON.stringify(matcher)));
     if (!hook) throw new Error(`no ${name} hook`);
@@ -53,7 +61,12 @@ function engine(options: Record<string, unknown> = {}, o: { configRows?: unknown
   };
   const sent: any[] = [];
   const api = {
-    $, sess, logs, statuses, toasts, files, writes, store, registered, commands, configSets, hooks, sent,
+    $, sess, state, logs, statuses, toasts, files, writes, store, registered, commands, configSets, hooks, sent,
+    // A plugin reload (or an option change): the module registers again and builds a new controller; the host's state stays.
+    reload: (opts: Record<string, unknown> = options) => {
+      hooks.length = 0;
+      load(opts);
+    },
     start: () => find('session.start')($, { cwd: '/work', surface: null, isInteractive: true }, async (e: any) => ({ cwd: e.cwd })),
     prompt: async (text = 'fix the parser bug', extra: Record<string, unknown> = {}) => {
       let seen: any;
@@ -78,6 +91,176 @@ function engine(options: Record<string, unknown> = {}, o: { configRows?: unknown
   };
   return api;
 }
+
+// F3: on/off and the user's /effort pin belong to the session, so a reload keeps them and a new session starts clean.
+suite('plugin reload', () => {
+  it('keeps `/auto-effort off` across a reload and an option change, and `on` after it turns the plugin back on', async () => {
+    const e = engine();
+    await e.start();
+    await e.command('off');
+    e.reload({ planLevel: 'medium' });
+    await e.start();
+    await e.prompt();
+    expect(await e.step({})).toMatchObject({ effort: 'xhigh' });
+    expect((await e.command('status')).text).toContain('off');
+    await e.command('on');
+    e.reload();
+    await e.prompt();
+    expect(await e.step({ turnId: 't2' })).toMatchObject({ effort: 'high' });
+  });
+
+  it('keeps the pin of the user\'s /effort across a reload', async () => {
+    const e = engine();
+    await e.start();
+    await e.prompt();
+    await e.step({ turnId: 't1', effort: 'xhigh' });
+    await e.prompt();
+    expect(await e.step({ turnId: 't2', effort: 'low' })).toMatchObject({ effort: 'low' });
+    e.reload();
+    await e.prompt();
+    const kept = await e.step({ turnId: 't3', effort: 'low' });
+    expect(kept).toMatchObject({ effort: 'low' });
+    expect(e.statuses.at(-1)).toContain('you set /effort');
+  });
+
+  it('starts a new session after /clear on and unpinned, even after a reload', async () => {
+    const e = engine();
+    await e.start();
+    await e.command('off');
+    e.reload();
+    e.sess.id = 'sess2';
+    await e.prompt();
+    expect(await e.step({ turnId: 't2' })).toMatchObject({ effort: 'high' });
+  });
+
+  it('holds on and unpinned when the saved state cannot be read, and says so', async () => {
+    const e = engine();
+    await e.start();
+    await e.command('off');
+    e.reload();
+    e.$.state.get = async () => {
+      throw new Error('no state');
+    };
+    await e.prompt();
+    expect(await e.step({})).toMatchObject({ effort: 'high' });
+    expect(e.logs.some((line) => line.includes('no state') && line.includes('on and unpinned'))).toBe(true);
+  });
+
+  it('holds on and unpinned when the saved state is not in the form it writes, and says so', async () => {
+    const e = engine();
+    await e.start();
+    e.state.set('auto-effort/session/sess1', { enabled: 'no' });
+    e.reload();
+    await e.prompt();
+    expect(await e.step({})).toMatchObject({ effort: 'high' });
+    expect(e.logs.filter((line) => line.includes('not in the expected form'))).toHaveLength(1);
+  });
+
+  it('keeps going and says so when the state cannot be written', async () => {
+    const e = engine();
+    await e.start();
+    e.$.state.set = async () => {
+      throw new Error('read only');
+    };
+    expect((await e.command('off')).text).toContain('off');
+    expect(e.logs.some((line) => line.includes('read only') && line.includes('a reload'))).toBe(true);
+    await e.prompt();
+    expect(await e.step({})).toMatchObject({ effort: 'xhigh' });
+  });
+
+  it('saves what the session does after a failed read, so a later reload does not bring back the off it could not read', async () => {
+    const e = engine();
+    await e.start();
+    await e.command('off');
+    e.reload();
+    const get = e.$.state.get;
+    e.$.state.get = async () => {
+      throw new Error('no state');
+    };
+    await e.prompt();
+    expect(await e.step({})).toMatchObject({ effort: 'high' });
+    e.$.state.get = get;
+    e.reload();
+    await e.prompt();
+    expect(await e.step({ turnId: 't2' })).toMatchObject({ effort: 'high' });
+  });
+
+  it('reads the saved state once it learns the session id, when the id could not be read at start', async () => {
+    const e = engine();
+    await e.start();
+    await e.command('off');
+    e.reload();
+    const id = e.$.session.id;
+    let failing = true;
+    e.$.session.id = async () => {
+      if (failing) {
+        failing = false;
+        throw new Error('no id yet');
+      }
+      return id();
+    };
+    await e.prompt();
+    expect(e.logs.some((line) => line.includes('no id yet'))).toBe(true);
+    expect(await e.step({})).toMatchObject({ effort: 'xhigh' });
+  });
+
+  it('quotes a short piece of a saved state it cannot read, never the whole value', async () => {
+    const e = engine();
+    await e.start();
+    e.state.set('auto-effort/session/sess1', { enabled: 'x'.repeat(5000), pin: null });
+    e.reload();
+    await e.prompt();
+    const line = e.logs.find((entry) => entry.includes('not in the expected form'));
+    expect(line).toContain('{"enabled":"xxxx');
+    expect(line!.length).toBeLessThan(300);
+  });
+
+  it('applies `/auto-effort off` typed after /clear to the new session, and the next prompt keeps it', async () => {
+    const e = engine();
+    await e.start();
+    await e.prompt();
+    await e.step({});
+    e.sess.id = 'sess2';
+    expect((await e.command('off')).text).toContain('off');
+    await e.prompt();
+    expect(await e.step({ turnId: 't2' })).toMatchObject({ effort: 'xhigh' });
+    expect(e.state.get('auto-effort/session/sess2')).toEqual({ enabled: false, pin: null });
+    expect(e.state.get('auto-effort/session/sess1')).not.toEqual({ enabled: false, pin: null });
+  });
+
+  it('sends the request while the host is still saving the on/off and pin', async () => {
+    const e = engine();
+    await e.start();
+    e.$.state.set = () => new Promise(() => undefined);
+    await e.prompt();
+    const sent = await Promise.race([e.step({}), new Promise((done) => setTimeout(() => done('held'), 200))]);
+    expect(sent).toMatchObject({ effort: 'high' });
+  });
+
+  it('says once that the on/off and pin cannot be saved, not at every request', async () => {
+    const e = engine();
+    await e.start();
+    e.$.state.set = async () => {
+      throw new Error('read only');
+    };
+    await e.prompt();
+    for (let index = 0; index < 3; index += 1) await e.step({ index });
+    await vi.waitFor(() => expect(e.logs.filter((line) => line.includes('saving the on/off and pin')).length).toBeGreaterThan(0));
+    await new Promise((done) => setTimeout(done, 20));
+    expect(e.logs.filter((line) => line.includes('saving the on/off and pin'))).toHaveLength(1);
+  });
+
+  it('plans the turn with the reminder when the session id cannot be read at a prompt', async () => {
+    const e = engine();
+    await e.start();
+    e.$.session.id = async () => {
+      throw new Error('no id now');
+    };
+    const seen = await e.prompt();
+    expect(seen.context).toEqual([expect.stringContaining(TOOL)]);
+    expect(e.logs.some((line) => line.includes('no id now'))).toBe(true);
+  });
+});
 
 suite('session start', () => {
   it('registers set_effort always loaded, with the range the clamp lets through, and the /auto-effort command', async () => {
@@ -214,6 +397,38 @@ suite('turn.step', () => {
     expect(saved.unsafe[OPUS]).toMatchObject({ from: 'high', to: 'medium' });
     expect(saved.unsafe['claude-fable-5-1']).toEqual(other);
     expect(saved.probation).toEqual({ 'claude-haiku-5-5': 3 });
+  });
+
+  it('keeps a cache mark made while an earlier save is still in flight, and saves it', async () => {
+    const FABLE = 'claude-fable-5-1';
+    const e = engine();
+    await e.start();
+    await e.prompt();
+    await e.step({}, { usage: usage(10, 0, 5000) });
+    await e.tool({ tool: TOOL, level: 'medium', reason: 'rename' });
+    const { get, set } = e.$.store;
+    e.$.store.set = async () => {
+      throw new Error('store full');
+    };
+    await e.step({ index: 1 }, { usage: usage(4000, 100, 900) });
+    await e.step({ index: 2, model: FABLE }, { usage: usage(10, 0, 5000) });
+    await e.tool({ tool: TOOL, level: 'xhigh', reason: 'hard part' });
+    let releaseSet: (() => void) | undefined;
+    e.$.store.set = (key: string, value: unknown) => new Promise((done) => (releaseSet = () => done(set(key, value))));
+    const first = e.prompt('also this', { turnId: 't1' });
+    await vi.waitFor(() => expect(releaseSet).toBeDefined());
+    let releaseGet: (() => void) | undefined;
+    e.$.store.get = (key: string) => new Promise((done) => (releaseGet = () => done(get(key))));
+    const second = e.step({ index: 3, model: FABLE }, { usage: usage(4000, 100, 900) });
+    await vi.waitFor(() => expect(releaseGet).toBeDefined());
+    releaseSet!();
+    await first;
+    e.$.store.set = set;
+    e.$.store.get = get;
+    releaseGet!();
+    await second;
+    await e.prompt();
+    expect(Object.keys((e.store.get('state') as any).unsafe).sort()).toEqual([FABLE, OPUS]);
   });
 
   it('starts again on the next prompt when its first start failed', async () => {
@@ -416,6 +631,32 @@ suite('decision log', () => {
     expect(e.files.get('/logs/decisions.sess1.2.jsonl')).toBe(full);
     expect(e.writes.every((write) => write.path === '/logs/decisions.sess1.3.jsonl')).toBe(true);
     expect([...e.files.keys()]).toHaveLength(3);
+  });
+
+  it('never writes over a later file of the session when an earlier one is missing', async () => {
+    const e = engine({ logFile: '/logs/decisions.jsonl' });
+    e.files.set('/logs/decisions.sess1.jsonl', seeded(999));
+    const later = seeded(5);
+    e.files.set('/logs/decisions.sess1.3.jsonl', later);
+    await drive(e, 1100);
+    await vi.waitFor(() => expect(rowsIn(e, '/logs/decisions.sess1.2.jsonl')).toBe(1000));
+    await vi.waitFor(() => expect(e.files.has('/logs/decisions.sess1.4.jsonl')).toBe(true));
+    expect(e.files.get('/logs/decisions.sess1.3.jsonl')).toBe(later);
+  });
+
+  it('counts only the rows it could not write when a later file of the batch fails', async () => {
+    // Three option errors are one batch: two fill the first file, the third goes to `.2`, whose write fails.
+    const e = engine({ logFile: '/logs/decisions.jsonl', floor: 'lowest', ceiling: 'nope', planLevel: 'bogus' });
+    e.files.set('/logs/decisions.sess1.jsonl', seeded(998));
+    const write = e.$.fs.write;
+    e.$.fs.write = async (path: string, text: string) => {
+      if (path.endsWith('.2.jsonl')) throw new Error('disk full');
+      return write(path, text);
+    };
+    await e.start();
+    await vi.waitFor(() => expect(e.logs.some((line) => line.includes('disk full'))).toBe(true));
+    expect(e.logRows().filter((row) => row.event === 'option-error')).toHaveLength(2);
+    expect(e.logs.find((line) => line.includes('disk full'))).toContain('1 rows were not kept');
   });
 });
 

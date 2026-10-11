@@ -128,7 +128,8 @@ One JSON row per line in `logFile` (one file per session, a new numbered file ev
 ## Limits
 
 - Main chat only. Sub-agents keep their own effort.
-- The session's on/off and a `/effort` pin live in memory: a `/reload-plugins` forgets them, and so does a settings change (in `/config` or by `/auto-effort set`), which reloads the plugin. `/clear` starts a new session: on, unpinned, with its own log file. The model marks and probation counts are saved and shared by every chat on the machine; a chat's save rewrites only the models it changed, so for one model the last write wins.
+- The session's on/off and a `/effort` pin are kept per session id in the host's plugin state, so a `/reload-plugins` or a settings change (in `/config` or by `/auto-effort set`), which reloads the plugin, keeps them. They do not survive closing the chat. `/clear` starts a new session: on, unpinned, with its own log file. The model marks and probation counts are saved and shared by every chat on the machine; a chat's save rewrites only the models it changed, so for one model the last write wins.
+- `failurePatterns` entries are regular expressions you write, run over every main-loop Bash result. They are checked for syntax only, so a pattern that backtracks without end (such as `(a+)+$`) can stall the plugin's tool-result hook on a long result; the host treats a hook that overruns as absent and the result goes through unchanged. Keep patterns plain.
 - The only effort control the plugin has is the request's `effort` field, set per request. It does not read the session's setting; it recognises a pin by the request's effort changing between turns on the same model.
 - A failing test run is recognised by text in the result of a `failureTools` tool; a tool that prints none of the `failurePatterns` counts nothing.
 

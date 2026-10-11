@@ -22,6 +22,7 @@
   },
   "include": [
     "plugins/auto-effort/src",
+    "plugins/auto-effort/contract.d.ts",
     "tests"
   ]
 }

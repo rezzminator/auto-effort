@@ -4,6 +4,10 @@ All notable changes to this plugin are recorded here. The format follows [Keep a
 
 ## [Unreleased]
 
+### Fixed
+
+- `/auto-effort off` and the pin of a `/effort` change now survive a plugin reload and a settings change within the same session: they are saved per session id in the host's plugin state. `/clear` still starts on and unpinned.
+
 ## [0.1.0] — 2026-10-11
 
 ### Added

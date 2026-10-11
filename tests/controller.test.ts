@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { Controller, type Row } from '../plugins/auto-effort/src/controller.ts';
+import { Controller, readSessionState, type Row } from '../plugins/auto-effort/src/controller.ts';
 import { EMPTY_PERSISTED, markUnsafe, type Persisted } from '../plugins/auto-effort/src/gate.ts';
 import { resolveSettings } from '../plugins/auto-effort/src/settings.ts';
 import { escalationLine } from '../plugins/auto-effort/src/text.ts';
@@ -293,6 +293,11 @@ describe('user pin (R7)', () => {
     expect(r.step('t3', 1, { effort: 'medium' }).plan).toMatchObject({ send: undefined, source: 'pin' });
     r.prompt();
     expect(r.step('t4', 0, { effort: 'medium' }).plan).toMatchObject({ send: undefined, source: 'pin' });
+    r.prompt();
+    const again = r.step('t5', 0, { effort: 'low' }).plan;
+    expect(again).toMatchObject({ send: undefined, level: 'low', source: 'pin' });
+    expect(again.status).toBe('effort auto: low · you set /effort (pin)');
+    expect(r.ctl.sessionState()).toEqual({ enabled: true, pin: 'low' });
   });
 
   it('resumes on `/auto-effort on`', () => {
@@ -543,5 +548,61 @@ describe('controller upkeep', () => {
     r.ctl.applySettings(resolveSettings({ planLevel: 'medium' }).settings);
     r.prompt();
     expect(r.step('t1', 0).plan).toMatchObject({ level: 'medium', send: 'medium' });
+  });
+});
+
+// F3: on/off and the pin belong to the session, so a plugin reload keeps them in a controller built afresh.
+describe('session state', () => {
+  function pinnedAt(level: 'low' | 'medium') {
+    const r = rig();
+    r.prompt();
+    r.step('t1', 0, { effort: 'xhigh' });
+    r.prompt();
+    r.step('t2', 0, { effort: level });
+    r.prompt();
+    return r;
+  }
+
+  it('holds on and no pin for a new session', () => {
+    expect(rig().ctl.sessionState()).toEqual({ enabled: true, pin: null });
+  });
+
+  it('gives a pin back to a controller built afresh: the effort stays the user\'s', () => {
+    const before = pinnedAt('low');
+    expect(before.ctl.sessionState()).toEqual({ enabled: true, pin: 'low' });
+    const after = rig();
+    after.ctl.restoreSession(before.ctl.sessionState());
+    after.prompt();
+    expect(after.step('t3', 0, { effort: 'low' }).plan).toMatchObject({ source: 'pin', send: undefined, level: 'low' });
+    expect(after.ctl.view()).toMatchObject({ enabled: true, pin: { level: 'low' } });
+  });
+
+  it('gives off back to a controller built afresh: no effort is sent and set_effort is refused', () => {
+    const before = rig();
+    before.ctl.setEnabled(false);
+    expect(before.ctl.sessionState()).toEqual({ enabled: false, pin: null });
+    const after = rig();
+    after.ctl.restoreSession(before.ctl.sessionState());
+    after.prompt();
+    expect(after.step('t1', 0, { effort: 'xhigh' }).plan).toMatchObject({ send: undefined, source: 'off' });
+    expect(after.set({ level: 'medium' }).text).toContain('off');
+  });
+
+  it('keeps a pin that was set while off, until `on` clears it', () => {
+    const before = pinnedAt('low');
+    before.ctl.setEnabled(false);
+    expect(before.ctl.sessionState()).toEqual({ enabled: false, pin: 'low' });
+    const after = rig();
+    after.ctl.restoreSession(before.ctl.sessionState());
+    after.ctl.setEnabled(true);
+    expect(after.ctl.sessionState()).toEqual({ enabled: true, pin: null });
+  });
+
+  it('reads what it wrote and nothing else', () => {
+    expect(readSessionState({ enabled: false, pin: 'max' })).toEqual({ enabled: false, pin: 'max' });
+    expect(readSessionState({ enabled: true, pin: null })).toEqual({ enabled: true, pin: null });
+    for (const bad of [undefined, null, 'off', [], {}, { enabled: 'no', pin: null }, { enabled: true }, { enabled: true, pin: 'ultra' }, { enabled: true, pin: 3 }]) {
+      expect(readSessionState(bad)).toBeUndefined();
+    }
   });
 });

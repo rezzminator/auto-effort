@@ -16,5 +16,5 @@
       "claude-code": ["./types/claude-code.d.ts"]
     }
   },
-  "include": ["plugins/auto-effort/hooks", "plugins/auto-effort/src", "types"]
+  "include": ["plugins/auto-effort/hooks", "plugins/auto-effort/src", "plugins/auto-effort/contract.d.ts", "types"]
 }

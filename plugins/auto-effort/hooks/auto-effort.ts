@@ -1,13 +1,13 @@
 import type { ConfigRow, EngineInterface, Register } from 'claude-code';
 import type { Usage } from '../src/canary.ts';
 import { parseCommand, statusText, USAGE } from '../src/command.ts';
-import { Controller, type Row, type StepPlan } from '../src/controller.ts';
+import { Controller, readSessionState, type Row, type StepPlan } from '../src/controller.ts';
 import { EMPTY_PERSISTED, mergeModels, readPersisted } from '../src/gate.ts';
 import { levelsWithin } from '../src/levels.ts';
 import { expandHome, fillSegments, SEGMENT_ROWS, sessionLogPath } from '../src/log.ts';
 import { normalizeModel } from '../src/model.ts';
 import { PLUGIN, resolveSettings, SETTING_KEYS } from '../src/settings.ts';
-import { toolDescription } from '../src/text.ts';
+import { quote, toolDescription } from '../src/text.ts';
 import { VERSION } from '../src/version.ts';
 
 // Thin adapter: every decision lives in src/controller.ts. A failure is logged with its context and the request,
@@ -35,6 +35,12 @@ type State = {
   toolKey: string | undefined;
   /** The session the rows go to; a new id at a prompt (after /clear) starts a new session. */
   sessionId: string | undefined;
+  /** The on/off and pin the host holds for the session, as text: a save is skipped when nothing changed. */
+  savedSession: string;
+  /** The session whose saved on/off and pin were read; another id at a prompt reads its own. */
+  restored: string | undefined;
+  /** The on/off and pin, as text, whose save failed and was reported: a retry that fails again says nothing. */
+  saveFailed: string;
   /** Rows waiting for the log, each with the session it was recorded in. */
   pending: Array<{ session: string | undefined; line: string }>;
   /** Models whose marks changed in this session and are not saved yet. */
@@ -81,6 +87,7 @@ async function flush($: EngineInterface, st: State): Promise<void> {
   const bySession = new Map<string | undefined, string[]>();
   for (const { session, line } of batch) bySession.set(session, [...(bySession.get(session) ?? []), line]);
   for (const [session, lines] of bySession) {
+    let left = lines.length;
     try {
       const file = st.ctl.settings.logFile;
       if (file === '') return;
@@ -88,13 +95,22 @@ async function flush($: EngineInterface, st: State): Promise<void> {
       const home = await $.env.get('HOME');
       const logFile = expandHome(file, home);
       const newest = await newestSegment($, st, logFile, id);
+      const opened = newest.segment;
+      let skipped = 0;
       for (const part of fillSegments(newest.text, newest.segment, lines, SEGMENT_ROWS)) {
-        await $.fs.write(sessionLogPath(logFile, id, part.segment), part.text);
-        newest.segment = part.segment;
+        let segment = part.segment + skipped;
+        // A new file the probe did not reach (past a missing one) is never written over: the next free number is taken.
+        while (segment > opened && (await $.fs.exists(sessionLogPath(logFile, id, segment)))) {
+          segment += 1;
+          skipped += 1;
+        }
+        await $.fs.write(sessionLogPath(logFile, id, segment), part.text);
+        left -= part.added;
+        newest.segment = segment;
         newest.text = part.text;
       }
     } catch (error) {
-      note($, 'writing the decision log', error, `${lines.length} rows were not kept`);
+      note($, 'writing the decision log', error, `${left} rows were not kept`);
     }
   }
 }
@@ -152,6 +168,51 @@ async function ensureTool($: EngineInterface, st: State): Promise<void> {
   st.toolKey = key;
 }
 
+// The host keeps the on/off and the pin per session id, so a reload (an option change) builds a controller that carries on.
+// Only a value read back counts as saved: after a failed or unusable read the next save writes what the session does.
+async function restoreSession($: EngineInterface, st: State): Promise<void> {
+  if (st.sessionId === undefined) return;
+  st.restored = st.sessionId;
+  st.savedSession = '';
+  try {
+    const { value } = await $.state.get({ plugin: 'auto-effort', key: 'session', id: st.sessionId });
+    if (value !== undefined) {
+      const saved = readSessionState(value);
+      if (saved === undefined) {
+        note($, 'reading the saved on/off and pin', new Error(`${quote(value)} is not in the expected form`), 'this session is on and unpinned');
+      } else {
+        st.ctl.restoreSession(saved);
+        st.savedSession = JSON.stringify(st.ctl.sessionState());
+      }
+    }
+  } catch (error) {
+    note($, 'reading the saved on/off and pin', error, 'this session is on and unpinned');
+  }
+}
+
+async function saveSession($: EngineInterface, st: State): Promise<void> {
+  if (st.sessionId === undefined) return;
+  const now = st.ctl.sessionState();
+  const text = JSON.stringify(now);
+  if (text === st.savedSession) return;
+  let failure: unknown;
+  try {
+    const result = await $.state.set({ plugin: 'auto-effort', key: 'session', id: st.sessionId }, now);
+    if (result.isSet) {
+      st.savedSession = text;
+      st.saveFailed = '';
+      return;
+    }
+    failure = new Error('the host refused the write');
+  } catch (error) {
+    failure = error;
+  }
+  // The save is tried again at each request; it is said once for each state that cannot be saved.
+  if (st.saveFailed === text) return;
+  st.saveFailed = text;
+  note($, 'saving the on/off and pin', failure, 'they hold in this session, but a reload would lose them');
+}
+
 async function start($: EngineInterface, st: State): Promise<void> {
   try {
     st.sessionId ??= await $.session.id();
@@ -164,6 +225,7 @@ async function start($: EngineInterface, st: State): Promise<void> {
     note($, 'reading the saved model marks', error, 'starting with none');
     st.ctl.loadPersisted(EMPTY_PERSISTED);
   }
+  await restoreSession($, st);
   reportErrors($, st, st.errors);
   try {
     await ensureTool($, st);
@@ -187,10 +249,23 @@ function ensureStarted($: EngineInterface, st: State): Promise<void> {
 }
 
 // After /clear the process goes on under a new session id, with no session.start: that session starts afresh.
+// An id the start could not read is learnt here, and the session's saved state read with it. Called by every hook
+// that reads or changes the session's on/off and pin, so a command typed after /clear acts for the new session.
 async function followSession($: EngineInterface, st: State): Promise<void> {
-  const id = await $.session.id();
-  if (st.sessionId !== undefined && id !== st.sessionId) st.ctl.resetSession();
+  let id: string;
+  try {
+    id = await $.session.id();
+  } catch (error) {
+    note($, 'reading the session id', error, 'this stays with the session it had');
+    return;
+  }
+  if (st.sessionId !== undefined && id !== st.sessionId) {
+    st.ctl.resetSession();
+    // The ended session's files are read again from disk should a late row of it arrive; only the current one is held.
+    st.segments.clear();
+  }
   st.sessionId = id;
+  if (st.restored !== id) await restoreSession($, st);
 }
 
 // The marks as the store holds them, with this session's unsaved changes laid over them and saved:
@@ -199,9 +274,11 @@ async function syncMarks($: EngineInterface, st: State, changed: readonly string
   for (const model of changed) st.unsaved.add(normalizeModel(model));
   const merged = mergeModels(readPersisted(await $.store.get(STORE_KEY)), st.ctl.persisted, [...st.unsaved]);
   st.ctl.loadPersisted(merged);
-  if (st.unsaved.size === 0) return;
+  // Only the models this save carries are done: one marked while it was in flight stays for its own save.
+  const saving = [...st.unsaved];
+  if (saving.length === 0) return;
   await $.store.set(STORE_KEY, merged);
-  st.unsaved.clear();
+  for (const model of saving) st.unsaved.delete(model);
 }
 
 /** False when the marks could not be read or saved: they hold in this session and the next prompt tries again. */
@@ -266,6 +343,7 @@ async function runCommand($: EngineInterface, st: State, args: string): Promise<
     case 'on':
     case 'off':
       st.ctl.setEnabled(command.kind === 'on');
+      await saveSession($, st);
       present($, st.ctl.statusNow());
       return `auto-effort is ${command.kind} for this session.`;
     case 'clear': {
@@ -312,6 +390,9 @@ export const register: Register = (on, options) => {
     starting: undefined,
     toolKey: undefined,
     sessionId: undefined,
+    savedSession: '',
+    restored: undefined,
+    saveFailed: '',
     pending: [],
     unsaved: new Set(),
     segments: new Map(),
@@ -351,6 +432,8 @@ export const register: Register = (on, options) => {
     }
     if (plan !== undefined) {
       record($, st, plan.rows);
+      // Never on the request's path: the save is the host's, and the request goes now.
+      void saveSession($, st);
       present($, plan.status, plan.toast);
       if (plan.send !== undefined) request = { ...e, effort: plan.send };
     }
@@ -402,6 +485,7 @@ export const register: Register = (on, options) => {
   on('command.run', { command: PLUGIN }, async ($, e) => {
     try {
       await ensureStarted($, st);
+      await followSession($, st);
       return { text: await runCommand($, st, e.args) };
     } catch (error) {
       note($, `/${PLUGIN} ${e.args}`, error, 'nothing was changed');

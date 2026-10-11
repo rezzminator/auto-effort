@@ -21,37 +21,38 @@ suite('sessionLogPath', () => {
 
 suite('fillSegments', () => {
   it('adds the rows to the newest file while it has room', () => {
-    expect(fillSegments(text(rows(0, 3)), 4, rows(3, 2), 5)).toEqual([{ segment: 4, text: text(rows(0, 5)) }]);
+    expect(fillSegments(text(rows(0, 3)), 4, rows(3, 2), 5)).toEqual([{ segment: 4, text: text(rows(0, 5)), added: 2 }]);
   });
 
   it('starts the next file with the rows that do not fit', () => {
     expect(fillSegments(text(rows(0, 4)), 1, rows(4, 3), 5)).toEqual([
-      { segment: 1, text: text(rows(0, 5)) },
-      { segment: 2, text: text(rows(5, 2)) },
+      { segment: 1, text: text(rows(0, 5)), added: 1 },
+      { segment: 2, text: text(rows(5, 2)), added: 2 },
     ]);
   });
 
   it('spreads a batch over as many files as it needs', () => {
     expect(fillSegments('', 2, rows(0, 11), 5)).toEqual([
-      { segment: 2, text: text(rows(0, 5)) },
-      { segment: 3, text: text(rows(5, 5)) },
-      { segment: 4, text: text(rows(10, 1)) },
+      { segment: 2, text: text(rows(0, 5)), added: 5 },
+      { segment: 3, text: text(rows(5, 5)), added: 5 },
+      { segment: 4, text: text(rows(10, 1)), added: 1 },
     ]);
   });
 
   it('does not open a file for rows that all fit exactly', () => {
-    expect(fillSegments(text(rows(0, 2)), 1, rows(2, 3), 5)).toEqual([{ segment: 1, text: text(rows(0, 5)) }]);
+    expect(fillSegments(text(rows(0, 2)), 1, rows(2, 3), 5)).toEqual([{ segment: 1, text: text(rows(0, 5)), added: 3 }]);
   });
 
   it('drops blank lines and writes nothing for no rows', () => {
-    expect(fillSegments('\n' + rows(0, 1)[0] + '\n\n', 1, ['', '  '], 5)).toEqual([{ segment: 1, text: text(rows(0, 1)) }]);
+    expect(fillSegments('\n' + rows(0, 1)[0] + '\n\n', 1, ['', '  '], 5)).toEqual([{ segment: 1, text: text(rows(0, 1)), added: 0 }]);
     expect(fillSegments('', 1, [], 5)).toEqual([]);
   });
 
-  it('re-splits a file that holds more than the cap, keeping every row in order', () => {
-    expect(fillSegments(text(rows(0, 7)), 1, rows(7, 1), 5)).toEqual([
-      { segment: 1, text: text(rows(0, 5)) },
-      { segment: 2, text: text(rows(5, 3)) },
+  it('leaves a file at or past the cap as it is: the rows start the next file', () => {
+    expect(fillSegments(text(rows(0, 7)), 1, rows(7, 1), 5)).toEqual([{ segment: 2, text: text(rows(7, 1)), added: 1 }]);
+    expect(fillSegments(text(rows(0, 5)), 3, rows(5, 6), 5)).toEqual([
+      { segment: 4, text: text(rows(5, 5)), added: 5 },
+      { segment: 5, text: text(rows(10, 1)), added: 1 },
     ]);
   });
 });
