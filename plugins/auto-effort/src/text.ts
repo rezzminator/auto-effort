@@ -23,6 +23,7 @@ export function toolDescription(floor: Effort, ceiling: Effort): string {
     });
   return [
     'set_effort: set your reasoning effort for the requests after this call, until this turn ends.',
+    'Main chat only: a sub-agent never calls it.',
     'Call it in your first response of every user turn, alongside your first tool calls.',
     ...lines,
     'Raise it the moment the work turns harder than planned: a test fails for a reason you cannot name, or a fix you were sure of did not hold. Lower it once only mechanical steps remain.',
@@ -32,7 +33,7 @@ export function toolDescription(floor: Effort, ceiling: Effort): string {
 
 /** The one line added to each prompt: the level the turn starts at, and the tool. */
 export function reminderLine(level: Effort, tool: string): string {
-  return `Your reasoning effort starts this turn at ${level}. In your first response, call ${tool} with the level the work ahead needs; it holds until the turn ends. With no call, the turn stays at ${level}.`;
+  return `Your reasoning effort starts this turn at ${level}, and this first response runs at ${level}. Call ${tool} first, with the level the work ahead needs; it holds until the turn ends. With no call, the turn stays at ${level}.`;
 }
 
 /** The one line a rise adds to the tool result that caused it. */

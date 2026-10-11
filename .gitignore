@@ -3,3 +3,5 @@ node_modules
 .DS_Store
 .worktrees/
 .rumdl_cache/
+plugins/auto-effort/tsconfig.json
+plugins/auto-effort/.claude-plugin/types/

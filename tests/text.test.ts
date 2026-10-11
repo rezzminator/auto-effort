@@ -12,6 +12,11 @@ describe('toolDescription', () => {
     expect(text).toContain('If the answer itself needs deep thought and there is no tool work, call this first and answer after its result.');
   });
 
+  // Pilot (first round): a sub-agent saw the always-loaded schema and called the tool; the plugin refused it.
+  it('tells a sub-agent, which sees the same schema, not to call it', () => {
+    expect(toolDescription('medium', 'xhigh')).toContain('Main chat only: a sub-agent never calls it.');
+  });
+
   it('follows the floor and the ceiling', () => {
     expect(toolDescription('low', 'xhigh')).toContain('- low:');
     expect(toolDescription('medium', 'high')).not.toContain('- xhigh:');
@@ -25,6 +30,14 @@ describe('reminderLine', () => {
     expect(line).toContain('xhigh');
     expect(line).toContain('mcp__auto-effort__set_effort');
     expect(line.split('\n')).toHaveLength(1);
+  });
+
+  // Pilot (first round): every turn's first request runs at the planning level before the call can apply, so the reminder says so.
+  it('says the first response still runs at the starting level and asks for the call first', () => {
+    const line = reminderLine('high', 'mcp__auto-effort__set_effort');
+    expect(line).toContain('this first response runs at high');
+    expect(line).toContain('Call mcp__auto-effort__set_effort first');
+    expect(line).toContain('With no call, the turn stays at high.');
   });
 });
 
