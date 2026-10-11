@@ -37,7 +37,15 @@ A live check loads the checkout with `--plugin-dir plugins/auto-effort` and `CLA
 - `$` is passed only to functions declared at the top level of the hooks file and always spelled `$.noun.event(...)`: Claude Code checks this statically and otherwise loads the module with zero hooks. `npm run validate:plugin` catches it.
 - Never write to the live Claude Code config (`~/.claude/**`, `settings.json`) from a test or a check.
 
-## Branches
+## Branches and releases
 
-- `develop` is the default branch; every change lands there. There is no remote yet: nothing is pushed, tagged or released until the owner asks.
+- `develop` is the default branch: every change lands there, by a commit or a pull request, and CI (`.github/workflows/ci.yml`) runs the gates on it.
+- `main` is release-only. It moves only by merging the `develop → main` pull request, with a merge commit and never a squash, so both branches share one history. The marketplace installs the plugin from `main` (`git-subdir`, `ref: main`), so users only ever get a released version.
+- A release, in order:
+  1. On `develop`: bump the version in every place `npm run release:check` checks, and move `## [Unreleased]` in `CHANGELOG.md` to `## [X.Y.Z] — date`. `npm run release:check` passes.
+  2. Open the `develop → main` pull request. Its `release` check requires the version to have moved past `main`'s.
+  3. Merge once CI is green.
+  4. On `main`: `claude plugin tag --push plugins/auto-effort` creates and pushes `auto-effort--vX.Y.Z`. `release.yml` then publishes the GitHub release from the CHANGELOG section.
+- Semantic versioning: a fix is a patch; a new option or behaviour is a minor; a renamed or removed option is a major, and its CHANGELOG entry says how to migrate.
+- Publishing: README and marketing changes on `develop` are pushed as soon as they are committed. Code is pushed, and a release is cut, only when the owner asks.
 - Git writes go through this repo's gitter, `.claude/agents/gitter.md`.

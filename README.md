@@ -37,7 +37,14 @@ Function hooks are experimental; turn them on first:
 export CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1
 ```
 
-Install from a clone of this repository, through a local directory marketplace:
+Install from GitHub, inside Claude Code:
+
+```text
+/plugin marketplace add rezzminator/auto-effort
+/plugin install auto-effort@auto-effort
+```
+
+Or from a clone of this repository, through a local directory marketplace:
 
 ```bash
 scripts/dev-marketplace.sh                        # builds ~/.local/share/auto-effort-dev from this checkout
