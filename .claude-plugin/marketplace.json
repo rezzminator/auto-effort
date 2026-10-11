@@ -1,0 +1,32 @@
+{
+  "name": "auto-effort",
+  "description": "Automatic reasoning effort for Claude Code.",
+  "owner": {
+    "name": "Reza",
+    "url": "https://github.com/rezzminator"
+  },
+  "plugins": [
+    {
+      "name": "auto-effort",
+      "source": "./plugins/auto-effort",
+      "description": "Automatic reasoning effort for the Claude Code main chat: the plugin plans each turn, the model raises or lowers it with set_effort, and a cache check keeps it safe.",
+      "version": "0.1.0",
+      "license": "MIT",
+      "keywords": [
+        "claude-code",
+        "claude-code-plugin",
+        "effort",
+        "reasoning-effort",
+        "thinking",
+        "function-hooks",
+        "claude-mods",
+        "token-cost",
+        "prompt-cache"
+      ],
+      "author": {
+        "name": "Reza · Professor",
+        "url": "https://github.com/rezzminator/professor"
+      }
+    }
+  ]
+}
