@@ -15,10 +15,12 @@ function engine(options: Record<string, unknown> = {}, o: { configRows?: unknown
   const statuses: Array<string | undefined> = [];
   const toasts: string[] = [];
   const files = new Map<string, string>();
+  const writes: Array<{ path: string; rows: number }> = [];
   const store = new Map<string, unknown>(o.storeValue === undefined ? [] : [['state', o.storeValue]]);
   const registered: any[] = [];
   const commands: any[] = [];
   const configSets: any[] = [];
+  const sess = { id: 'sess1' };
   const $ = {
     tool: { register: async (spec: any) => (registered.push(spec), { tool: `mcp__auto-effort__${spec.name}` }) },
     command: { register: async (spec: any) => (commands.push(spec), { name: spec.name }) },
@@ -29,11 +31,14 @@ function engine(options: Record<string, unknown> = {}, o: { configRows?: unknown
     fs: {
       exists: async (path: string) => files.has(path),
       read: async (path: string) => files.get(path) ?? '',
-      write: async (path: string, text: string) => void files.set(path, text),
+      write: async (path: string, text: string) => {
+        writes.push({ path, rows: text.split('\n').filter(Boolean).length });
+        files.set(path, text);
+      },
     },
     ui: { log: (line: string) => logs.push(line), status: (text?: string) => statuses.push(text), toast: (text: string) => toasts.push(text) },
-    session: { id: async () => 'sess1', model: async () => OPUS, cwd: async () => '/work' },
-    env: { get: async (name: string) => (name === 'HOME' ? '/home/u' : undefined) },
+    session: { id: async () => sess.id, model: async () => OPUS, cwd: async () => '/work' },
+    env: { get: async (name: string) => (name === 'HOME' ? '/fake-home/u' : undefined) },
     config: {
       list: async () => o.configRows ?? [],
       set: async (args: unknown) => (configSets.push(args), { value: (args as { value: unknown }).value }),
@@ -48,7 +53,7 @@ function engine(options: Record<string, unknown> = {}, o: { configRows?: unknown
   };
   const sent: any[] = [];
   const api = {
-    $, logs, statuses, toasts, files, store, registered, commands, configSets, hooks, sent,
+    $, sess, logs, statuses, toasts, files, writes, store, registered, commands, configSets, hooks, sent,
     start: () => find('session.start')($, { cwd: '/work', surface: null, isInteractive: true }, async (e: any) => ({ cwd: e.cwd })),
     prompt: async (text = 'fix the parser bug', extra: Record<string, unknown> = {}) => {
       let seen: any;
@@ -174,6 +179,59 @@ suite('turn.step', () => {
     await e.step({ index: 1 });
     expect(e.toasts).toHaveLength(1);
   });
+
+  it('keeps a cache mark it could not save when the next prompt reads the store again, and saves it once the store takes it', async () => {
+    const e = engine();
+    await e.start();
+    await e.prompt();
+    expect(await e.step({}, { usage: usage(10, 0, 5000) })).toMatchObject({ effort: 'high' });
+    await e.tool({ tool: TOOL, level: 'medium', reason: 'rename' });
+    const set = e.$.store.set;
+    e.$.store.set = async () => {
+      throw new Error('store full');
+    };
+    await e.step({ index: 1 }, { usage: usage(4000, 100, 900) });
+    expect(e.toasts).toHaveLength(1);
+    expect(e.logs.some((line) => line.includes('store full'))).toBe(true);
+    await e.prompt();
+    expect(await e.step({ turnId: 't2' })).toMatchObject({ effort: 'xhigh' });
+    e.$.store.set = set;
+    await e.prompt();
+    expect((e.store.get('state') as any).unsafe[OPUS]).toMatchObject({ from: 'high', to: 'medium' });
+    expect(await e.step({ turnId: 't3' })).toMatchObject({ effort: 'xhigh' });
+  });
+
+  it('keeps the marks another chat saved meanwhile when it saves its own', async () => {
+    const e = engine();
+    await e.start();
+    await e.prompt();
+    await e.step({}, { usage: usage(10, 0, 5000) });
+    const other = { at: 'y', ratio: 0.2, prevPrompt: 9, cacheRead: 1, from: 'high', to: 'xhigh' };
+    e.store.set('state', { unsafe: { 'claude-fable-5-1': other }, probation: { 'claude-haiku-5-5': 3 }, graduated: [] });
+    await e.tool({ tool: TOOL, level: 'medium', reason: 'rename' });
+    await e.step({ index: 1 }, { usage: usage(4000, 100, 900) });
+    const saved = e.store.get('state') as any;
+    expect(saved.unsafe[OPUS]).toMatchObject({ from: 'high', to: 'medium' });
+    expect(saved.unsafe['claude-fable-5-1']).toEqual(other);
+    expect(saved.probation).toEqual({ 'claude-haiku-5-5': 3 });
+  });
+
+  it('starts again on the next prompt when its first start failed', async () => {
+    const e = engine({ floor: 'lowest' });
+    const log = e.$.ui.log;
+    let broken = true;
+    e.$.ui.log = (line: string) => {
+      if (broken) {
+        broken = false;
+        throw new Error('log closed');
+      }
+      return log(line);
+    };
+    await e.start().catch(() => undefined);
+    await e.prompt();
+    expect(await e.step({})).toMatchObject({ effort: 'high' });
+    expect(e.registered).toHaveLength(1);
+  });
 });
 
 suite('prompt.submit', () => {
@@ -185,6 +243,31 @@ suite('prompt.submit', () => {
     expect(seen.context[0]).toBe('earlier');
     expect(seen.context[1]).toContain(TOOL);
     expect(seen.context[1]).toContain('high');
+  });
+
+  it('plans the next turn from a prompt typed to wait for the running one, with the reminder', async () => {
+    const e = engine();
+    await e.start();
+    const waiting = await e.prompt('think about the retry design', { turnId: 't1', wait: true });
+    expect(waiting.context).toEqual([expect.stringContaining(TOOL)]);
+    expect(await e.step({ turnId: 't2' })).toMatchObject({ effort: 'xhigh' });
+    const delivered = await e.prompt('also this', { turnId: 't2', wait: false });
+    expect(delivered.context).toBeUndefined();
+  });
+
+  it('starts a new session after /clear: its rows go to its own file and `/auto-effort off` of the last one ends', async () => {
+    const e = engine({ logFile: '/logs/decisions.jsonl' });
+    await e.start();
+    await e.command('off');
+    await e.prompt();
+    expect(await e.step({})).toMatchObject({ effort: 'xhigh' });
+    await vi.waitFor(() => expect(e.files.has('/logs/decisions.sess1.jsonl')).toBe(true));
+    e.sess.id = 'sess2';
+    await e.prompt();
+    expect(await e.step({ turnId: 't2' })).toMatchObject({ effort: 'high' });
+    await vi.waitFor(() => expect(e.files.has('/logs/decisions.sess2.jsonl')).toBe(true));
+    expect(e.logRows().filter((row) => row.turnId === 't2').length).toBeGreaterThan(0);
+    expect(e.files.get('/logs/decisions.sess1.jsonl')).not.toContain('"t2"');
   });
 
   it('passes the prompt through when the settings cannot be read', async () => {
@@ -203,7 +286,7 @@ suite('prompt.submit', () => {
     const e = engine();
     await e.start();
     e.$.config.list = async () => [
-      { key: 'auto-effort.planLevel', value: 'medium', kind: 'text' },
+      { key: 'auto-effort@my.market.planLevel', value: 'medium', kind: 'text' },
       { key: 'auto-effort.floor', value: 'low', kind: 'text' },
       { key: 'other.planLevel', value: 'xhigh', kind: 'text' },
     ];
@@ -296,7 +379,43 @@ suite('decision log', () => {
     await home.prompt();
     await home.step({});
     await home.settle();
-    expect([...home.files.keys()]).toEqual(['/home/u/.local/state/auto-effort/decisions.sess1.jsonl']);
+    expect([...home.files.keys()]).toEqual(['/fake-home/u/.local/state/auto-effort/decisions.sess1.jsonl']);
+  });
+
+  // F5: `$.fs` has no append, so every write rewrites a whole file; a file holds at most 1000 rows, then the next starts.
+  const seeded = (count: number) => Array.from({ length: count }, (_, n) => JSON.stringify({ ts: 't', event: 'seed', n })).join('\n') + '\n';
+  const rowsIn = (e: ReturnType<typeof engine>, path: string) => (e.files.get(path) ?? '').split('\n').filter(Boolean).length;
+  const drive = async (e: ReturnType<typeof engine>, steps: number) => {
+    await e.start();
+    await e.prompt();
+    for (let n = 0; n < steps; n += 1) await e.step({ index: n });
+  };
+
+  it('starts `<session>.2` when a file is full, drops no row and never writes more than 1000 rows at once', async () => {
+    const e = engine({ logFile: '/logs/decisions.jsonl' });
+    e.files.set('/logs/decisions.sess1.jsonl', seeded(998));
+    await drive(e, 6);
+    await vi.waitFor(() => expect(e.logRows().filter((row) => row.event !== 'seed').length).toBeGreaterThanOrEqual(5));
+    await vi.waitFor(() => expect(e.files.has('/logs/decisions.sess1.2.jsonl')).toBe(true));
+    expect(rowsIn(e, '/logs/decisions.sess1.jsonl')).toBe(1000);
+    expect(e.logRows().filter((row) => row.event === 'seed')).toHaveLength(998);
+    const fresh = e.logRows().filter((row) => row.event !== 'seed').length;
+    expect(rowsIn(e, '/logs/decisions.sess1.2.jsonl')).toBe(fresh - 2);
+    expect(Math.max(...e.writes.map((write) => write.rows))).toBeLessThanOrEqual(1000);
+  });
+
+  it('resumes in the newest file of the session and leaves the full ones as they are', async () => {
+    const e = engine({ logFile: '/logs/decisions.jsonl' });
+    const full = seeded(1000);
+    e.files.set('/logs/decisions.sess1.jsonl', full);
+    e.files.set('/logs/decisions.sess1.2.jsonl', full);
+    e.files.set('/logs/decisions.sess1.3.jsonl', seeded(5));
+    await drive(e, 2);
+    await vi.waitFor(() => expect(rowsIn(e, '/logs/decisions.sess1.3.jsonl')).toBeGreaterThan(5));
+    expect(e.files.get('/logs/decisions.sess1.jsonl')).toBe(full);
+    expect(e.files.get('/logs/decisions.sess1.2.jsonl')).toBe(full);
+    expect(e.writes.every((write) => write.path === '/logs/decisions.sess1.3.jsonl')).toBe(true);
+    expect([...e.files.keys()]).toHaveLength(3);
   });
 });
 
@@ -361,6 +480,8 @@ suite('/auto-effort', () => {
   it('clears a cache mark', async () => {
     const e = engine({}, { storeValue: { unsafe: { [OPUS]: { at: 'x', ratio: 0.1, prevPrompt: 1, cacheRead: 0, from: 'high', to: 'medium' } }, probation: {}, graduated: [] } });
     await e.start();
+    expect((await e.command('clear claude-fable-5-1')).text).toBe('Nothing to clear: claude-fable-5-1 has no cache mark.');
+    expect((e.store.get('state') as any).unsafe[OPUS]).toBeDefined();
     expect((await e.command('clear claude-opus-5-5')).text).toContain('cleared');
     expect((e.store.get('state') as any).unsafe).toEqual({});
   });

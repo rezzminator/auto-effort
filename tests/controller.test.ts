@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { Controller, type Row } from '../plugins/auto-effort/src/controller.ts';
-import { EMPTY_PERSISTED, type Persisted } from '../plugins/auto-effort/src/gate.ts';
+import { EMPTY_PERSISTED, markUnsafe, type Persisted } from '../plugins/auto-effort/src/gate.ts';
 import { resolveSettings } from '../plugins/auto-effort/src/settings.ts';
 import { escalationLine } from '../plugins/auto-effort/src/text.ts';
 
@@ -121,6 +121,16 @@ describe('set_effort (R3, R6)', () => {
     expect(r.step('t1', 1).plan).toMatchObject({ level: 'high', source: 'plan' });
   });
 
+  it('quotes a short piece of a level it refuses, never the whole value', () => {
+    const r = rig();
+    r.prompt();
+    r.step('t1', 0);
+    const out = r.set({ level: 'x'.repeat(1000), reason: 'x' });
+    expect(out.text).toMatch(/^Not applied: .*got "xxxxxxxx/);
+    expect(out.text.length).toBeLessThan(200);
+    expect(JSON.stringify(out.rows).length).toBeLessThan(300);
+  });
+
   it('ends with the turn: the next turn plans afresh', () => {
     const r = rig();
     r.prompt();
@@ -175,6 +185,28 @@ describe('turn reminder (R4)', () => {
     pinned.prompt();
     pinned.step('t2', 0, { effort: 'low' });
     expect(pinned.prompt().reminder).toBeUndefined();
+  });
+
+  it('plans the next turn from a prompt typed to wait for the running one, and gives it the reminder', () => {
+    const r = rig();
+    r.prompt('rename it');
+    r.step('t1', 0);
+    const queued = r.ctl.onPrompt({ text: 'think about the retry design', model: OPUS, midTurn: true, wait: true });
+    expect(queued.reminder).toContain('xhigh');
+    expect(queued.reminder).toContain(TOOL);
+    expect(r.step('t1', 1).plan).toMatchObject({ level: 'high', source: 'plan', newTurn: false });
+    expect(r.step('t2', 0).plan).toMatchObject({ level: 'xhigh', reason: 'planning: prompt asks for thought', newTurn: true });
+  });
+
+  it('keeps the text of a prompt delivered into the running turn for a next turn no prompt announced, with no reminder', () => {
+    const r = rig();
+    r.prompt('rename it');
+    r.step('t1', 0);
+    expect(r.ctl.onPrompt({ text: 'think about the retry design', model: OPUS, midTurn: true, wait: false }).reminder).toBeUndefined();
+    expect(r.step('t2', 0).plan).toMatchObject({ level: 'xhigh', newTurn: true });
+    r.prompt('rename it');
+    expect(r.ctl.onPrompt({ text: 'think about it', model: OPUS, midTurn: true, wait: false }).reminder).toBeUndefined();
+    expect(r.step('t3', 0).plan).toMatchObject({ level: 'high', reason: 'planning turn' });
   });
 });
 
@@ -486,6 +518,24 @@ describe('controller upkeep', () => {
     r.clock.t += 1000;
     r.step('t1', 3, { u: usage(10, 90, 10) });
     expect(r.rows.filter((row) => row.event === 'canary')).toHaveLength(1);
+  });
+
+  it('starts a new session afresh: on, no pin, no turn, nothing to compare with, the notice told again', () => {
+    const r = rig();
+    r.ctl.loadPersisted(markUnsafe(EMPTY_PERSISTED, 'claude-fable-5-1', { at: 'x', ratio: 0.1, prevPrompt: 10, cacheRead: 1, from: 'high', to: 'medium' }));
+    r.prompt();
+    r.step('t1', 0, { effort: 'xhigh' });
+    r.prompt();
+    expect(r.step('t2', 0, { effort: 'low' }).plan).toMatchObject({ source: 'pin' });
+    expect(r.step('t3', 0, { model: 'claude-fable-5-1' }).plan.toast).toContain('claude-fable-5-1');
+    expect(r.step('t4', 0, { model: 'claude-fable-5-1' }).plan.toast).toBeUndefined();
+    r.ctl.setEnabled(false);
+    r.ctl.resetSession();
+    expect(r.ctl.view()).toMatchObject({ enabled: true, pin: null, turn: null, model: undefined });
+    r.prompt();
+    expect(r.step('t5', 0, { effort: 'low' }).plan).toMatchObject({ send: 'high', source: 'plan', newTurn: true });
+    expect(r.rows.filter((row) => row.event === 'switch' || row.event === 'pin').map((row) => row.turnId)).toEqual(['t2']);
+    expect(r.step('t6', 0, { model: 'claude-fable-5-1' }).plan.toast).toContain('claude-fable-5-1');
   });
 
   it('takes settings changed in place', () => {

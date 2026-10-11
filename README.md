@@ -97,7 +97,7 @@ Every option is a plugin option (`userConfig`): edit it in `/config`, in `settin
 | `planUpshiftChars` | `1500` | A prompt longer than this many characters starts its turn at xhigh instead of planLevel. |
 | `turnReminder` | `true` | On: each prompt carries one line naming the effort the turn starts at and asking the model to call set_effort in its first response. Off: only the tool's description asks for the call. |
 | `escalateAfterFailures` | `2` | After this many failing test runs in one turn the effort rises one step, up to the ceiling, for the requests that follow; the count then starts again. |
-| `failurePatterns` | `--- FAIL`<br>`FAIL(ED)?`<br>`\d+ (failed|failing)`<br>`AssertionError`<br>`panic:`<br>`Traceback` | One regular expression per entry, matched case-sensitively against a tool result. A result that matches any entry counts as one failing test run. |
+| `failurePatterns` | `--- FAIL`<br>`FAIL(ED)?`<br>`(?<!\d)[1-9]\d* (failed\|failing)`<br>`AssertionError`<br>`panic:`<br>`Traceback` | One regular expression per entry, matched case-sensitively against a tool result. A result that matches any entry counts as one failing test run. |
 | `failureTools` | `Bash` | One tool name per entry (Bash runs the tests). Only results of these tools are matched against failurePatterns. |
 | `userEffortPins` | `true` | On: when you change the effort yourself with /effort, auto-effort stops steering that session until /auto-effort on. Off: it keeps steering whatever you set. |
 | `models` | `claude-opus-5-5=allow`<br>`claude-fable-5-1=allow`<br>`claude-sonnet-5-5=probation`<br>`claude-haiku-5-5=probation`<br>`claude-sonnet-5=deny` | One entry per model, as model=allow, model=probation or model=deny. allow steers it. probation steers it while counting clean effort switches; probationSwitches of them earn allow. deny never touches it. A model without an entry gets unknownModels. |
@@ -106,11 +106,11 @@ Every option is a plugin option (`userConfig`): edit it in `/config`, in `settin
 | `canaryThreshold` | `0.9` | After an effort change, the switched request must read at least this fraction of the previous request's whole prompt from the prompt cache. Below it the plugin stops changing effort on that model, tells you once, and remembers across sessions until /auto-effort clear. |
 | `cacheTtlSeconds` | `300` | When more than this many seconds passed between two requests the cache may have expired on its own, so the check judges nothing. 300 fits the five-minute cache; use 3600 with the one-hour cache. |
 | `statusLine` | `true` | On: one line shows the level held, why, and what decided it (plan, model, escalation or pin). Off: nothing is shown. |
-| `logFile` | `~/.local/state/auto-effort/decisions.jsonl` | Where decisions are appended, one JSON row per decision, request and turn, never the prompt text. The session id is inserted before the extension, one file per session. A leading ~ is your home directory. Empty: no log. |
+| `logFile` | `~/.local/state/auto-effort/decisions.jsonl` | Where decisions are appended, one JSON row per decision, request and turn, never the prompt text. The session id is inserted before the extension, one file per session; after 1000 rows the next file starts (`decisions.<session>.2.jsonl`, `.3.jsonl`, ...). A leading ~ is your home directory. Empty: no log. |
 
 ## The decision log
 
-One JSON row per line in `logFile` (one file per session), never the prompt text:
+One JSON row per line in `logFile` (one file per session, a new numbered file every 1000 rows), never the prompt text:
 
 | `event` | When |
 | --- | --- |
@@ -128,7 +128,7 @@ One JSON row per line in `logFile` (one file per session), never the prompt text
 ## Limits
 
 - Main chat only. Sub-agents keep their own effort.
-- The session's on/off and a `/effort` pin live in memory: a `/reload-plugins` forgets them. The model marks and probation counts are saved and shared by every chat on the machine; the last write wins.
+- The session's on/off and a `/effort` pin live in memory: a `/reload-plugins` forgets them, and so does a settings change (in `/config` or by `/auto-effort set`), which reloads the plugin. `/clear` starts a new session: on, unpinned, with its own log file. The model marks and probation counts are saved and shared by every chat on the machine; a chat's save rewrites only the models it changed, so for one model the last write wins.
 - The only effort control the plugin has is the request's `effort` field, set per request. It does not read the session's setting; it recognises a pin by the request's effort changing between turns on the same model.
 - A failing test run is recognised by text in the result of a `failureTools` tool; a tool that prints none of the `failurePatterns` counts nothing.
 

@@ -24,7 +24,17 @@ describe('plugin options', () => {
     }
   });
 
-  it('lists every option in the README table', () => {
-    for (const key of SETTING_KEYS) expect(readme, key).toContain(`| \`${key}\` |`);
+  it('shows every option in the README table with the default the code holds', () => {
+    const lines = readme.split('\n');
+    for (const key of SETTING_KEYS) {
+      const row = lines.find((line) => line.startsWith(`| \`${key}\` |`));
+      expect(row, key).toBeDefined();
+      // A GFM cell ends at every `|` not escaped as `\|`, inside code spans too.
+      const cells = row!.split(/(?<!\\)\|/).slice(1, -1).map((cell) => cell.trim());
+      expect(cells, key).toHaveLength(3);
+      const shown = cells[1]!.split('<br>').map((entry) => entry.replace(/^`|`$/g, '').replace(/\\\|/g, '|'));
+      const value = DEFAULTS[key];
+      expect(shown, key).toEqual(Array.isArray(value) ? value : [String(value)]);
+    }
   });
 });

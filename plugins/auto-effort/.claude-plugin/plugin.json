@@ -74,7 +74,7 @@
       "default": [
         "--- FAIL",
         "FAIL(ED)?",
-        "\\d+ (failed|failing)",
+        "(?<!\\d)[1-9]\\d* (failed|failing)",
         "AssertionError",
         "panic:",
         "Traceback"
@@ -146,7 +146,7 @@
     "logFile": {
       "type": "string",
       "title": "logFile: the decision log (JSONL)",
-      "description": "Where decisions are appended, one JSON row per decision, request and turn, never the prompt text. The session id is inserted before the extension, one file per session. A leading ~ is your home directory. Empty: no log.",
+      "description": "Where decisions are appended, one JSON row per decision, request and turn, never the prompt text. The session id is inserted before the extension, one file per session; after 1000 rows the next file starts (decisions.<session>.2.jsonl, .3.jsonl, ...). A leading ~ is your home directory. Empty: no log.",
       "default": "~/.local/state/auto-effort/decisions.jsonl"
     }
   }

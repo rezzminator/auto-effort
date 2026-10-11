@@ -2,9 +2,10 @@ import type { ConfigRow, EngineInterface, Register } from 'claude-code';
 import type { Usage } from '../src/canary.ts';
 import { parseCommand, statusText, USAGE } from '../src/command.ts';
 import { Controller, type Row, type StepPlan } from '../src/controller.ts';
-import { EMPTY_PERSISTED, readPersisted } from '../src/gate.ts';
+import { EMPTY_PERSISTED, mergeModels, readPersisted } from '../src/gate.ts';
 import { levelsWithin } from '../src/levels.ts';
-import { appendRows, expandHome, sessionLogPath } from '../src/log.ts';
+import { expandHome, fillSegments, SEGMENT_ROWS, sessionLogPath } from '../src/log.ts';
+import { normalizeModel } from '../src/model.ts';
 import { PLUGIN, resolveSettings, SETTING_KEYS } from '../src/settings.ts';
 import { toolDescription } from '../src/text.ts';
 import { VERSION } from '../src/version.ts';
@@ -14,9 +15,8 @@ import { VERSION } from '../src/version.ts';
 
 const TOOL_NAME = 'set_effort';
 const STORE_KEY = 'state';
-/** The newest rows one session's log file keeps; a read over 4 MiB is refused, so the file stays well below it. */
-const LOG_ROWS = 8000;
-const ROW_KEY = new RegExp(`^${PLUGIN}(?:@[^.]*)?\\.(\\w+)$`);
+/** `<plugin>.<field>`, or `<plugin>@<marketplace>.<field>` where the marketplace name may hold dots. */
+const ROW_KEY = new RegExp(`^${PLUGIN}(?:@.+)?\\.(\\w+)$`);
 
 function message(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -33,8 +33,14 @@ type State = {
   starting: Promise<void> | undefined;
   /** The floor and ceiling the tool is registered for. */
   toolKey: string | undefined;
+  /** The session the rows go to; a new id at a prompt (after /clear) starts a new session. */
   sessionId: string | undefined;
-  pending: string[];
+  /** Rows waiting for the log, each with the session it was recorded in. */
+  pending: Array<{ session: string | undefined; line: string }>;
+  /** Models whose marks changed in this session and are not saved yet. */
+  unsaved: Set<string>;
+  /** Each session log's newest file and its text, so a flush rewrites at most SEGMENT_ROWS rows and reads nothing. */
+  segments: Map<string, { segment: number; text: string }>;
   writing: Promise<void>;
 };
 
@@ -55,27 +61,48 @@ function toUsage(raw: unknown): Usage | null {
   };
 }
 
+// The session log's newest file, found once per session: the highest segment that exists, with its rows.
+async function newestSegment($: EngineInterface, st: State, logFile: string, id: string): Promise<{ segment: number; text: string }> {
+  const key = sessionLogPath(logFile, id);
+  const known = st.segments.get(key);
+  if (known !== undefined) return known;
+  let segment = 1;
+  while (await $.fs.exists(sessionLogPath(logFile, id, segment + 1))) segment += 1;
+  const file = sessionLogPath(logFile, id, segment);
+  const found = { segment, text: (await $.fs.exists(file)) ? await $.fs.read(file) : '' };
+  st.segments.set(key, found);
+  return found;
+}
+
 // The decision log: rows are queued and written one batch at a time, never on the request's path.
 async function flush($: EngineInterface, st: State): Promise<void> {
-  const lines = st.pending.splice(0);
-  if (lines.length === 0) return;
-  try {
-    const file = st.ctl.settings.logFile;
-    if (file === '') return;
-    st.sessionId ??= await $.session.id();
-    const home = await $.env.get('HOME');
-    const path = sessionLogPath(expandHome(file, home), st.sessionId);
-    const existing = (await $.fs.exists(path)) ? await $.fs.read(path) : '';
-    await $.fs.write(path, appendRows(existing, lines, LOG_ROWS));
-  } catch (error) {
-    note($, 'writing the decision log', error, `${lines.length} rows were not kept`);
+  const batch = st.pending.splice(0);
+  if (batch.length === 0) return;
+  const bySession = new Map<string | undefined, string[]>();
+  for (const { session, line } of batch) bySession.set(session, [...(bySession.get(session) ?? []), line]);
+  for (const [session, lines] of bySession) {
+    try {
+      const file = st.ctl.settings.logFile;
+      if (file === '') return;
+      const id = session ?? (st.sessionId ??= await $.session.id());
+      const home = await $.env.get('HOME');
+      const logFile = expandHome(file, home);
+      const newest = await newestSegment($, st, logFile, id);
+      for (const part of fillSegments(newest.text, newest.segment, lines, SEGMENT_ROWS)) {
+        await $.fs.write(sessionLogPath(logFile, id, part.segment), part.text);
+        newest.segment = part.segment;
+        newest.text = part.text;
+      }
+    } catch (error) {
+      note($, 'writing the decision log', error, `${lines.length} rows were not kept`);
+    }
   }
 }
 
 function record($: EngineInterface, st: State, rows: readonly Row[]): void {
   if (rows.length === 0 || st.ctl.settings.logFile === '') return;
   const ts = new Date().toISOString();
-  st.pending.push(...rows.map((row) => JSON.stringify({ ts, ...row })));
+  st.pending.push(...rows.map((row) => ({ session: st.sessionId, line: JSON.stringify({ ts, ...row }) })));
   st.writing = st.writing.then(() => flush($, st));
 }
 
@@ -97,8 +124,8 @@ function reportErrors($: EngineInterface, st: State, errors: string[]): void {
   st.errors = errors;
   const key = errors.join('\n');
   if (key === st.errorKey) return;
-  st.errorKey = key;
   for (const line of errors) $.ui.log(line);
+  st.errorKey = key;
   record($, st, errors.map((line) => ({ event: 'option-error', message: line })));
 }
 
@@ -127,6 +154,11 @@ async function ensureTool($: EngineInterface, st: State): Promise<void> {
 
 async function start($: EngineInterface, st: State): Promise<void> {
   try {
+    st.sessionId ??= await $.session.id();
+  } catch (error) {
+    note($, 'reading the session id', error, 'the log file is named at the first row');
+  }
+  try {
     st.ctl.loadPersisted(readPersisted(await $.store.get(STORE_KEY)));
   } catch (error) {
     note($, 'reading the saved model marks', error, 'starting with none');
@@ -145,9 +177,42 @@ async function start($: EngineInterface, st: State): Promise<void> {
   }
 }
 
+// A start that failed is dropped, so the next hook starts again.
 function ensureStarted($: EngineInterface, st: State): Promise<void> {
-  st.starting ??= start($, st);
+  st.starting ??= start($, st).catch((error: unknown) => {
+    st.starting = undefined;
+    throw error;
+  });
   return st.starting;
+}
+
+// After /clear the process goes on under a new session id, with no session.start: that session starts afresh.
+async function followSession($: EngineInterface, st: State): Promise<void> {
+  const id = await $.session.id();
+  if (st.sessionId !== undefined && id !== st.sessionId) st.ctl.resetSession();
+  st.sessionId = id;
+}
+
+// The marks as the store holds them, with this session's unsaved changes laid over them and saved:
+// another chat's marks for other models survive the save, and a failed save is tried again at the next prompt.
+async function syncMarks($: EngineInterface, st: State, changed: readonly string[]): Promise<void> {
+  for (const model of changed) st.unsaved.add(normalizeModel(model));
+  const merged = mergeModels(readPersisted(await $.store.get(STORE_KEY)), st.ctl.persisted, [...st.unsaved]);
+  st.ctl.loadPersisted(merged);
+  if (st.unsaved.size === 0) return;
+  await $.store.set(STORE_KEY, merged);
+  st.unsaved.clear();
+}
+
+/** False when the marks could not be read or saved: they hold in this session and the next prompt tries again. */
+async function saveMarks($: EngineInterface, st: State, changed: readonly string[]): Promise<boolean> {
+  try {
+    await syncMarks($, st, changed);
+    return true;
+  } catch (error) {
+    note($, 'reading or saving the model marks', error, 'they hold in this session, and the next prompt tries again');
+    return false;
+  }
 }
 
 // The options as /config holds them now, over the options the plugin registered with.
@@ -163,18 +228,10 @@ async function refresh($: EngineInterface, st: State): Promise<void> {
     const { settings, errors } = resolveSettings({ ...st.options, ...fromRows });
     reportErrors($, st, errors);
     st.ctl.applySettings(settings);
-    st.ctl.loadPersisted(readPersisted(await $.store.get(STORE_KEY)));
+    await saveMarks($, st, []);
     await ensureTool($, st);
   } catch (error) {
     note($, 'reading the plugin options', error, 'the settings of the last prompt stay');
-  }
-}
-
-async function saveMarks($: EngineInterface, st: State): Promise<void> {
-  try {
-    await $.store.set(STORE_KEY, st.ctl.persisted);
-  } catch (error) {
-    note($, 'saving the model marks', error, 'they hold for this session only');
   }
 }
 
@@ -183,7 +240,7 @@ async function finishStep($: EngineInterface, st: State, raw: unknown): Promise<
     const end = st.ctl.endStep(toUsage(raw));
     record($, st, end.rows);
     if (end.toast !== undefined) present($, st.ctl.statusNow(), end.toast);
-    if (end.persisted !== undefined) await saveMarks($, st);
+    if (end.model !== undefined) await saveMarks($, st, [end.model]);
   } catch (error) {
     st.ctl.failStep();
     note($, 'judging the request', error, 'the next request is not compared with it');
@@ -212,12 +269,16 @@ async function runCommand($: EngineInterface, st: State, args: string): Promise<
       present($, st.ctl.statusNow());
       return `auto-effort is ${command.kind} for this session.`;
     case 'clear': {
-      const had = Object.keys(st.ctl.persisted.unsafe);
-      st.ctl.loadPersisted(readPersisted(await $.store.get(STORE_KEY)));
+      const stored = readPersisted(await $.store.get(STORE_KEY));
+      const mine = st.ctl.persisted;
+      const named = command.model === undefined ? [...Object.keys(stored.unsafe), ...Object.keys(mine.unsafe)] : [normalizeModel(command.model)];
+      if (!named.some((model) => stored.unsafe[model] !== undefined || mine.unsafe[model] !== undefined)) {
+        return command.model === undefined ? 'Nothing to clear: no model has a cache mark.' : `Nothing to clear: ${command.model} has no cache mark.`;
+      }
       st.ctl.clear(command.model);
-      await saveMarks($, st);
-      const text = command.model === undefined ? 'every model' : command.model;
-      return had.length === 0 && Object.keys(st.ctl.persisted.unsafe).length === 0 ? 'Nothing to clear: no model has a cache mark.' : `Cache mark cleared for ${text}; automatic effort applies to it again.`;
+      const saved = await saveMarks($, st, named);
+      const cleared = `Cache mark cleared for ${command.model ?? 'every model'}; automatic effort applies to it again.`;
+      return saved ? cleared : `${cleared} Saving it failed, so it holds in this session; the next prompt tries again.`;
     }
     case 'set': {
       const next = resolveSettings({ ...st.ctl.settings, [command.key]: command.value });
@@ -252,6 +313,8 @@ export const register: Register = (on, options) => {
     toolKey: undefined,
     sessionId: undefined,
     pending: [],
+    unsaved: new Set(),
+    segments: new Map(),
     writing: Promise.resolve(),
   };
 
@@ -264,8 +327,9 @@ export const register: Register = (on, options) => {
     let context = e.context;
     try {
       await ensureStarted($, st);
+      await followSession($, st);
       await refresh($, st);
-      const out = st.ctl.onPrompt({ text: e.text, model: await $.session.model(), midTurn: e.turnId !== undefined });
+      const out = st.ctl.onPrompt({ text: e.text, model: await $.session.model(), midTurn: e.turnId !== undefined, wait: e.wait });
       record($, st, out.rows);
       if (out.reminder !== undefined) context = [...(e.context ?? []), out.reminder];
     } catch (error) {

@@ -3,6 +3,7 @@
 
 import { isEffort, LEVELS, rank, type Effort } from './levels.ts';
 import { normalizeModel } from './model.ts';
+import { clip, quote } from './text.ts';
 
 export const PLUGIN = 'auto-effort';
 
@@ -37,7 +38,7 @@ export const DEFAULTS: Settings = {
   planUpshiftChars: 1500,
   turnReminder: true,
   escalateAfterFailures: 2,
-  failurePatterns: ['--- FAIL', 'FAIL(ED)?', '\\d+ (failed|failing)', 'AssertionError', 'panic:', 'Traceback'],
+  failurePatterns: ['--- FAIL', 'FAIL(ED)?', '(?<!\\d)[1-9]\\d* (failed|failing)', 'AssertionError', 'panic:', 'Traceback'],
   failureTools: ['Bash'],
   userEffortPins: true,
   models: ['claude-opus-5-5=allow', 'claude-fable-5-1=allow', 'claude-sonnet-5-5=probation', 'claude-haiku-5-5=probation', 'claude-sonnet-5=deny'],
@@ -106,13 +107,13 @@ const regexItem = (item: string): string | undefined => {
     new RegExp(item);
     return undefined;
   } catch (error) {
-    return `"${item}" is not a regular expression (${error instanceof Error ? error.message : String(error)})`;
+    return `${quote(item)} is not a regular expression (${clip(error instanceof Error ? error.message : String(error), 80)})`;
   }
 };
 
 const MODEL_ENTRY = /^([^=\s]+)=(allow|probation|deny)$/;
-const modelItem = (item: string): string | undefined => (MODEL_ENTRY.test(item) ? undefined : `"${item}" is not model=allow, model=probation or model=deny`);
-const nameItem = (item: string): string | undefined => (/^\S+$/.test(item) ? undefined : `"${item}" is not a tool name`);
+const modelItem = (item: string): string | undefined => (MODEL_ENTRY.test(item) ? undefined : `${quote(item)} is not model=allow, model=probation or model=deny`);
+const nameItem = (item: string): string | undefined => (/^\S+$/.test(item) ? undefined : `${quote(item)} is not a tool name`);
 
 const PARSERS: { [K in keyof Settings]: (raw: unknown) => Parsed<Settings[K] | 'default'> } = {
   floor: parseLevel,
@@ -135,7 +136,7 @@ const PARSERS: { [K in keyof Settings]: (raw: unknown) => Parsed<Settings[K] | '
 };
 
 function errorLine(key: string, raw: unknown, why: string): string {
-  return `auto-effort: option "${key}" is ${JSON.stringify(raw)}, ${why}; using the default ${JSON.stringify(DEFAULTS[key as keyof Settings])}`;
+  return `auto-effort: option "${key}" is ${quote(raw)}, ${why}; using the default ${JSON.stringify(DEFAULTS[key as keyof Settings])}`;
 }
 
 /** Every option read, validated and defaulted; `errors` holds one line per rejected option. */

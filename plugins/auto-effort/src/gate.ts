@@ -46,6 +46,24 @@ export function markUnsafe(persisted: Persisted, model: string, mark: Unsafe): P
   return { ...persisted, unsafe: { ...persisted.unsafe, [normalizeModel(model)]: mark } };
 }
 
+/** The stored marks with this session's entries laid over them for the models it changed, an absent entry included; every other model keeps what is stored. */
+export function mergeModels(stored: Persisted, mine: Persisted, models: readonly string[]): Persisted {
+  const unsafe = { ...stored.unsafe };
+  const probation = { ...stored.probation };
+  const graduated = new Set(stored.graduated);
+  for (const name of new Set(models.map(normalizeModel))) {
+    const mark = mine.unsafe[name];
+    if (mark === undefined) delete unsafe[name];
+    else unsafe[name] = mark;
+    const count = mine.probation[name];
+    if (count === undefined) delete probation[name];
+    else probation[name] = count;
+    if (mine.graduated.includes(name)) graduated.add(name);
+    else graduated.delete(name);
+  }
+  return { unsafe, probation, graduated: [...graduated] };
+}
+
 /** Lifts the mark from one model, or from every model when none is named. */
 export function clearUnsafe(persisted: Persisted, model: string | undefined): Persisted {
   if (model === undefined) return { ...persisted, unsafe: {} };

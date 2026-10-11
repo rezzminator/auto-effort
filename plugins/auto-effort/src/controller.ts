@@ -8,7 +8,7 @@ import { clamp, isEffort, levelsWithin, rank, stepUp, type Effort } from './leve
 import { normalizeModel } from './model.ts';
 import { planFor } from './plan.ts';
 import { compile, type Compiled, type Settings } from './settings.ts';
-import { escalationLine, reminderLine, shortReason, statusLine, type Shown } from './text.ts';
+import { escalationLine, quote, reminderLine, shortReason, statusLine, type Shown } from './text.ts';
 
 export type Row = Record<string, unknown>;
 export type Source = Shown;
@@ -32,7 +32,8 @@ export type StepPlan = {
   toast?: string;
 };
 
-export type StepEnd = { rows: Row[]; toast?: string; persisted?: Persisted };
+/** `persisted` and `model` come together: the marks changed for that model, to be saved. */
+export type StepEnd = { rows: Row[]; toast?: string; persisted?: Persisted; model?: string };
 
 type Turn = {
   id: string;
@@ -121,6 +122,21 @@ export class Controller {
     else this.told.delete(normalizeModel(model));
   }
 
+  /** A new session in the same process (after /clear): on again, no pin, no turn, nothing to compare with; the marks stay. */
+  resetSession(): void {
+    this.enabled = true;
+    this.pin = null;
+    this.lastSeen = undefined;
+    this.turn = null;
+    this.turnId = undefined;
+    this.pendingText = undefined;
+    this.lastModel = undefined;
+    this.inflight = undefined;
+    this.last = undefined;
+    this.compacted = false;
+    this.told.clear();
+  }
+
   noteCompaction(): void {
     this.compacted = true;
   }
@@ -129,9 +145,15 @@ export class Controller {
     return gateOf(model, this.settingsNow, this.compiled, this.store);
   }
 
-  /** A prompt arrives; the turn it starts is planned from it. */
-  onPrompt(input: { text: string; model: string | undefined; midTurn: boolean }): { reminder?: string; rows: Row[] } {
-    if (input.midTurn) return { rows: [] };
+  /**
+   * A prompt arrives. One typed between turns, or typed mid-turn to wait for the running turn, starts a turn: that turn is
+   * planned from it. One delivered into the running turn gets no reminder; its text only plans a next turn no prompt announces.
+   */
+  onPrompt(input: { text: string; model: string | undefined; midTurn: boolean; wait?: boolean }): { reminder?: string; rows: Row[] } {
+    if (input.midTurn && input.wait !== true) {
+      this.pendingText ??= input.text;
+      return { rows: [] };
+    }
     this.pendingText = input.text;
     if (input.model !== undefined) this.lastModel = input.model;
     const s = this.settingsNow;
@@ -241,6 +263,7 @@ export class Controller {
     ];
     let toast: string | undefined;
     let persisted: Persisted | undefined;
+    const model = normalizeModel(inf.model);
     if (inf.switched && inf.active && inf.prev !== undefined) {
       const prev = inf.prev;
       const verdict = judgeSwitch({
@@ -277,7 +300,7 @@ export class Controller {
       }
     }
     this.last = usage === null ? undefined : { model: normalizeModel(inf.model), wire: inf.wire, usage, endedAt, messages: inf.messages };
-    return { rows, ...(toast === undefined ? {} : { toast }), ...(persisted === undefined ? {} : { persisted }) };
+    return { rows, ...(toast === undefined ? {} : { toast }), ...(persisted === undefined ? {} : { persisted, model }) };
   }
 
   /** The request failed before it answered: nothing to compare the next one with. */
@@ -296,7 +319,7 @@ export class Controller {
     const gate = this.lastModel === undefined ? undefined : this.gate(this.lastModel);
     if (gate !== undefined && !gate.active) return refuse(`Not applied: auto-effort does not change effort on ${this.lastModel} (${gate.status}).`);
     const requested = input.input.level ?? input.input.effort;
-    if (!isEffort(requested)) return refuse(`Not applied: level must be one of ${levelsWithin(s.floor, s.ceiling).join(', ')}; got ${JSON.stringify(requested ?? null)}.`);
+    if (!isEffort(requested)) return refuse(`Not applied: level must be one of ${levelsWithin(s.floor, s.ceiling).join(', ')}; got ${quote(requested ?? null)}.`);
     const turn = this.turn;
     if (turn === null) return refuse('Not applied: no turn is being steered yet.');
     const applied = clamp(requested, s.floor, s.ceiling);

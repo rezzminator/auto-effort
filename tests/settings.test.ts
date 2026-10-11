@@ -21,7 +21,7 @@ describe('resolveSettings', () => {
       statusLine: true,
     });
     expect(DEFAULTS.planUpshiftPatterns).toEqual(['\\bthink', '\\bdesign']);
-    expect(DEFAULTS.failurePatterns).toEqual(['--- FAIL', 'FAIL(ED)?', '\\d+ (failed|failing)', 'AssertionError', 'panic:', 'Traceback']);
+    expect(DEFAULTS.failurePatterns).toEqual(['--- FAIL', 'FAIL(ED)?', '(?<!\\d)[1-9]\\d* (failed|failing)', 'AssertionError', 'panic:', 'Traceback']);
     expect(DEFAULTS.models).toEqual([
       'claude-opus-5-5=allow',
       'claude-fable-5-1=allow',
@@ -78,6 +78,16 @@ describe('resolveSettings', () => {
     expect(errors[0]).toContain('"ceiling"');
   });
 
+  it('quotes a short piece of a rejected value, never the whole value', () => {
+    const level = resolveSettings({ planLevel: 'x'.repeat(5000) }).errors;
+    expect(level[0]).toMatch(/"planLevel" is "xxxxxxxx/);
+    expect(level[0]!.length).toBeLessThan(300);
+    const pattern = resolveSettings({ failurePatterns: ['(' + 'a'.repeat(5000)] }).errors;
+    expect(pattern[0]).toContain('"failurePatterns"');
+    expect(pattern[0]).toContain('(aaaa');
+    expect(pattern[0]!.length).toBeLessThan(400);
+  });
+
   it('rejects a model entry without a valid state', () => {
     const { settings, errors } = resolveSettings({ models: ['claude-x=allow', 'claude-y'] });
     expect(settings.models).toEqual(DEFAULTS.models);
@@ -101,5 +111,19 @@ describe('compile', () => {
     expect(compiled.failure.some((re) => re.test('--- FAIL: TestX (0.00s)'))).toBe(true);
     expect(compiled.failure.some((re) => re.test('3 failed, 2 passed'))).toBe(true);
     expect(compiled.failure.some((re) => re.test('all tests passed, 0 failures'))).toBe(false);
+  });
+
+  it('counts a run with failures, never a green run that reports 0 failed, in time linear in the result', () => {
+    const failure = compile(DEFAULTS).failure;
+    const hits = (text: string) => failure.some((re) => re.test(text));
+    expect(hits('test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out')).toBe(false);
+    expect(hits('ok | 3 passed | 0 failed (12ms)')).toBe(false);
+    expect(hits('=== 10 failed, 2 passed in 0.31s ===')).toBe(true);
+    expect(hits('test result: ok. 11 passed; 1 failed; 0 ignored')).toBe(true);
+    expect(hits('Tests  2 failing')).toBe(true);
+    const digits = '7'.repeat(100_000);
+    const started = performance.now();
+    expect(hits(digits)).toBe(false);
+    expect(performance.now() - started).toBeLessThan(500);
   });
 });

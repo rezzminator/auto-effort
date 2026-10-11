@@ -50,6 +50,16 @@ export function statusLine(level: Effort, reason: string, source: Shown): string
 
 const REASON_MAX = 60;
 
+/** Text a message carries from outside (a raw value, an error): at most `max` characters. */
+export function clip(text: string, max = REASON_MAX): string {
+  return text.length > max ? `${text.slice(0, max - 1)}…` : text;
+}
+
+/** A raw value as a message quotes it: its JSON, at most 60 characters. */
+export function quote(value: unknown): string {
+  return clip(JSON.stringify(value) ?? String(value));
+}
+
 /** A reason as the status line and the log carry it: one line, at most 60 characters. */
 export function shortReason(reason: unknown): string {
   if (typeof reason !== 'string') return 'no reason given';

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { planFor } from '../plugins/auto-effort/src/plan.ts';
-import { compile, DEFAULTS, resolveSettings } from '../plugins/auto-effort/src/settings.ts';
+import { compile, resolveSettings } from '../plugins/auto-effort/src/settings.ts';
 
 const plan = (text: string, raw: Record<string, unknown> = {}) => {
   const { settings } = resolveSettings(raw);
@@ -36,6 +36,5 @@ describe('planFor', () => {
     expect(plan('plain').reason).toBe('planning turn');
     expect(plan('think about it').reason).toBe('planning: prompt asks for thought');
     expect(plan('x'.repeat(2000)).reason).toBe('planning: long prompt (2000 chars)');
-    expect(DEFAULTS.planLevel).toBe('high');
   });
 });
