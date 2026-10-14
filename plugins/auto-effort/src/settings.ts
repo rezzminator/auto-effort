@@ -18,8 +18,10 @@ export type Settings = {
   planUpshiftChars: number;
   turnReminder: boolean;
   escalateAfterFailures: number;
+  lowerOnPass: boolean;
   failurePatterns: string[];
   failureTools: string[];
+  testCommandPatterns: string[];
   userEffortPins: boolean;
   models: string[];
   unknownModels: UnknownModels;
@@ -38,8 +40,26 @@ export const DEFAULTS: Settings = {
   planUpshiftChars: 1500,
   turnReminder: true,
   escalateAfterFailures: 2,
+  lowerOnPass: true,
   failurePatterns: ['--- FAIL', 'FAIL(ED)?', '(?<!\\d)[1-9]\\d* (failed|failing)', 'AssertionError', 'panic:', 'Traceback'],
   failureTools: ['Bash'],
+  testCommandPatterns: [
+    '\\bgo\\s+(-C\\s+\\S+\\s+)?test\\b',
+    '\\b(npm|pnpm|yarn|bun)\\s+(run\\s+)?test\\b',
+    '\\bvitest\\b',
+    '\\bjest\\b',
+    '\\bpytest\\b',
+    '\\bcargo\\s+(test|nextest)\\b',
+    '\\bmake\\b[^;&|\\n]*?\\b(test|check|verify)\\b',
+    '\\bjust\\b[^;&|\\n]*?\\b(test|check)\\b',
+    '\\b(mvn|gradle|gradlew)\\b[^;&|\\n]*?\\btest\\b',
+    '\\bdotnet\\s+test\\b',
+    '\\bdeno\\s+test\\b',
+    '\\bswift\\s+test\\b',
+    '\\bmix\\s+test\\b',
+    '\\b(rspec|phpunit|ctest|tox|nox)\\b',
+    '\\bscripts?/test[\\w.-]*\\.sh\\b',
+  ],
   userEffortPins: true,
   models: ['claude-opus-5-5=allow', 'claude-fable-5-1=allow', 'claude-sonnet-5-5=probation', 'claude-haiku-5-5=probation', 'claude-sonnet-5=deny'],
   unknownModels: 'off',
@@ -123,8 +143,10 @@ const PARSERS: { [K in keyof Settings]: (raw: unknown) => Parsed<Settings[K] | '
   planUpshiftChars: parseInt1,
   turnReminder: parseBool,
   escalateAfterFailures: parseInt1,
+  lowerOnPass: parseBool,
   failurePatterns: listOf(regexItem),
   failureTools: listOf(nameItem),
+  testCommandPatterns: listOf(regexItem),
   userEffortPins: parseBool,
   models: listOf(modelItem),
   unknownModels: parseUnknownModels,
@@ -162,10 +184,11 @@ export function resolveSettings(raw: Readonly<Record<string, unknown>>): { setti
 export type Compiled = {
   upshift: RegExp[];
   failure: RegExp[];
+  testCommand: RegExp[];
   models: Record<string, ModelStatus>;
 };
 
-/** The lists as regular expressions (a prompt pattern ignores case, a failure pattern does not) and the model entries as a map. */
+/** The lists as regular expressions (a prompt pattern ignores case, a failure or test command pattern does not) and the model entries as a map. */
 export function compile(settings: Settings): Compiled {
   const models: Record<string, ModelStatus> = {};
   for (const entry of settings.models) {
@@ -175,6 +198,7 @@ export function compile(settings: Settings): Compiled {
   return {
     upshift: settings.planUpshiftPatterns.map((source) => new RegExp(source, 'i')),
     failure: settings.failurePatterns.map((source) => new RegExp(source)),
+    testCommand: settings.testCommandPatterns.map((source) => new RegExp(source)),
     models,
   };
 }

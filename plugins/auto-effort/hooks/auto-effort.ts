@@ -455,7 +455,9 @@ export const register: Register = (on, options) => {
     if (e.agentId !== undefined || result.deny !== undefined) return result;
     try {
       const text = result.text ?? (typeof result.result === 'string' ? result.result : '');
-      const seen = st.ctl.onToolResult({ tool: e.tool, text });
+      // The tool's arguments ride beside `tool` (`e.command` for Bash); a call without a command is no test run.
+      const command = typeof e.command === 'string' ? e.command : undefined;
+      const seen = st.ctl.onToolResult({ tool: e.tool, command, text });
       record($, st, seen.rows);
       if (seen.context !== undefined) return { ...result, context: [...(result.context ?? []), seen.context] };
     } catch (error) {

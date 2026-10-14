@@ -8,7 +8,7 @@ import { clamp, isEffort, levelsWithin, rank, stepUp, type Effort } from './leve
 import { normalizeModel } from './model.ts';
 import { planFor } from './plan.ts';
 import { compile, type Compiled, type Settings } from './settings.ts';
-import { escalationLine, quote, reminderLine, shortReason, statusLine, type Shown } from './text.ts';
+import { deescalationLine, escalationLine, quote, reminderLine, shortReason, statusLine, type Shown } from './text.ts';
 
 export type Row = Record<string, unknown>;
 export type Source = Shown;
@@ -43,7 +43,10 @@ type Turn = {
   startLevel: Effort;
   steps: number;
   switches: number;
+  /** Failing test runs in a row since the last rise or passing run. */
   failures: number;
+  /** What the turn held before the first rise of the failing streak, for a passing run to return to; null when there is none. */
+  beforeRise: { level: Effort; source: Source; reason: string } | null;
   escalations: number;
   setEffortCalls: number;
 };
@@ -64,6 +67,22 @@ type Inflight = {
   startedAt: number;
   messages: number;
 };
+
+/** A harness note that the command went on in the background: its result says nothing about the tests yet. */
+const BACKGROUND = /\b(?:running in (?:the )?background|backgrounded)\b/i;
+
+/**
+ * What a tool result says about the tests. A call of a `failureTools` tool whose command matches `testCommandPatterns` is a test
+ * run: it fails when its result matches `failurePatterns`, passes otherwise, and says nothing yet when it went to the background.
+ * Any other result is no test run.
+ */
+function testRunOf(settings: Settings, compiled: Compiled, input: { tool: string; command: string | undefined; text: string }): 'fail' | 'pass' | 'background' | undefined {
+  const { command, text } = input;
+  if (command === undefined || !settings.failureTools.includes(input.tool)) return undefined;
+  if (!compiled.testCommand.some((re) => re.test(command))) return undefined;
+  if (BACKGROUND.test(text)) return 'background';
+  return compiled.failure.some((re) => re.test(text)) ? 'fail' : 'pass';
+}
 
 /** What the host keeps per session so a plugin reload does not lose it. */
 export type SessionState = { enabled: boolean; pin: Effort | null };
@@ -247,7 +266,7 @@ export class Controller {
 
     if (this.turn === null || this.turn.id !== input.turnId) {
       const plan = planFor(s, this.compiled, text ?? '');
-      this.turn = { id: input.turnId, level: plan.level, source: 'plan', reason: plan.reason, startLevel: plan.level, steps: 0, switches: 0, failures: 0, escalations: 0, setEffortCalls: 0 };
+      this.turn = { id: input.turnId, level: plan.level, source: 'plan', reason: plan.reason, startLevel: plan.level, steps: 0, switches: 0, failures: 0, beforeRise: null, escalations: 0, setEffortCalls: 0 };
       rows.push({ event: 'decision', turnId: input.turnId, model: input.model, level: plan.level, source: 'plan', reason: plan.reason, upshift: plan.upshift, sessionEffort: effort });
     }
     const turn = this.turn;
@@ -355,18 +374,25 @@ export class Controller {
     turn.source = 'model';
     turn.reason = reason;
     turn.setEffortCalls += 1;
+    // The model's level stands: a passing test run no longer undoes a rise it chose over.
+    turn.beforeRise = null;
     let text = `Effort set to ${applied} from your next request until this turn ends.`;
     if (applied !== requested) text = `Effort set to ${applied} from your next request until this turn ends (${requested} is ${rank(requested) < rank(s.floor) ? `below the floor ${s.floor}` : `above the ceiling ${s.ceiling}`}).`;
     return { text, rows: [{ event: 'set_effort', turnId: turn.id, requested, applied, from, reason }] };
   }
 
-  /** A main-loop tool result: a failing test run counts, and enough of them raise the level one step. */
-  onToolResult(input: { tool: string; text: string }): { context?: string; rows: Row[] } {
+  /**
+   * A main-loop tool result. Failing test runs in a row raise the level one step at `escalateAfterFailures`; a passing run resets
+   * the count and, with `lowerOnPass`, returns a raised level to what the failing streak found. Any other result changes nothing.
+   */
+  onToolResult(input: { tool: string; command: string | undefined; text: string }): { context?: string; rows: Row[] } {
     const s = this.settingsNow;
     const turn = this.turn;
     if (turn === null || !this.enabled || this.pin !== null) return { rows: [] };
     if (this.lastModel !== undefined && !this.gate(this.lastModel).active) return { rows: [] };
-    if (!s.failureTools.includes(input.tool) || !this.compiled.failure.some((re) => re.test(input.text))) return { rows: [] };
+    const run = testRunOf(s, this.compiled, input);
+    if (run === undefined || run === 'background') return { rows: [] };
+    if (run === 'pass') return this.testsPass(turn);
     turn.failures += 1;
     if (turn.failures < s.escalateAfterFailures) return { rows: [] };
     const failures = turn.failures;
@@ -374,11 +400,28 @@ export class Controller {
     const from = clamp(turn.level, s.floor, s.ceiling);
     const to = stepUp(from, s.ceiling);
     if (to === from) return { rows: [{ event: 'escalation', turnId: turn.id, from, to, failures, held: 'ceiling' }] };
+    turn.beforeRise ??= { level: from, source: turn.source, reason: turn.reason };
     turn.level = to;
     turn.source = 'escalation';
     turn.reason = `${failures} failing test runs`;
     turn.escalations += 1;
     return { context: escalationLine(failures, from, to), rows: [{ event: 'escalation', turnId: turn.id, from, to, failures }] };
+  }
+
+  /** A passing test run ends the failing streak; with `lowerOnPass` the turn gets back what it held before the streak's first rise. */
+  private testsPass(turn: Turn): { context?: string; rows: Row[] } {
+    const s = this.settingsNow;
+    const before = turn.beforeRise;
+    turn.failures = 0;
+    turn.beforeRise = null;
+    if (before === null || !s.lowerOnPass) return { rows: [] };
+    const from = clamp(turn.level, s.floor, s.ceiling);
+    const to = clamp(before.level, s.floor, s.ceiling);
+    turn.level = to;
+    turn.source = before.source;
+    turn.reason = before.reason;
+    if (to === from) return { rows: [] };
+    return { context: deescalationLine(from, to), rows: [{ event: 'deescalation', turnId: turn.id, from, to }] };
   }
 
   /** The turn ended: its summary row. */

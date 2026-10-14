@@ -24,7 +24,7 @@ With this plugin the main chat's effort follows the work:
 
 - **A turn starts at a planned level** (`high` by default; `xhigh` when the prompt asks for thought or is long).
 - **The model sets the level it needs** with the `set_effort` tool, in its first response and again when the work changes. It is told to call it by the tool's description and by one line added to each prompt.
-- **Failing tests raise it**: two failing test runs in one turn lift the level one step.
+- **Failing tests raise it, passing tests bring it back**: two failing test runs in a row lift the level one step, and the next passing run returns it to where the failures found it. Only a test command counts: the output of `cat`, `grep` or a build that happens to print `FAIL` does not.
 - **A cache check keeps it safe.** Changing effort mid-turn must not break the prompt cache. After every change the plugin compares the cache read of the switched request with the previous request's prompt; if it drops, the plugin stops changing effort on that model and tells you.
 
 Sub-agents are never touched; they keep the effort Claude Code gives them (see [agent-effort](https://github.com/rezzminator/agent-effort) to set theirs per spawn).
@@ -67,7 +67,7 @@ Requires Claude Code with function hooks (tested on 2.1.296).
 | `session.start` | Registers the `set_effort` tool (always loaded, never behind tool search) and the `/auto-effort` command; loads the saved model marks. |
 | `prompt.submit` | Reads the options as `/config` holds them, then adds one context line: the level the turn starts at and a request to call `set_effort` first. |
 | `turn.step` | Before each main-chat request, rewrites its `effort` to the level held for the turn (only when it differs from the effort the request carries), pins the status line, and afterwards runs the cache check on the answer's token usage. A sub-agent's request passes untouched. |
-| `tool.call` | Serves `set_effort`; counts failing test runs in the results of `failureTools` and, at the threshold, adds one line to the result that tells the model its level rose. |
+| `tool.call` | Serves `set_effort`; reads each main-chat call of `failureTools` whose command matches `testCommandPatterns` as a test run, failing when its result matches `failurePatterns` and passing otherwise. At the threshold of failing runs in a row it adds one line to the result telling the model its level rose; with `lowerOnPass`, the next passing run adds one line saying the level is back. |
 | `turn.complete` | Writes the turn's summary row to the decision log. |
 | `session.compact` | Notes the compaction, so the cache check does not judge the switch right after it. |
 | `command.run` | Answers `/auto-effort`. |
@@ -103,9 +103,11 @@ Every option is a plugin option (`userConfig`): edit it in `/config`, in `settin
 | `planUpshiftPatterns` | `\bthink`<br>`\bdesign` | One regular expression per entry, matched case-insensitively against the prompt. A prompt that matches any entry starts its turn at xhigh instead of planLevel. |
 | `planUpshiftChars` | `1500` | A prompt longer than this many characters starts its turn at xhigh instead of planLevel. |
 | `turnReminder` | `true` | On: each prompt carries one line naming the effort the turn starts at and asking the model to call set_effort in its first response. Off: only the tool's description asks for the call. |
-| `escalateAfterFailures` | `2` | After this many failing test runs in one turn the effort rises one step, up to the ceiling, for the requests that follow; the count then starts again. |
-| `failurePatterns` | `--- FAIL`<br>`FAIL(ED)?`<br>`(?<!\d)[1-9]\d* (failed\|failing)`<br>`AssertionError`<br>`panic:`<br>`Traceback` | One regular expression per entry, matched case-sensitively against a tool result. A result that matches any entry counts as one failing test run. |
-| `failureTools` | `Bash` | One tool name per entry (Bash runs the tests). Only results of these tools are matched against failurePatterns. |
+| `escalateAfterFailures` | `2` | After this many failing test runs in a row in one turn the effort rises one step, up to the ceiling, for the requests that follow; the count then starts again. A passing test run sets the count back to 0. |
+| `lowerOnPass` | `true` | On: the first passing test run after a rise returns the effort to the level the turn had before its failing streak raised it (never below floor), unless the model set a level with set_effort since. Off: the raised level holds until the turn ends. |
+| `failurePatterns` | `--- FAIL`<br>`FAIL(ED)?`<br>`(?<!\d)[1-9]\d* (failed\|failing)`<br>`AssertionError`<br>`panic:`<br>`Traceback` | One regular expression per entry, matched case-sensitively against the result of a test run (see testCommandPatterns). A test run whose result matches any entry fails; one that matches none passes. |
+| `failureTools` | `Bash` | One tool name per entry (Bash runs the tests). A call of these tools whose command matches testCommandPatterns is a test run; its result is matched against failurePatterns. |
+| `testCommandPatterns` | `\bgo\s+(-C\s+\S+\s+)?test\b`<br>`\b(npm\|pnpm\|yarn\|bun)\s+(run\s+)?test\b`<br>`\bvitest\b`<br>`\bjest\b`<br>`\bpytest\b`<br>`\bcargo\s+(test\|nextest)\b`<br>`\bmake\b[^;&\|\n]*?\b(test\|check\|verify)\b`<br>`\bjust\b[^;&\|\n]*?\b(test\|check)\b`<br>`\b(mvn\|gradle\|gradlew)\b[^;&\|\n]*?\btest\b`<br>`\bdotnet\s+test\b`<br>`\bdeno\s+test\b`<br>`\bswift\s+test\b`<br>`\bmix\s+test\b`<br>`\b(rspec\|phpunit\|ctest\|tox\|nox)\b`<br>`\bscripts?/test[\w.-]*\.sh\b` | One regular expression per entry, matched case-sensitively against the command of a failureTools call. A call whose command matches any entry is a test run and counts as failing or passing; the output of any other command (cat, grep, a build) counts nothing. A run sent to the background counts neither way. |
 | `userEffortPins` | `true` | On: when you change the effort yourself with /effort, auto-effort stops steering that session until /auto-effort on. Off: it keeps steering whatever you set. |
 | `models` | `claude-opus-5-5=allow`<br>`claude-fable-5-1=allow`<br>`claude-sonnet-5-5=probation`<br>`claude-haiku-5-5=probation`<br>`claude-sonnet-5=deny` | One entry per model, as model=allow, model=probation or model=deny. allow steers it. probation steers it while counting clean effort switches; probationSwitches of them earn allow. deny never touches it. A model without an entry gets unknownModels. |
 | `unknownModels` | `off` | off leaves it untouched; allow, probation and deny act as in models. |
@@ -126,6 +128,7 @@ One JSON row per line in `logFile` (one file per session, a new numbered file ev
 | `switch` | An effort change between two requests of one model. |
 | `set_effort` | Each call of the tool: the level asked, the level applied, the reason given. |
 | `escalation` | A rise from failing test runs. |
+| `deescalation` | A passing test run returning the level to where the failing streak found it (`lowerOnPass`). |
 | `canary` | The cache check of a switch: `ok`, `fail` or `skip` with the reason. |
 | `gate` | A model graduating from probation, or marked unsafe. |
 | `pin` | A `/effort` change the plugin recognised. |
@@ -136,9 +139,10 @@ One JSON row per line in `logFile` (one file per session, a new numbered file ev
 
 - Main chat only. Sub-agents keep their own effort.
 - The session's on/off and a `/effort` pin are kept per session id in the host's plugin state, so a `/reload-plugins` or a settings change (in `/config` or by `/auto-effort set`), which reloads the plugin, keeps them. They do not survive closing the chat. `/clear` starts a new session: on, unpinned, with its own log file. The model marks and probation counts are saved and shared by every chat on the machine; a chat's save rewrites only the models it changed, so for one model the last write wins.
-- `failurePatterns` entries are regular expressions you write, run over every main-loop Bash result. They are checked for syntax only, so a pattern that backtracks without end (such as `(a+)+$`) can stall the plugin's tool-result hook on a long result; the host treats a hook that overruns as absent and the result goes through unchanged. Keep patterns plain.
+- `testCommandPatterns` and `failurePatterns` entries are regular expressions you write, run over every main-loop Bash command and every test run's result. They are checked for syntax only, so a pattern that backtracks without end (such as `(a+)+$`) can stall the plugin's tool-result hook on a long result; the host treats a hook that overruns as absent and the result goes through unchanged. Keep patterns plain.
 - The only effort control the plugin has is the request's `effort` field, set per request. It does not read the session's setting; it recognises a pin by the request's effort changing between turns on the same model.
-- A failing test run is recognised by text in the result of a `failureTools` tool; a tool that prints none of the `failurePatterns` counts nothing.
+- A test run is recognised by its command alone: a test runner no `testCommandPatterns` entry names counts nothing, and a command that merely mentions one (`grep pytest notes.md`) counts. Add your own runner or script as an entry.
+- A test run's verdict is text in its result: one that prints none of the `failurePatterns` counts as passing, even when it failed some other way (a compile error, a crash before the first test).
 
 ## Development
 

@@ -4,8 +4,14 @@ All notable changes to this plugin are recorded here. The format follows [Keep a
 
 ## [Unreleased]
 
+### Added
+
+- `testCommandPatterns`: the commands that are test runs, one regular expression per entry; the defaults name the common runners (`go test`, `npm test`, `vitest`, `jest`, `pytest`, `cargo test`, `make test|check|verify`, `just`, Maven and Gradle, `dotnet`, `deno`, `swift`, `mix`, `rspec`, `phpunit`, `ctest`, `tox`, `nox`, `scripts/test*.sh`).
+- `lowerOnPass` (default on): the first passing test run after a rise returns the effort to the level the turn had before its failing streak raised it, with one line to the model and a `deescalation` row in the decision log. A level the model set with `set_effort` after the rise stands.
+
 ### Fixed
 
+- Failure counting ignores the output of commands that are not test runs: a `cat`, `grep` or build whose output held `FAIL` used to count as a failing test run and raise the effort. Only failing test runs in a row count now, and a passing run sets the count back to 0.
 - `/auto-effort off` and the pin of a `/effort` change now survive a plugin reload and a settings change within the same session: they are saved per session id in the host's plugin state. `/clear` still starts on and unpinned.
 
 ## [0.1.0] — 2026-10-11
