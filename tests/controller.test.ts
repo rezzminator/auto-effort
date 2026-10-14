@@ -606,3 +606,18 @@ describe('session state', () => {
     }
   });
 });
+
+
+it('returns logging metadata for unsafe and failed-canary toasts, keeping their text', () => {
+  const unsafe = markUnsafe(EMPTY_PERSISTED, OPUS, { at: 'x', ratio: 0.1, prevPrompt: 1, cacheRead: 0, from: 'high', to: 'medium' });
+  const off = rig({}, unsafe);
+  const first = off.step('t1', 0).plan;
+  expect((first as any).warning).toEqual({ event: 'gate-unsafe', msg: first.toast, where: 'src/controller.ts#beginStep' });
+  expect(off.step('t1', 1).plan.toast).toBeUndefined();
+  const active = rig();
+  active.prompt(); active.step('t1', 0, { u: usage(10, 0, 5000) });
+  active.set({ level: 'medium', reason: 'rename' });
+  const end = active.step('t1', 1, { u: usage(4000, 100, 900) }).end;
+  expect((end as any).warning).toEqual({ event: 'canary-failed', msg: end.toast, where: 'src/controller.ts#endStep' });
+  expect(end.toast).toContain('stopped changing effort');
+});

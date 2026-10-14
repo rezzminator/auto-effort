@@ -5,7 +5,7 @@
 **Automatic reasoning effort for the Claude Code main chat: each turn starts at a planned level, the model raises or lowers it with one tool call, and a cache check keeps every change safe.**
 
 [![Claude Code plugin](https://img.shields.io/badge/Claude%20Code-plugin-D97757)](https://docs.claude.com/en/docs/claude-code/plugins)
-[![Version](https://img.shields.io/badge/version-0.1.0-blue)](./CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.2.0-blue)](./CHANGELOG.md)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](./LICENSE)
 
 </div>
@@ -155,3 +155,7 @@ npm run release:check
 ## Credit
 
 Built by Reza with [Professor](https://github.com/rezzminator/professor). MIT licensed.
+
+## Logs
+
+Errors, warnings and info append to `errors.jsonl`, `warnings.jsonl` and `info.jsonl` under `$PLUGIN_LOG_DIR/auto-effort/`. With `PLUGIN_LOG_DIR` unset they use `$HOME/.local/state/auto-effort/logs/`. Each row identifies its event and relative component; a session starts with one `logger-ready` heartbeat. Rows are limited to 4096 bytes, and a file past 20 MiB moves to `.1` (replacing the previous `.1`). A write failure emits one screen notice per failing streak, re-armed after a successful write. Existing screen messages and the `logFile` decision log are unchanged.

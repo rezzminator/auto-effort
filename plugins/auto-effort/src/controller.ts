@@ -18,7 +18,10 @@ type Carried = Effort | number | undefined;
 
 export type StepInput = { turnId: string; index: number; model: string; effort: Carried; messageCount: number };
 
+type PluginWarning = { event: 'gate-unsafe' | 'canary-failed'; msg: string; where: string };
+
 export type StepPlan = {
+  warning?: PluginWarning;
   /** The effort to rewrite the request to; undefined leaves it as it is. */
   send: Effort | undefined;
   /** The level held for this request; undefined when the plugin leaves the request alone. */
@@ -33,7 +36,7 @@ export type StepPlan = {
 };
 
 /** `persisted` and `model` come together: the marks changed for that model, to be saved. */
-export type StepEnd = { rows: Row[]; toast?: string; persisted?: Persisted; model?: string };
+export type StepEnd = { warning?: PluginWarning; rows: Row[]; toast?: string; persisted?: Persisted; model?: string };
 
 type Turn = {
   id: string;
@@ -238,7 +241,8 @@ export class Controller {
     if (!gate.active) {
       const toast = gate.status === 'unsafe' && !this.told.has(name) ? `auto-effort is off for ${input.model}: a cache check failed on it earlier. /auto-effort clear ${name} turns it back on.` : undefined;
       if (toast !== undefined) this.told.add(name);
-      return this.inactive(input, effort, `auto-effort does not change effort on ${input.model} (${gate.status})`, gate, newTurn, rows, toast);
+      const inactive = this.inactive(input, effort, `auto-effort does not change effort on ${input.model} (${gate.status})`, gate, newTurn, rows, toast);
+      return { ...inactive, ...(toast === undefined ? {} : { warning: { event: 'gate-unsafe', msg: toast, where: 'src/controller.ts#beginStep' } as PluginWarning }) };
     }
     if (this.pin !== null) {
       const plan = this.inactive(input, effort, 'you set /effort', gate, newTurn, rows, undefined, 'pin');
@@ -326,7 +330,7 @@ export class Controller {
       }
     }
     this.last = usage === null ? undefined : { model: normalizeModel(inf.model), wire: inf.wire, usage, endedAt, messages: inf.messages };
-    return { rows, ...(toast === undefined ? {} : { toast }), ...(persisted === undefined ? {} : { persisted, model }) };
+    return { rows, ...(toast === undefined ? {} : { toast, warning: { event: 'canary-failed', msg: toast, where: 'src/controller.ts#endStep' } as PluginWarning }), ...(persisted === undefined ? {} : { persisted, model }) };
   }
 
   /** The request failed before it answered: nothing to compare the next one with. */

@@ -10,7 +10,7 @@
       "name": "auto-effort",
       "source": "./plugins/auto-effort",
       "description": "Automatic reasoning effort for the Claude Code main chat: the plugin plans each turn, the model raises or lowers it with set_effort, and a cache check keeps it safe.",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "license": "MIT",
       "keywords": [
         "claude-code",

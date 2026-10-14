@@ -1,4 +1,9 @@
 import { readFileSync } from 'node:fs';
+import { execFile } from 'node:child_process';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { promisify } from 'node:util';
 import { describe as suite, expect, it, vi } from 'vitest';
 import { register } from '../plugins/auto-effort/hooks/auto-effort.ts';
 import { Controller } from '../plugins/auto-effort/src/controller.ts';
@@ -9,7 +14,7 @@ const TOOL = 'mcp__auto-effort__set_effort';
 const OPUS = 'claude-opus-5-5';
 const usage = (input: number, cacheRead: number, cacheWrite: number, output = 100) => ({ input_tokens: input, output_tokens: output, cache_read_input_tokens: cacheRead, cache_creation_input_tokens: cacheWrite, model: OPUS });
 
-function engine(options: Record<string, unknown> = {}, o: { configRows?: unknown[]; storeGet?: () => Promise<unknown>; storeValue?: unknown } = {}) {
+function engine(options: Record<string, unknown> = {}, o: { configRows?: unknown[]; storeGet?: () => Promise<unknown>; storeValue?: unknown; env?: Record<string, string | undefined> } = {}) {
   const hooks: Array<{ name: string; matcher?: Record<string, unknown>; fn: Hook }> = [];
   const logs: string[] = [];
   const statuses: Array<string | undefined> = [];
@@ -25,6 +30,7 @@ function engine(options: Record<string, unknown> = {}, o: { configRows?: unknown
   const state = new Map<string, unknown>();
   const stateKey = (ref: { plugin: string; key: string; id?: string }) => `${ref.plugin}/${ref.key}/${ref.id ?? ''}`;
   const $ = {
+    process: { run: async (_argv: string[], _options?: unknown) => ({ exitCode: 0, stdout: '', stderr: '' }) },
     tool: { register: async (spec: any) => (registered.push(spec), { tool: `mcp__auto-effort__${spec.name}` }) },
     command: { register: async (spec: any) => (commands.push(spec), { name: spec.name }) },
     store: {
@@ -41,7 +47,7 @@ function engine(options: Record<string, unknown> = {}, o: { configRows?: unknown
     },
     ui: { log: (line: string) => logs.push(line), status: (text?: string) => statuses.push(text), toast: (text: string) => toasts.push(text) },
     session: { id: async () => sess.id, model: async () => OPUS, cwd: async () => '/work' },
-    env: { get: async (name: string) => (name === 'HOME' ? '/fake-home/u' : undefined) },
+    env: { get: async (name: string) => (o.env === undefined ? (name === 'HOME' ? '/fake-home/u' : undefined) : o.env[name]) },
     config: {
       list: async () => o.configRows ?? [],
       set: async (args: unknown) => (configSets.push(args), { value: (args as { value: unknown }).value }),
@@ -67,6 +73,7 @@ function engine(options: Record<string, unknown> = {}, o: { configRows?: unknown
       hooks.length = 0;
       load(opts);
     },
+    end: () => find('session.end')($, {}, async () => ({})),
     start: () => find('session.start')($, { cwd: '/work', surface: null, isInteractive: true }, async (e: any) => ({ cwd: e.cwd })),
     prompt: async (text = 'fix the parser bug', extra: Record<string, unknown> = {}) => {
       let seen: any;
@@ -685,7 +692,7 @@ suite('/auto-effort', () => {
     await e.prompt();
     await e.step({});
     const { text } = await e.command('');
-    expect(text).toContain('auto-effort 0.1.0 · on');
+    expect(text).toContain('auto-effort 0.2.0 · on');
     expect(text).toContain('level: high');
     expect(text).toContain('floor=medium');
     expect((await e.command('status')).text).toBe(text);
@@ -736,5 +743,79 @@ suite('manifest', () => {
     expect(json('package.json').version).toBe(plugin.version);
     expect(json('.claude-plugin/marketplace.json').plugins[0].version).toBe(plugin.version);
     expect(json('plugins/auto-effort/hooks/hooks.json')).toEqual({ modules: ['./auto-effort.ts'] });
+  });
+});
+
+
+suite('plugin log adapter', () => {
+  it.each([true, false])('writes error, warning and one heartbeat with PLUGIN_LOG_DIR set=%s', async (set) => {
+    const home = await mkdtemp(join(tmpdir(), 'auto-effort-adapter-'));
+    const root = join(home, 'logs');
+    const dir = set ? join(root, 'auto-effort') : join(home, '.local/state/auto-effort/logs');
+    const e = engine({ floor: 'lowest', logFile: '' }, { env: { HOME: home, PLUGIN_LOG_DIR: set ? root : undefined } });
+    e.$.process.run = async (argv) => { const r = await promisify(execFile)('/bin/sh', argv.slice(1)); return { exitCode: 0, ...r }; };
+    const spy = vi.spyOn(Controller.prototype, 'setEffort').mockImplementation(() => { throw new Error('unknown level'); });
+    try {
+      await e.start();
+      await e.start();
+      expect(await e.tool({ tool: TOOL, level: 'medium' })).toEqual({ result: 'Not applied: the effort stays as it was.' });
+      expect(e.logs).toContain('auto-effort: applying set_effort failed: unknown level; the effort stays as it was');
+      // The unfixed tree has no end hook; observe missing rows as assertions, not a helper exception.
+      const end = e.hooks.find((h) => h.name === 'session.end');
+      if (end) await e.end();
+      const read = async (file: string) => { try { return (await readFile(join(dir, file), 'utf8')).trim().split('\n').map((l) => JSON.parse(l)); } catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []; throw error; } };
+      expect(await read('errors.jsonl')).toEqual([expect.objectContaining({ level: 'error', event: 'set-effort-failed', where: 'hooks/auto-effort.ts#answerSetEffort', session: 'sess1', detail: { error: 'unknown level' } })]);
+      expect(await read('warnings.jsonl')).toEqual([expect.objectContaining({ level: 'warning', event: 'option-error', where: 'hooks/auto-effort.ts#reportErrors' })]);
+      expect(await read('info.jsonl')).toEqual([expect.objectContaining({ level: 'info', event: 'logger-ready', detail: { version: '0.2.0', dir_source: set ? 'PLUGIN_LOG_DIR' : 'fallback' } })]);
+    } finally { spy.mockRestore(); await rm(home, { recursive: true, force: true }); }
+  });
+
+  it('keeps work results and reports one contextual process failure until recovery', async () => {
+    const e = engine({ logFile: '' }, { env: { HOME: '/isolated/home', PLUGIN_LOG_DIR: '/isolated/logs' } });
+    e.$.process.run = async () => { throw new Error('cannot spawn'); };
+    await e.start();
+    await e.prompt();
+    const end = e.hooks.find((h) => h.name === 'session.end');
+    if (end) await e.end();
+    const notices = () => e.logs.filter((s) => s.includes('plugin log '));
+    expect(notices()).toEqual([expect.stringContaining('/isolated/logs/auto-effort: cannot spawn')]);
+    e.$.config.list = async () => { throw new Error('bad config'); };
+    expect((await e.prompt('unchanged')).text).toBe('unchanged');
+    await e.end();
+    expect(notices()).toHaveLength(1);
+    e.$.process.run = async () => ({ exitCode: 0, stdout: '', stderr: '' });
+    await e.prompt(); await e.end();
+    e.$.process.run = async () => { throw new Error('second outage'); };
+    await e.prompt(); await e.end();
+    expect(notices()).toHaveLength(2);
+    expect(notices()[1]).toContain('second outage');
+  });
+
+  it('names missing env/home without throwing or blocking a prompt', async () => {
+    const e = engine({ logFile: '' }, { env: {} });
+    await e.start();
+    expect((await e.prompt('unchanged')).text).toBe('unchanged');
+    const end = e.hooks.find((h) => h.name === 'session.end');
+    if (end) await e.end();
+    expect(e.logs.filter((s) => s.includes('plugin log off:'))).toEqual([expect.stringContaining('plugin log off: no PLUGIN_LOG_DIR and no HOME')]);
+  });
+
+  it('logs applied rewrites only, and preserves a next-hook rethrow', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'auto-effort-changes-'));
+    const e = engine({ logFile: '' }, { env: { HOME: home, PLUGIN_LOG_DIR: home } });
+    e.$.process.run = async (argv) => { const r = await promisify(execFile)('/bin/sh', argv.slice(1)); return { exitCode: 0, ...r }; };
+    try {
+      await e.start(); await e.prompt(); await e.step({});
+      await e.step({ index: 1, effort: 'high' });
+      const error = new Error('upstream failed');
+      const hook = e.hooks.find((h) => h.name === 'turn.step')!.fn;
+      const gen = hook(e.$, { turnId: 't1', index: 2, model: OPUS, effort: 'high', messageCount: 3 }, () => (async function* () { throw error; })());
+      await expect(gen.next()).rejects.toBe(error);
+      const end = e.hooks.find((h) => h.name === 'session.end');
+      if (end) await e.end();
+      const read = async (level: string) => { try { return (await readFile(join(home, 'auto-effort', level + '.jsonl'), 'utf8')).trim().split('\n').map((l) => JSON.parse(l)); } catch (err) { if ((err as NodeJS.ErrnoException).code === 'ENOENT') return []; throw err; } };
+      expect((await read('info')).filter((r) => r.event === 'effort-applied')).toEqual([expect.objectContaining({ detail: { level: 'high', source: 'plan' } })]);
+      expect(await read('errors')).toEqual([expect.objectContaining({ event: 'hook-threw', where: 'hooks/auto-effort.ts#turn.step', detail: { error: 'upstream failed' } })]);
+    } finally { await rm(home, { recursive: true, force: true }); }
   });
 });
