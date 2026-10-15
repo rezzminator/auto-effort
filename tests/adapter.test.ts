@@ -692,7 +692,7 @@ suite('/auto-effort', () => {
     await e.prompt();
     await e.step({});
     const { text } = await e.command('');
-    expect(text).toContain('auto-effort 0.2.0 · on');
+    expect(text).toContain('auto-effort 0.2.1 · on');
     expect(text).toContain('level: high');
     expect(text).toContain('floor=medium');
     expect((await e.command('status')).text).toBe(text);
@@ -748,16 +748,16 @@ suite('manifest', () => {
 
 
 suite('plugin log adapter', () => {
-  it.each([true, false])('writes error, warning and one heartbeat with PLUGIN_LOG_DIR set=%s', async (set) => {
+  it.each([true, false])('writes error, warning and applied effort with PLUGIN_LOG_DIR set=%s', async (set) => {
     const home = await mkdtemp(join(tmpdir(), 'auto-effort-adapter-'));
     const root = join(home, 'logs');
     const dir = set ? join(root, 'auto-effort') : join(home, '.local/state/auto-effort/logs');
     const e = engine({ floor: 'lowest', logFile: '' }, { env: { HOME: home, PLUGIN_LOG_DIR: set ? root : undefined } });
     e.$.process.run = async (argv) => { const r = await promisify(execFile)('/bin/sh', argv.slice(1)); return { exitCode: 0, ...r }; };
+    await e.start(); await e.start();
+    await e.prompt(); await e.step({}); await e.step({ index: 1, effort: 'high' });
     const spy = vi.spyOn(Controller.prototype, 'setEffort').mockImplementation(() => { throw new Error('unknown level'); });
     try {
-      await e.start();
-      await e.start();
       expect(await e.tool({ tool: TOOL, level: 'medium' })).toEqual({ result: 'Not applied: the effort stays as it was.' });
       expect(e.logs).toContain('auto-effort: applying set_effort failed: unknown level; the effort stays as it was');
       // The unfixed tree has no end hook; observe missing rows as assertions, not a helper exception.
@@ -766,12 +766,12 @@ suite('plugin log adapter', () => {
       const read = async (file: string) => { try { return (await readFile(join(dir, file), 'utf8')).trim().split('\n').map((l) => JSON.parse(l)); } catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []; throw error; } };
       expect(await read('errors.jsonl')).toEqual([expect.objectContaining({ level: 'error', event: 'set-effort-failed', where: 'hooks/auto-effort.ts#answerSetEffort', session: 'sess1', detail: { error: 'unknown level' } })]);
       expect(await read('warnings.jsonl')).toEqual([expect.objectContaining({ level: 'warning', event: 'option-error', where: 'hooks/auto-effort.ts#reportErrors' })]);
-      expect(await read('info.jsonl')).toEqual([expect.objectContaining({ level: 'info', event: 'logger-ready', detail: { version: '0.2.0', dir_source: set ? 'PLUGIN_LOG_DIR' : 'fallback' } })]);
+      expect(await read('info.jsonl')).toEqual(expect.arrayContaining([expect.objectContaining({ level: 'info', event: 'effort-applied', session: 'sess1', detail: { level: 'high', source: 'plan' } })]));
     } finally { spy.mockRestore(); await rm(home, { recursive: true, force: true }); }
   });
 
   it('keeps work results and reports one contextual process failure until recovery', async () => {
-    const e = engine({ logFile: '' }, { env: { HOME: '/isolated/home', PLUGIN_LOG_DIR: '/isolated/logs' } });
+    const e = engine({ floor: 'lowest', logFile: '' }, { env: { HOME: '/isolated/home', PLUGIN_LOG_DIR: '/isolated/logs' } });
     e.$.process.run = async () => { throw new Error('cannot spawn'); };
     await e.start();
     await e.prompt();
@@ -792,7 +792,7 @@ suite('plugin log adapter', () => {
   });
 
   it('names missing env/home without throwing or blocking a prompt', async () => {
-    const e = engine({ logFile: '' }, { env: {} });
+    const e = engine({ floor: 'lowest', logFile: '' }, { env: {} });
     await e.start();
     expect((await e.prompt('unchanged')).text).toBe('unchanged');
     const end = e.hooks.find((h) => h.name === 'session.end');

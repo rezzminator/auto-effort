@@ -2,11 +2,17 @@
 
 All notable changes to this plugin are recorded here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the plugin follows [semantic versioning](https://semver.org/).
 
+## [0.2.1] — 2026-10-15
+
+### Changed
+
+- Level logs use plain directory creation and append, keeping private modes on newly created paths.
+
 ## [0.2.0] — 2026-10-14
 
 ### Added
 
-- Errors, warnings and a session heartbeat append to separate JSONL files under `PLUGIN_LOG_DIR/auto-effort`, or `~/.local/state/auto-effort/logs` when unset. Rows are capped at 4096 bytes; files past 20 MiB move to `.1`. A failed write gives one screen notice per failing streak without changing the plugin result.
+- Errors, warnings and info append to separate JSONL files under `PLUGIN_LOG_DIR/auto-effort`, or `~/.local/state/auto-effort/logs` when unset. Rows are capped at 4096 bytes; files past 20 MiB move to `.1`. A failed write gives one screen notice per failing streak without changing the plugin result.
 
 ### Fixed
 

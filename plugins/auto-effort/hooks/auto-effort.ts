@@ -52,8 +52,6 @@ type State = {
   pluginLog?: PluginLogQueue;
   pluginWriting: Promise<void>;
   pluginFailure: boolean;
-  ready: Set<string | undefined>;
-  dirSource?: 'PLUGIN_LOG_DIR' | 'fallback';
 };
 
 function pluginFallback($: EngineInterface, notice: string): void {
@@ -71,10 +69,9 @@ function plog($: EngineInterface, st: State, level: PluginLogLevel, event: strin
       if (st.pluginLog === undefined) {
         const env = await $.env.get('PLUGIN_LOG_DIR');
         const home = await $.env.get('HOME');
-        st.dirSource = env ? 'PLUGIN_LOG_DIR' : 'fallback';
         st.pluginLog = new PluginLogQueue(pluginLogDir(env, home, PLUGIN), PLUGIN, (notice) => pluginFallback($, notice));
       }
-      const row = levelRow({ plugin: PLUGIN, level, event, msg, where, session, ...(event === 'logger-ready' ? { detail: { version: VERSION, dir_source: st.dirSource } } : { detail }) }, await $.clock.now());
+      const row = levelRow({ plugin: PLUGIN, level, event, msg, where, session, detail }, await $.clock.now());
       st.pluginLog.add(row);
       await st.pluginLog.flush((argv) => runPluginLog($, argv));
       st.pluginFailure = false;
@@ -445,15 +442,10 @@ export const register: Register = (on, options) => {
     writing: Promise.resolve(),
     pluginWriting: Promise.resolve(),
     pluginFailure: false,
-    ready: new Set(),
   };
 
   on('session.start', async ($, e, next) => {
     await ensureStarted($, st);
-    if (!st.ready.has(st.sessionId)) {
-      st.ready.add(st.sessionId);
-      plog($, st, 'info', 'logger-ready', 'plugin logger ready', 'hooks/auto-effort.ts#session.start');
-    }
     return next(e);
   });
 

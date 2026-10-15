@@ -1,6 +1,6 @@
 /// <reference types="vite/client" />
 import { execFile } from 'node:child_process';
-import { chmod, mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -186,33 +186,6 @@ describe('PluginLogQueue', () => {
 });
 
 
-it('tightens existing owned level modes, leaving parent and legacy paths unchanged', async () => {
-  const { levelRow, appendArgv } = writer();
-  const parent = await temp();
-  const dir = join(parent, 'auto-effort');
-  // First create the scoped level directory through the actual writer.
-  for (const argv of appendArgv(dir, 'auto-effort', [levelRow(fields, now)])) await run(argv);
-  await chmod(parent, 0o755); await chmod(dir, 0o755);
-  const names = ['errors.jsonl', 'warnings.jsonl', 'info.jsonl'];
-  for (const file of names) {
-    await writeFile(join(dir, file), levelRow({ ...fields, level: file === 'errors.jsonl' ? 'error' : file === 'warnings.jsonl' ? 'warning' : 'info' }, now));
-    await chmod(join(dir, file), 0o644);
-    await writeFile(join(dir, file + '.1'), 'archive'); await chmod(join(dir, file + '.1'), 0o644);
-  }
-  const legacy = join(dir, 'decisions.jsonl');
-  await writeFile(legacy, 'legacy'); await chmod(legacy, 0o644);
-  for (const argv of appendArgv(dir, 'auto-effort', [levelRow(fields, now)])) await run(argv);
-  expect((await stat(dir)).mode & 0o777).toBe(0o700);
-  for (const file of names) {
-    expect((await stat(join(dir, file))).mode & 0o777).toBe(0o600);
-    expect((await stat(join(dir, file + '.1'))).mode & 0o777).toBe(0o600);
-    expect(await readFile(join(dir, file + '.1'), 'utf8')).toBe('archive');
-  }
-  expect((await stat(parent)).mode & 0o777).toBe(0o755);
-  expect((await stat(legacy)).mode & 0o777).toBe(0o644);
-  expect(await readFile(legacy, 'utf8')).toBe('legacy');
-});
-
 it.each([
   { name: 'known', session: '5f0c2a' },
   { name: 'escaped', session: 'quote" backslash\\ newline\n unicode😀' },
@@ -253,20 +226,7 @@ it('caps existing oversized warnings before adding an errors cap notice', async 
   expect((await stat(join(dir, 'warnings.jsonl'))).size).toBeLessThan(20971520);
 });
 
-it.skipIf(process.getuid?.() === 0)('skip-because:superuser — EPERM ownership probe cannot tighten a foreign archive target', async () => {
-  const { levelRow, appendArgv } = writer();
-  const dir = await temp();
-  const archive = join(dir, 'errors.jsonl.1');
-  // The fence's root-owned /dev/null is a positive EPERM control; this non-root attempt cannot mutate it.
-  const original = (await stat('/dev/null')).mode;
-  await expect(exec('/bin/chmod', ['600', '/dev/null'])).rejects.toMatchObject({ stderr: expect.stringMatching(/Operation not permitted|Permission denied/) });
-  await symlink('/dev/null', archive);
-  await expect(run(appendArgv(dir, 'auto-effort', [levelRow(fields, now)])[0])).rejects.toMatchObject({ stderr: expect.stringContaining(archive) });
-  expect((await stat('/dev/null')).mode).toBe(original);
-});
-
-
-it.each(['absolute', 'relative', 'hyphen-relative'].flatMap((root) => ['new', 'existing', 'capped'].map((state) => ({ root, state }))))('APPEND_SCRIPT writes private rows with BSD chmod ($root, $state)', async ({ root, state }) => {
+it.each(['absolute', 'relative', 'hyphen-relative'].flatMap((root) => ['new', 'existing', 'capped'].map((state) => ({ root, state }))))('APPEND_SCRIPT appends rows on BSD-compatible paths ($root, $state)', async ({ root, state }) => {
   const { pluginLogDir, levelRow, appendArgv } = writer();
   const cwd = await temp();
   const bin = join(cwd, 'bin');
@@ -309,7 +269,7 @@ exec /bin/chmod "$mode" "$@"
   for (const argv of appendArgv(dir, 'auto-effort', input)) {
     await expect(exec('/bin/sh', argv.slice(1), { cwd, env: { ...process.env, PATH: `${bin}:${process.env.PATH ?? '/usr/bin:/bin'}` } })).resolves.toEqual({ stdout: '', stderr: '' });
   }
-  expect((await stat(target)).mode & 0o777).toBe(0o700);
+  expect((await stat(target)).mode & 0o777).toBe(state === 'new' ? 0o700 : 0o755);
   expect((await stat(cwd)).mode & 0o777).toBe(0o700);
   expect(await readFile(legacy, 'utf8')).toBe('legacy unchanged');
   expect((await stat(legacy)).mode & 0o777).toBe(0o644);
@@ -327,31 +287,11 @@ exec /bin/chmod "$mode" "$@"
       const prefix = state === 'new' || (state === 'capped' && level === 'error') ? '' : seed(level);
       expect(content).toBe(prefix + input[i]);
     }
-    expect((await stat(path)).mode & 0o777).toBe(0o600);
+    expect((await stat(path)).mode & 0o777).toBe(state === 'new' || (state === 'capped' && level !== 'info') ? 0o600 : 0o644);
     if (state !== 'new') {
       const backup = path + '.1';
       expect(await readFile(backup, 'utf8')).toBe(state === 'capped' && level !== 'info' ? seed(level) : `backup ${level}\n`);
-      expect((await stat(backup)).mode & 0o777).toBe(0o600);
+      expect((await stat(backup)).mode & 0o777).toBe(0o644);
     }
   }
-});
-
-it.each(['directory', 'file', 'backup'])('APPEND_SCRIPT refuses a hyphen-relative %s symlink without changing its target', async (kind) => {
-  const { levelRow, appendArgv } = writer();
-  const cwd = await temp();
-  const legacy = join(cwd, 'legacy');
-  const dir = '-logs';
-  const target = join(cwd, dir);
-  await mkdir(legacy); await chmod(legacy, 0o755);
-  const file = join(legacy, 'errors.jsonl');
-  await writeFile(file, 'legacy unchanged'); await chmod(file, 0o644);
-  if (kind === 'directory') await symlink(legacy, target);
-  else {
-    await mkdir(target);
-    await symlink(file, join(target, kind === 'backup' ? 'errors.jsonl.1' : 'errors.jsonl'));
-  }
-  await expect(exec('/bin/sh', appendArgv(dir, 'auto-effort', [levelRow(fields, now)])[0].slice(1), { cwd })).rejects.toMatchObject({ stderr: expect.stringContaining('symbolic link endpoint refused') });
-  expect(await readFile(file, 'utf8')).toBe('legacy unchanged');
-  expect((await stat(legacy)).mode & 0o777).toBe(0o755);
-  expect((await stat(file)).mode & 0o777).toBe(0o644);
 });

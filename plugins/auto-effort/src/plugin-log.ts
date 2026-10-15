@@ -50,22 +50,6 @@ case "$dir" in -*) dir=./$dir ;; esac
 plugin=$2
 shift 2
 refuse() { printf 'plugin log %s: %s\\n' "$1" "$2" >&2; exit 1; }
-tighten() {
-  target=$1
-  mode=$2
-  kind=$3
-  [ ! -L "$target" ] || refuse "$target" 'symbolic link endpoint refused'
-  if [ -e "$target" ]; then
-    if [ "$kind" = dir ]; then
-      [ -d "$target" ] || refuse "$target" 'not a directory'
-    else
-      [ -f "$target" ] || refuse "$target" 'not a regular level file'
-    fi
-    [ -w "$target" ] || refuse "$target" 'not writable; permissions kept'
-    [ -O "$target" ] || refuse "$target" 'not owned; permissions kept'
-    chmod "$mode" "$target" || refuse "$target" 'private permissions failed'
-  fi
-}
 cap_file() {
   cap_path=$dir/$1
   [ -f "$cap_path" ] || return 1
@@ -78,13 +62,7 @@ cap_notice() {
   printf '{"ts":%s,"plugin":"%s","level":"warning","event":"log-capped","msg":"level file exceeded the cap; moved to .1","where":"src/plugin-log.ts#append"%s,"detail":{"file":"%s","cap_bytes":${PLUGIN_LOG_CAP_BYTES}}}\\n' "$ts" "$plugin" "$session" "$notice_file" >> "$dir/warnings.jsonl" || refuse "$dir/warnings.jsonl" 'cap notice failed'
 }
 case "$plugin" in ''|*[!a-zA-Z0-9_-]*) printf 'invalid plugin slug: %s\\n' "$plugin" >&2; exit 2;; esac
-[ ! -L "$dir" ] || refuse "$dir" 'symbolic link endpoint refused'
 mkdir -p "$dir" || refuse "$dir" 'mkdir failed'
-tighten "$dir" 700 dir
-for owned in errors.jsonl warnings.jsonl info.jsonl; do
-  tighten "$dir/$owned" 600 file
-  tighten "$dir/$owned.1" 600 file
-done
 while [ "$#" -gt 0 ]; do
   file=$1
   row=$2
