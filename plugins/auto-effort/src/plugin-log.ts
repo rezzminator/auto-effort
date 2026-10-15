@@ -46,6 +46,7 @@ export function pluginLogDir(env: string | undefined, home: string | undefined, 
 export const APPEND_SCRIPT = `set -eu
 umask 077
 dir=$1
+case "$dir" in -*) dir=./$dir ;; esac
 plugin=$2
 shift 2
 refuse() { printf 'plugin log %s: %s\\n' "$1" "$2" >&2; exit 1; }

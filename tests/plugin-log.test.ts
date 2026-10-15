@@ -1,6 +1,6 @@
 /// <reference types="vite/client" />
 import { execFile } from 'node:child_process';
-import { chmod, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -59,6 +59,9 @@ it.each([
   [undefined, undefined, undefined],
   ['', '', undefined],
   ['/x/logs/', '/h/u', '/x/logs/auto-effort'],
+  ['/', '/h/u', '/auto-effort'],
+  ['', '/h/u', '/h/u/.local/state/auto-effort/logs'],
+  ['-logs/', undefined, '-logs/auto-effort'],
 ])('pluginLogDir(%s, %s)', (env, home, expected) => {
   expect(writer().pluginLogDir(env, home, 'auto-effort')).toBe(expected);
 });
@@ -260,4 +263,95 @@ it.skipIf(process.getuid?.() === 0)('skip-because:superuser — EPERM ownership 
   await symlink('/dev/null', archive);
   await expect(run(appendArgv(dir, 'auto-effort', [levelRow(fields, now)])[0])).rejects.toMatchObject({ stderr: expect.stringContaining(archive) });
   expect((await stat('/dev/null')).mode).toBe(original);
+});
+
+
+it.each(['absolute', 'relative', 'hyphen-relative'].flatMap((root) => ['new', 'existing', 'capped'].map((state) => ({ root, state }))))('APPEND_SCRIPT writes private rows with BSD chmod ($root, $state)', async ({ root, state }) => {
+  const { pluginLogDir, levelRow, appendArgv } = writer();
+  const cwd = await temp();
+  const bin = join(cwd, 'bin');
+  await mkdir(bin);
+  const shim = join(bin, 'chmod');
+  await writeFile(shim, `#!/bin/sh
+set -eu
+case "$1" in 600|700) ;; *) printf 'chmod: unsupported mode %s\n' "$1" >&2; exit 1 ;; esac
+mode=$1
+shift
+for path do
+  case "$path" in -*) printf 'chmod: %s: No such file or directory\n' "$path" >&2; exit 1 ;; esac
+done
+exec /bin/chmod "$mode" "$@"
+`);
+  await chmod(shim, 0o755);
+  const configured = root === 'absolute' ? join(cwd, "logs with 'quotes;$(false)") : root === 'relative' ? 'logs' : "-logs with 'quotes;$(false)";
+  const dir = pluginLogDir(configured, undefined, 'auto-effort')!;
+  const target = root === 'absolute' ? dir : join(cwd, dir);
+  const levels = [
+    { level: 'error', file: 'errors.jsonl' },
+    { level: 'warning', file: 'warnings.jsonl' },
+    { level: 'info', file: 'info.jsonl' },
+  ] as const;
+  const seed = (level: string) => state === 'capped' && level !== 'info' ? level.charAt(0).repeat(20971521) : `seed ${level}\n`;
+  if (state !== 'new') {
+    await mkdir(target, { recursive: true });
+    await chmod(target, 0o755);
+    for (const { level, file } of levels) {
+      await writeFile(join(target, file), seed(level));
+      await writeFile(join(target, file + '.1'), `backup ${level}\n`);
+      await chmod(join(target, file), 0o644);
+      await chmod(join(target, file + '.1'), 0o644);
+    }
+  }
+  const legacy = join(cwd, 'legacy.jsonl');
+  await writeFile(legacy, 'legacy unchanged');
+  await chmod(legacy, 0o644);
+  const input = levels.map(({ level }) => levelRow({ ...fields, level }, now));
+  for (const argv of appendArgv(dir, 'auto-effort', input)) {
+    await expect(exec('/bin/sh', argv.slice(1), { cwd, env: { ...process.env, PATH: `${bin}:${process.env.PATH ?? '/usr/bin:/bin'}` } })).resolves.toEqual({ stdout: '', stderr: '' });
+  }
+  expect((await stat(target)).mode & 0o777).toBe(0o700);
+  expect((await stat(cwd)).mode & 0o777).toBe(0o700);
+  expect(await readFile(legacy, 'utf8')).toBe('legacy unchanged');
+  expect((await stat(legacy)).mode & 0o777).toBe(0o644);
+  for (const [i, { level, file }] of levels.entries()) {
+    const path = join(target, file);
+    const content = await readFile(path, 'utf8');
+    if (state === 'capped' && level === 'warning') {
+      const notices = ['warnings.jsonl', 'errors.jsonl'].map((file) => JSON.stringify({
+        ts: '2026-10-14T15:20:31.123Z', plugin: 'auto-effort', level: 'warning', event: 'log-capped',
+        msg: 'level file exceeded the cap; moved to .1', where: 'src/plugin-log.ts#append', session: fields.session,
+        detail: { file, cap_bytes: 20971520 },
+      }) + '\n').join('');
+      expect(content).toBe(notices + input[i]);
+    } else {
+      const prefix = state === 'new' || (state === 'capped' && level === 'error') ? '' : seed(level);
+      expect(content).toBe(prefix + input[i]);
+    }
+    expect((await stat(path)).mode & 0o777).toBe(0o600);
+    if (state !== 'new') {
+      const backup = path + '.1';
+      expect(await readFile(backup, 'utf8')).toBe(state === 'capped' && level !== 'info' ? seed(level) : `backup ${level}\n`);
+      expect((await stat(backup)).mode & 0o777).toBe(0o600);
+    }
+  }
+});
+
+it.each(['directory', 'file', 'backup'])('APPEND_SCRIPT refuses a hyphen-relative %s symlink without changing its target', async (kind) => {
+  const { levelRow, appendArgv } = writer();
+  const cwd = await temp();
+  const legacy = join(cwd, 'legacy');
+  const dir = '-logs';
+  const target = join(cwd, dir);
+  await mkdir(legacy); await chmod(legacy, 0o755);
+  const file = join(legacy, 'errors.jsonl');
+  await writeFile(file, 'legacy unchanged'); await chmod(file, 0o644);
+  if (kind === 'directory') await symlink(legacy, target);
+  else {
+    await mkdir(target);
+    await symlink(file, join(target, kind === 'backup' ? 'errors.jsonl.1' : 'errors.jsonl'));
+  }
+  await expect(exec('/bin/sh', appendArgv(dir, 'auto-effort', [levelRow(fields, now)])[0].slice(1), { cwd })).rejects.toMatchObject({ stderr: expect.stringContaining('symbolic link endpoint refused') });
+  expect(await readFile(file, 'utf8')).toBe('legacy unchanged');
+  expect((await stat(legacy)).mode & 0o777).toBe(0o755);
+  expect((await stat(file)).mode & 0o777).toBe(0o644);
 });
