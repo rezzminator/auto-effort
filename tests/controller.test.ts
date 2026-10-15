@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { Controller, readSessionState, type Row } from '../plugins/auto-effort/src/controller.ts';
 import { EMPTY_PERSISTED, markUnsafe, type Persisted } from '../plugins/auto-effort/src/gate.ts';
 import { resolveSettings } from '../plugins/auto-effort/src/settings.ts';
-import { escalationLine } from '../plugins/auto-effort/src/text.ts';
+import { deescalationLine, escalationLine } from '../plugins/auto-effort/src/text.ts';
 
 const OPUS = 'claude-opus-5-5';
 const TOOL = 'mcp__auto-effort__set_effort';
@@ -27,7 +27,8 @@ function rig(raw: Record<string, unknown> = {}, persisted: Persisted = EMPTY_PER
       return { plan, end };
     },
     set: (input: Record<string, unknown>, agent = false) => keep(ctl.setEffort({ input, agent })),
-    tool: (tool: string, text: string) => keep(ctl.onToolResult({ tool, text })),
+    // A tool result; `command` is the call's command, a test run unless a test names another, and null for a call without one.
+    tool: (tool: string, text: string, command: string | null = 'npm test') => keep(ctl.onToolResult({ tool, command: command ?? undefined, text })),
   };
 }
 
@@ -210,7 +211,9 @@ describe('turn reminder (R4)', () => {
   });
 });
 
-// R5: after `escalateAfterFailures` failing test runs within a turn the level rises one step, with one context line.
+// R5: a test run is a `failureTools` call whose command matches `testCommandPatterns`; it fails when its result matches
+// `failurePatterns`. `escalateAfterFailures` failing runs in a row raise the level one step, with one context line; a passing
+// run resets the count and, with `lowerOnPass`, returns a raised level to where the streak found it.
 describe('escalation (R5)', () => {
   function atMedium(raw: Record<string, unknown> = {}) {
     const r = rig(raw);
@@ -270,6 +273,108 @@ describe('escalation (R5)', () => {
     off.ctl.setEnabled(false);
     expect(off.tool('Bash', 'FAILED').context).toBeUndefined();
     expect(off.tool('Bash', 'FAILED').context).toBeUndefined();
+  });
+
+  it('counts only test runs: the output of any other command never touches the count', () => {
+    const r = atMedium();
+    expect(r.tool('Bash', 'FAILED: 3 tests', 'cat build.log').context).toBeUndefined();
+    expect(r.tool('Bash', '--- FAIL: TestX', 'grep -rn FAIL .').context).toBeUndefined();
+    expect(r.tool('Bash', '2 failed', 'sed -n 1,40p out.txt').context).toBeUndefined();
+    expect(r.tool('Bash', 'FAILED', null).context).toBeUndefined();
+    expect(r.rows.some((row) => row.event === 'escalation')).toBe(false);
+    expect(r.step('t1', 2).plan.level).toBe('medium');
+    // The same output from test runs counts, and a passing command between them that is no test run resets nothing.
+    r.tool('Bash', 'FAILED', 'go test ./...');
+    expect(r.tool('Bash', 'all good', 'cat notes.txt').context).toBeUndefined();
+    expect(r.tool('Bash', '--- FAIL: TestX', 'npm run test').context).toBe(escalationLine(2, 'medium', 'high'));
+  });
+
+  it('raises only on failing runs in a row: a passing run starts the count again', () => {
+    const r = atMedium();
+    r.tool('Bash', 'FAILED', 'pytest -x');
+    expect(r.tool('Bash', '12 passed in 0.4s', 'pytest -x').context).toBeUndefined();
+    expect(r.tool('Bash', 'FAILED', 'pytest -x').context).toBeUndefined();
+    expect(r.step('t1', 2).plan.level).toBe('medium');
+    expect(r.tool('Bash', 'FAILED', 'pytest -x').context).toBe(escalationLine(2, 'medium', 'high'));
+  });
+
+  it('leaves the count and the level alone for a test run sent to the background', () => {
+    const r = atMedium();
+    r.tool('Bash', 'FAILED', 'npm test');
+    expect(r.tool('Bash', 'Command running in background with ID: b1. FAILED', 'npm test').context).toBeUndefined();
+    expect(r.tool('Bash', 'FAILED', 'npm test').context).toBe(escalationLine(2, 'medium', 'high'));
+    expect(r.tool('Bash', 'Command running in background with ID: b2.', 'npm test').context).toBeUndefined();
+    expect(r.step('t1', 2).plan.level).toBe('high');
+  });
+
+  it('counts completed failures even when a failing test name mentions running in background', () => {
+    const r = atMedium();
+    const output = ' FAIL  tests/jobs.test.ts > running in background > reports child failure\nAssertionError: expected true to be false\nTests  1 failed (1)';
+    r.tool('Bash', output);
+    const second = r.tool('Bash', output);
+    expect(second.rows, 'a completed second failure must raise effort, not be treated as a launch acknowledgement').toContainEqual(expect.objectContaining({ event: 'escalation', from: 'medium', to: 'high' }));
+    expect(r.step('t1', 2).plan.level).toBe('high');
+  });
+
+  it('recovers after a completed passing suite whose output mentions running in background', () => {
+    const r = atMedium();
+    r.tool('Bash', 'Tests 1 failed');
+    r.tool('Bash', 'Tests 1 failed');
+    expect(r.step('t1', 2).plan.level).toBe('high');
+    const recovered = r.tool('Bash', ' PASS tests/jobs.test.ts > running in background > reports child failure\nTests 1 passed (1)');
+    expect(recovered.rows).toContainEqual(expect.objectContaining({ event: 'deescalation', from: 'high', to: 'medium' }));
+  });
+
+  it('lowers to the level the streak found at its first passing run, with one line and one row', () => {
+    const r = atMedium();
+    r.tool('Bash', 'FAILED', 'make test');
+    expect(r.tool('Bash', 'FAILED', 'make test').context).toBe(escalationLine(2, 'medium', 'high'));
+    r.tool('Bash', 'FAILED', 'make test');
+    expect(r.tool('Bash', 'FAILED', 'make test').context).toBe(escalationLine(2, 'high', 'xhigh'));
+    expect(r.step('t1', 2).plan.level).toBe('xhigh');
+    const pass = r.tool('Bash', 'ok  example/pkg 0.2s', 'make test');
+    expect(pass.context).toBe(deescalationLine('xhigh', 'medium'));
+    expect(pass.rows).toEqual([{ event: 'deescalation', turnId: 't1', from: 'xhigh', to: 'medium' }]);
+    expect(r.step('t1', 3).plan).toMatchObject({ send: 'medium', level: 'medium', source: 'model', reason: 'rename' });
+    expect(r.tool('Bash', 'ok', 'make test').context).toBeUndefined();
+    expect(r.step('t1', 4).plan.level).toBe('medium');
+  });
+
+  it('keeps the raised level when `lowerOnPass` is off', () => {
+    const r = atMedium({ lowerOnPass: false });
+    r.tool('Bash', 'FAILED', 'cargo test');
+    expect(r.tool('Bash', 'FAILED', 'cargo test').context).toBe(escalationLine(2, 'medium', 'high'));
+    expect(r.tool('Bash', 'test result: ok. 3 passed; 0 failed', 'cargo test').context).toBeUndefined();
+    expect(r.rows.some((row) => row.event === 'deescalation')).toBe(false);
+    expect(r.step('t1', 2).plan).toMatchObject({ level: 'high', source: 'escalation' });
+  });
+
+  it('lets a set_effort call after the rise stand over the passing run', () => {
+    const r = atMedium();
+    r.tool('Bash', 'FAILED', 'npm test');
+    r.tool('Bash', 'FAILED', 'npm test');
+    r.step('t1', 2);
+    r.set({ level: 'xhigh', reason: 'root cause unclear' });
+    expect(r.tool('Bash', 'all passed', 'npm test').context).toBeUndefined();
+    expect(r.rows.some((row) => row.event === 'deescalation')).toBe(false);
+    expect(r.step('t1', 3).plan).toMatchObject({ level: 'xhigh', source: 'model', reason: 'root cause unclear' });
+  });
+
+  it('neither raises nor lowers under a /effort pin or on a model it does not steer', () => {
+    const run = (r: ReturnType<typeof rig>) => [r.tool('Bash', 'FAILED', 'npm test'), r.tool('Bash', 'FAILED', 'npm test'), r.tool('Bash', 'passed', 'npm test')].map((out) => out.context);
+    const steered = atMedium();
+    expect(run(steered)).toEqual([undefined, escalationLine(2, 'medium', 'high'), deescalationLine('high', 'medium')]);
+    const pinned = rig();
+    pinned.prompt();
+    pinned.step('t1', 0, { effort: 'xhigh' });
+    pinned.prompt();
+    expect(pinned.step('t2', 0, { effort: 'low' }).plan.source).toBe('pin');
+    expect(run(pinned)).toEqual([undefined, undefined, undefined]);
+    const denied = rig();
+    denied.prompt('x', 'claude-sonnet-5');
+    denied.step('t1', 0, { model: 'claude-sonnet-5' });
+    expect(run(denied)).toEqual([undefined, undefined, undefined]);
+    for (const r of [pinned, denied]) expect(r.rows.some((row) => row.event === 'escalation' || row.event === 'deescalation')).toBe(false);
   });
 });
 

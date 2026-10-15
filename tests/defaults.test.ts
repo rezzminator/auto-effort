@@ -10,9 +10,9 @@ const readme = readFileSync(new URL('README.md', root), 'utf8');
 describe('plugin options', () => {
   it('declares exactly the settings, each with its default', () => {
     expect(SETTING_KEYS).toEqual(
-      expect.arrayContaining(['floor', 'ceiling', 'planLevel', 'planUpshiftPatterns', 'planUpshiftChars', 'turnReminder', 'escalateAfterFailures', 'failurePatterns', 'userEffortPins', 'models', 'unknownModels', 'probationSwitches', 'canaryThreshold', 'statusLine', 'logFile']),
+      expect.arrayContaining(['floor', 'ceiling', 'planLevel', 'planUpshiftPatterns', 'planUpshiftChars', 'turnReminder', 'escalateAfterFailures', 'lowerOnPass', 'failurePatterns', 'failureTools', 'testCommandPatterns', 'userEffortPins', 'models', 'unknownModels', 'probationSwitches', 'canaryThreshold', 'statusLine', 'logFile']),
     );
-    expect(SETTING_KEYS).toHaveLength(17);
+    expect(SETTING_KEYS).toHaveLength(19);
     expect(Object.keys(manifest.userConfig).sort()).toEqual([...SETTING_KEYS].sort());
     for (const key of SETTING_KEYS) {
       const field = manifest.userConfig[key];
