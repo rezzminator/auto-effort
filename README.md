@@ -88,32 +88,41 @@ The request that follows an effort change must read at least `canaryThreshold` o
 | --- | --- |
 | `/auto-effort` or `/auto-effort status` | The level held, what decided it, the gate state of the current model, the option errors, and the settings in effect. |
 | `/auto-effort off` / `on` | Stops or resumes steering for this session. `on` also resumes after a `/effort` pin. |
-| `/auto-effort set <key> <value>` | Saves a single-valued option through `/config`'s own writer. Lists (`models`, `failurePatterns`, ...) are edited in `/config` or `settings.json`. |
+| `/auto-effort set <key> <value>` | Saves a single-valued option through `/config`'s own writer; an environment variable of that option still overrides it. Lists (`models`, `failurePatterns`, ...) are edited in `/config` or `settings.json`. |
 | `/auto-effort clear [model]` | Lifts a cache mark from one model, or from every model. |
 
 ## Options
 
-Every option is a plugin option (`userConfig`): edit it in `/config`, in `settings.json` under `pluginConfigs["auto-effort@<marketplace>"].options`, or with `/auto-effort set`. The options are read again at each prompt, so a change applies from the next turn without restarting the chat. A value that does not fit is reported by key and value (in the log of the session and in `/auto-effort status`) and its default applies.
+Every option is a plugin option (`userConfig`): edit it in `/config`, in `settings.json` under `pluginConfigs["auto-effort@<marketplace>"].options`, or with `/auto-effort set`. Each option can also be set in the environment of Claude Code, as `AUTO_EFFORT_` and the option name in upper snake case (`planLevel` is `AUTO_EFFORT_PLAN_LEVEL`). The options are read again at each prompt, so a change applies from the next turn without restarting the chat. A value that does not fit is reported (in the log of the session and in `/auto-effort status`) and its default applies.
 
-| Option | Default | What it does |
-| --- | --- | --- |
-| `floor` | `medium` | The lowest reasoning effort the plugin sends: low, medium, high, xhigh or max. A lower level the model asks for is raised to this one. Must not be above ceiling. |
-| `ceiling` | `xhigh` | The highest reasoning effort the plugin sends: low, medium, high, xhigh or max. A higher level the model asks for, or an escalation, is lowered to this one. Must not be below floor. |
-| `planLevel` | `high` | The effort the first request of every turn runs at, before the model has said what the work needs: low, medium, high, xhigh or max. |
-| `planUpshiftPatterns` | `\bthink`<br>`\bdesign` | One regular expression per entry, matched case-insensitively against the prompt. A prompt that matches any entry starts its turn at xhigh instead of planLevel. |
-| `planUpshiftChars` | `1500` | A prompt longer than this many characters starts its turn at xhigh instead of planLevel. |
-| `turnReminder` | `true` | On: each prompt carries one line naming the effort the turn starts at and asking the model to call set_effort in its first response. Off: only the tool's description asks for the call. |
-| `escalateAfterFailures` | `2` | After this many failing test runs in one turn the effort rises one step, up to the ceiling, for the requests that follow; the count then starts again. |
-| `failurePatterns` | `--- FAIL`<br>`FAIL(ED)?`<br>`(?<!\d)[1-9]\d* (failed\|failing)`<br>`AssertionError`<br>`panic:`<br>`Traceback` | One regular expression per entry, matched case-sensitively against a tool result. A result that matches any entry counts as one failing test run. |
-| `failureTools` | `Bash` | One tool name per entry (Bash runs the tests). Only results of these tools are matched against failurePatterns. |
-| `userEffortPins` | `true` | On: when you change the effort yourself with /effort, auto-effort stops steering that session until /auto-effort on. Off: it keeps steering whatever you set. |
-| `models` | `claude-opus-5-5=allow`<br>`claude-fable-5-1=allow`<br>`claude-sonnet-5-5=probation`<br>`claude-haiku-5-5=probation`<br>`claude-sonnet-5=deny` | One entry per model, as model=allow, model=probation or model=deny. allow steers it. probation steers it while counting clean effort switches; probationSwitches of them earn allow. deny never touches it. A model without an entry gets unknownModels. |
-| `unknownModels` | `off` | off leaves it untouched; allow, probation and deny act as in models. |
-| `probationSwitches` | `5` | How many effort switches in a row of a probation model must keep the cache (see canaryThreshold) before it counts as allow. |
-| `canaryThreshold` | `0.9` | After an effort change, the switched request must read at least this fraction of the previous request's whole prompt from the prompt cache. Below it the plugin stops changing effort on that model, tells you once, and remembers across sessions until /auto-effort clear. |
-| `cacheTtlSeconds` | `300` | When more than this many seconds passed between two requests the cache may have expired on its own, so the check judges nothing. 300 fits the five-minute cache; use 3600 with the one-hour cache. |
-| `statusLine` | `true` | On: one line shows the level held, why, and what decided it (plan, model, escalation or pin). Off: nothing is shown. |
-| `logFile` | `~/.local/state/auto-effort/decisions.jsonl` | Where decisions are appended, one JSON row per decision, request and turn, never the prompt text. The session id is inserted before the extension, one file per session; after 1000 rows the next file starts (`decisions.<session>.2.jsonl`, `.3.jsonl`, ...). A leading ~ is your home directory. Empty: no log. |
+The order, highest first: the environment variable, the option (`/config`, `settings.json`, `/auto-effort set`), the default. An unset, empty or blank variable is absent, so the option decides; this also means no variable can set `logFile` to empty, which turns the log off as an option. A variable that does not fit is reported by its name and the option's default applies, not the option's value. `/auto-effort set` still saves the option, and says when a variable overrides it; `/auto-effort status` names the variables in effect.
+
+| Option type | The variable holds |
+| --- | --- |
+| true or false | `1`, `0`, `true` or `false`, in any case |
+| number | the number as the option takes it |
+| text and level | the value as the option takes it |
+| list | a JSON array of strings, such as `["Bash","PowerShell"]`; `[]` is the empty list |
+
+| Option | Environment variable | Default | What it does |
+| --- | --- | --- | --- |
+| `floor` | `AUTO_EFFORT_FLOOR` | `medium` | The lowest reasoning effort the plugin sends: low, medium, high, xhigh or max. A lower level the model asks for is raised to this one. Must not be above ceiling. |
+| `ceiling` | `AUTO_EFFORT_CEILING` | `xhigh` | The highest reasoning effort the plugin sends: low, medium, high, xhigh or max. A higher level the model asks for, or an escalation, is lowered to this one. Must not be below floor. |
+| `planLevel` | `AUTO_EFFORT_PLAN_LEVEL` | `high` | The effort the first request of every turn runs at, before the model has said what the work needs: low, medium, high, xhigh or max. |
+| `planUpshiftPatterns` | `AUTO_EFFORT_PLAN_UPSHIFT_PATTERNS` | `\bthink`<br>`\bdesign` | One regular expression per entry, matched case-insensitively against the prompt. A prompt that matches any entry starts its turn at xhigh instead of planLevel. |
+| `planUpshiftChars` | `AUTO_EFFORT_PLAN_UPSHIFT_CHARS` | `1500` | A prompt longer than this many characters starts its turn at xhigh instead of planLevel. |
+| `turnReminder` | `AUTO_EFFORT_TURN_REMINDER` | `true` | On: each prompt carries one line naming the effort the turn starts at and asking the model to call set_effort in its first response. Off: only the tool's description asks for the call. |
+| `escalateAfterFailures` | `AUTO_EFFORT_ESCALATE_AFTER_FAILURES` | `2` | After this many failing test runs in one turn the effort rises one step, up to the ceiling, for the requests that follow; the count then starts again. |
+| `failurePatterns` | `AUTO_EFFORT_FAILURE_PATTERNS` | `--- FAIL`<br>`FAIL(ED)?`<br>`(?<!\d)[1-9]\d* (failed\|failing)`<br>`AssertionError`<br>`panic:`<br>`Traceback` | One regular expression per entry, matched case-sensitively against a tool result. A result that matches any entry counts as one failing test run. |
+| `failureTools` | `AUTO_EFFORT_FAILURE_TOOLS` | `Bash` | One tool name per entry (Bash runs the tests). Only results of these tools are matched against failurePatterns. |
+| `userEffortPins` | `AUTO_EFFORT_USER_EFFORT_PINS` | `true` | On: when you change the effort yourself with /effort, auto-effort stops steering that session until /auto-effort on. Off: it keeps steering whatever you set. |
+| `models` | `AUTO_EFFORT_MODELS` | `claude-opus-5-5=allow`<br>`claude-fable-5-1=allow`<br>`claude-sonnet-5-5=probation`<br>`claude-haiku-5-5=probation`<br>`claude-sonnet-5=deny` | One entry per model, as model=allow, model=probation or model=deny. allow steers it. probation steers it while counting clean effort switches; probationSwitches of them earn allow. deny never touches it. A model without an entry gets unknownModels. |
+| `unknownModels` | `AUTO_EFFORT_UNKNOWN_MODELS` | `off` | off leaves it untouched; allow, probation and deny act as in models. |
+| `probationSwitches` | `AUTO_EFFORT_PROBATION_SWITCHES` | `5` | How many effort switches in a row of a probation model must keep the cache (see canaryThreshold) before it counts as allow. |
+| `canaryThreshold` | `AUTO_EFFORT_CANARY_THRESHOLD` | `0.9` | After an effort change, the switched request must read at least this fraction of the previous request's whole prompt from the prompt cache. Below it the plugin stops changing effort on that model, tells you once, and remembers across sessions until /auto-effort clear. |
+| `cacheTtlSeconds` | `AUTO_EFFORT_CACHE_TTL_SECONDS` | `300` | When more than this many seconds passed between two requests the cache may have expired on its own, so the check judges nothing. 300 fits the five-minute cache; use 3600 with the one-hour cache. |
+| `statusLine` | `AUTO_EFFORT_STATUS_LINE` | `true` | On: one line shows the level held, why, and what decided it (plan, model, escalation or pin). Off: nothing is shown. |
+| `logFile` | `AUTO_EFFORT_LOG_FILE` | `~/.local/state/auto-effort/decisions.jsonl` | Where decisions are appended, one JSON row per decision, request and turn, never the prompt text. The session id is inserted before the extension, one file per session; after 1000 rows the next file starts (`decisions.<session>.2.jsonl`, `.3.jsonl`, ...). A leading ~ is your home directory. Empty: no log. |
 
 ## The decision log
 

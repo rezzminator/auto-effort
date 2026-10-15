@@ -2,6 +2,12 @@
 
 All notable changes to this plugin are recorded here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the plugin follows [semantic versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- Every option reads an environment variable named `AUTO_EFFORT_` and the option in upper snake case (`AUTO_EFFORT_PLAN_LEVEL`). The variable beats the option, which beats the default; an unset or empty variable is absent. A variable that does not fit is reported by its name and the option's default applies. Booleans take `1`, `0`, `true` or `false`, and lists a JSON array of strings. `/auto-effort status` names the variables in effect.
+
 ## [0.2.1] — 2026-10-15
 
 ### Changed

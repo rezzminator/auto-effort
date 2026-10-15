@@ -518,6 +518,179 @@ suite('prompt.submit', () => {
   });
 });
 
+// The environment layer: AUTO_EFFORT_{OPTION} read through $.env.get at the start and at each prompt, over /config and the options.
+suite('environment options', () => {
+  const HOME = { HOME: '/fake-home/u' };
+  const envEngine = (env: Record<string, string>, options: Record<string, unknown> = {}) => engine(options, { env: { ...HOME, ...env } });
+  const ALL: Record<string, string> = {
+    AUTO_EFFORT_FLOOR: 'low',
+    AUTO_EFFORT_CEILING: 'max',
+    AUTO_EFFORT_PLAN_LEVEL: 'medium',
+    AUTO_EFFORT_PLAN_UPSHIFT_PATTERNS: '["\\\\bplan"]',
+    AUTO_EFFORT_PLAN_UPSHIFT_CHARS: '2000',
+    AUTO_EFFORT_TURN_REMINDER: 'false',
+    AUTO_EFFORT_ESCALATE_AFTER_FAILURES: '3',
+    AUTO_EFFORT_FAILURE_PATTERNS: '["boom"]',
+    AUTO_EFFORT_FAILURE_TOOLS: '["PowerShell"]',
+    AUTO_EFFORT_USER_EFFORT_PINS: 'false',
+    AUTO_EFFORT_MODELS: '["claude-x=deny"]',
+    AUTO_EFFORT_UNKNOWN_MODELS: 'allow',
+    AUTO_EFFORT_PROBATION_SWITCHES: '8',
+    AUTO_EFFORT_CANARY_THRESHOLD: '0.5',
+    AUTO_EFFORT_CACHE_TTL_SECONDS: '3600',
+    AUTO_EFFORT_STATUS_LINE: '0',
+    AUTO_EFFORT_LOG_FILE: '/var/log/effort.jsonl',
+  };
+
+  it('reads every option from its own variable', async () => {
+    const e = envEngine(ALL);
+    await e.start();
+    await e.prompt();
+    const text = (await e.command('status')).text;
+    expect(text).toContain('settings (plugin options; environment overrides: AUTO_EFFORT_FLOOR, AUTO_EFFORT_CEILING');
+    for (const shown of ['floor=low', 'ceiling=max', 'planLevel=medium', 'planUpshiftPatterns=[\\bplan]', 'planUpshiftChars=2000', 'turnReminder=false', 'escalateAfterFailures=3', 'failurePatterns=[boom]', 'failureTools=[PowerShell]', 'userEffortPins=false', 'models=[claude-x=deny]', 'unknownModels=allow', 'probationSwitches=8', 'canaryThreshold=0.5', 'cacheTtlSeconds=3600', 'statusLine=false', 'logFile=/var/log/effort.jsonl']) {
+      expect(text, shown).toContain(shown);
+    }
+    expect(e.logs.filter((line) => line.includes('option'))).toEqual([]);
+  });
+
+  it('spells each variable as a string literal in the hooks file', () => {
+    const source = readFileSync(new URL('../plugins/auto-effort/hooks/auto-effort.ts', import.meta.url), 'utf8');
+    const calls = [...source.matchAll(/\$\.env\.get\(([^)]*)\)/g)].map((m) => m[1]!.trim());
+    const named = calls.filter((arg) => arg.startsWith("'AUTO_EFFORT_")).map((arg) => arg.slice(1, -1));
+    expect(named.sort()).toEqual(Object.keys(ALL).sort());
+    expect(calls.every((arg) => /^'[A-Z_]+'$/.test(arg))).toBe(true);
+  });
+
+  it('registers set_effort for the floor and ceiling the variables give, before any prompt', async () => {
+    const e = envEngine({ AUTO_EFFORT_FLOOR: 'high', AUTO_EFFORT_CEILING: 'xhigh' }, { floor: 'low', ceiling: 'max' });
+    await e.start();
+    expect(e.registered).toHaveLength(1);
+    expect(e.registered[0].inputSchema.properties.level.enum).toEqual(['high', 'xhigh']);
+  });
+
+  it('lets a variable beat /config and the registered options at the next prompt', async () => {
+    const e = envEngine({ AUTO_EFFORT_PLAN_LEVEL: 'medium' }, { planLevel: 'xhigh' });
+    await e.start();
+    e.$.config.list = async () => [{ key: 'auto-effort.planLevel', value: 'xhigh', kind: 'text' }];
+    await e.prompt();
+    expect(await e.step({})).toMatchObject({ effort: 'medium' });
+  });
+
+  it('reports a bad variable by name, in the log and in status, and uses the default', async () => {
+    const e = envEngine({ AUTO_EFFORT_PLAN_LEVEL: 'bogus' }, { planLevel: 'xhigh' });
+    await e.start();
+    await e.prompt();
+    expect(await e.step({})).toMatchObject({ effort: 'high' });
+    expect(e.logs.filter((line) => line.includes('AUTO_EFFORT_PLAN_LEVEL'))).toHaveLength(1);
+    expect((await e.command('status')).text).toContain('option errors:\n  auto-effort: option "planLevel" (environment variable AUTO_EFFORT_PLAN_LEVEL) is "bogus"');
+  });
+
+  it('applies an unset variable as absent: the option decides', async () => {
+    const e = envEngine({ AUTO_EFFORT_PLAN_LEVEL: '  ' }, { planLevel: 'xhigh' });
+    await e.start();
+    await e.prompt();
+    expect(await e.step({})).toMatchObject({ effort: 'xhigh' });
+    expect((await e.command('status')).text).toContain('settings (plugin options)');
+  });
+
+  it('says so when `set` saves an option a variable still overrides', async () => {
+    const e = envEngine({ AUTO_EFFORT_PLAN_LEVEL: 'medium' });
+    await e.start();
+    const reply = (await e.command('set planLevel low')).text;
+    expect(e.configSets).toEqual([{ key: 'auto-effort.planLevel', value: 'low' }]);
+    expect(reply).toBe('planLevel is saved as "low", but AUTO_EFFORT_PLAN_LEVEL is set and still applies: planLevel stays "medium".');
+    await e.prompt();
+    expect(await e.step({})).toMatchObject({ effort: 'medium' });
+  });
+
+  // A read that fails (a host refusal) is said once per read, and the variables of the last good read stay.
+  const failEnv = (e: ReturnType<typeof engine>) => {
+    const read = e.$.env.get;
+    e.$.env.get = async (name: string) => {
+      if (name.startsWith('AUTO_EFFORT_')) throw new Error('env unavailable');
+      return read(name);
+    };
+  };
+
+  it('keeps the variables of the last read, still applies /config, and names the environment when a read fails', async () => {
+    const e = envEngine({ AUTO_EFFORT_FLOOR: 'high' });
+    await e.start();
+    failEnv(e);
+    e.$.config.list = async () => [{ key: 'auto-effort.planLevel', value: 'xhigh', kind: 'text' }];
+    await e.prompt();
+    expect(await e.step({})).toMatchObject({ effort: 'xhigh' });
+    expect((await e.command('status')).text).toContain('floor=high');
+    expect(e.logs.some((line) => line.includes('reading the option environment variables failed: env unavailable'))).toBe(true);
+    expect(e.logs.some((line) => line.includes('reading the plugin options'))).toBe(false);
+  });
+
+  it('starts, registers the tool and says why when the environment cannot be read at the start', async () => {
+    const e = envEngine({});
+    failEnv(e);
+    await e.start();
+    expect(e.registered).toHaveLength(1);
+    expect(e.logs.some((line) => line.includes('reading the option environment variables failed: env unavailable'))).toBe(true);
+  });
+
+  it('reads the variables in one parallel round per prompt', async () => {
+    const e = envEngine({});
+    await e.start();
+    const read = e.$.env.get;
+    const seen = { calls: 0, inFlight: 0, peak: 0 };
+    e.$.env.get = async (name: string) => {
+      if (!name.startsWith('AUTO_EFFORT_')) return read(name);
+      seen.calls += 1;
+      seen.inFlight += 1;
+      seen.peak = Math.max(seen.peak, seen.inFlight);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      seen.inFlight -= 1;
+      return read(name);
+    };
+    await e.prompt();
+    expect(seen).toEqual({ calls: 17, inFlight: 0, peak: 17 });
+  });
+
+  it('answers `set` as a success when the environment cannot be read', async () => {
+    const e = envEngine({});
+    await e.start();
+    failEnv(e);
+    const reply = (await e.command('set planLevel low')).text;
+    expect(reply).toBe('planLevel is now "low".');
+    expect(e.configSets).toEqual([{ key: 'auto-effort.planLevel', value: 'low' }]);
+  });
+
+  it('applies on `set` what the next prompt computes, and says so when a floor/ceiling conflict resets it', async () => {
+    const e = envEngine({ AUTO_EFFORT_FLOOR: 'high' }, { ceiling: 'medium' });
+    await e.start();
+    await e.prompt();
+    const conflict = 'floor=medium ceiling=xhigh';
+    expect((await e.command('status')).text).toContain(conflict);
+    const reply = (await e.command('set ceiling medium')).text;
+    expect(reply).toBe('ceiling is saved as "medium", but "xhigh" is in effect: see the option errors in /auto-effort status.');
+    expect((await e.command('status')).text).toContain(conflict);
+    await e.command('set planLevel xhigh');
+    expect((await e.command('status')).text).toContain(conflict);
+    expect(e.registered.at(-1).inputSchema.properties.level.enum).toEqual(['medium', 'high', 'xhigh']);
+  });
+
+  it('names the variable behind a floor/ceiling conflict', async () => {
+    const e = envEngine({ AUTO_EFFORT_CEILING: 'low' }, { floor: 'high' });
+    await e.start();
+    expect(e.logs.some((line) => line.includes('option "ceiling" ("low", from AUTO_EFFORT_CEILING)'))).toBe(true);
+  });
+
+  it('counts only a variable that applies as in effect, in status and in the `set` reply', async () => {
+    const e = envEngine({ AUTO_EFFORT_PLAN_LEVEL: 'bogus', AUTO_EFFORT_STATUS_LINE: '0' });
+    await e.start();
+    await e.prompt();
+    const status = (await e.command('status')).text;
+    expect(status).toContain('settings (plugin options; environment overrides: AUTO_EFFORT_STATUS_LINE):');
+    const reply = (await e.command('set planLevel low')).text;
+    expect(reply).toBe('planLevel is saved as "low", but "high" is in effect: see the option errors in /auto-effort status.');
+  });
+});
+
 suite('set_effort and escalation', () => {
   it('serves set_effort and applies the level from the next request', async () => {
     const e = engine();

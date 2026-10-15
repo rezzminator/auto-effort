@@ -1,8 +1,9 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { DEFAULTS, SETTING_KEYS } from '../plugins/auto-effort/src/settings.ts';
+import { DEFAULTS, envName, SETTING_KEYS } from '../plugins/auto-effort/src/settings.ts';
 
-// R12: every knob is a plugin option. Defaults agree in three places: src/settings.ts, plugin.json's userConfig and the README table.
+// R12: every knob is a plugin option. Defaults agree in three places: src/settings.ts, plugin.json's userConfig and the README table,
+// which also names the environment variable each option reads.
 const root = new URL('../', import.meta.url);
 const manifest = JSON.parse(readFileSync(new URL('plugins/auto-effort/.claude-plugin/plugin.json', root), 'utf8'));
 const readme = readFileSync(new URL('README.md', root), 'utf8');
@@ -24,15 +25,16 @@ describe('plugin options', () => {
     }
   });
 
-  it('shows every option in the README table with the default the code holds', () => {
+  it('shows every option in the README table with its environment variable and the default the code holds', () => {
     const lines = readme.split('\n');
     for (const key of SETTING_KEYS) {
       const row = lines.find((line) => line.startsWith(`| \`${key}\` |`));
       expect(row, key).toBeDefined();
       // A GFM cell ends at every `|` not escaped as `\|`, inside code spans too.
       const cells = row!.split(/(?<!\\)\|/).slice(1, -1).map((cell) => cell.trim());
-      expect(cells, key).toHaveLength(3);
-      const shown = cells[1]!.split('<br>').map((entry) => entry.replace(/^`|`$/g, '').replace(/\\\|/g, '|'));
+      expect(cells, key).toHaveLength(4);
+      expect(cells[1], key).toBe(`\`${envName(key)}\``);
+      const shown = cells[2]!.split('<br>').map((entry) => entry.replace(/^`|`$/g, '').replace(/\\\|/g, '|'));
       const value = DEFAULTS[key];
       expect(shown, key).toEqual(Array.isArray(value) ? value : [String(value)]);
     }

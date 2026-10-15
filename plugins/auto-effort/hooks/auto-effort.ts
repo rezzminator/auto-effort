@@ -6,7 +6,7 @@ import { EMPTY_PERSISTED, mergeModels, readPersisted } from '../src/gate.ts';
 import { levelsWithin } from '../src/levels.ts';
 import { expandHome, fillSegments, SEGMENT_ROWS, sessionLogPath } from '../src/log.ts';
 import { normalizeModel } from '../src/model.ts';
-import { PLUGIN, resolveSettings, SETTING_KEYS } from '../src/settings.ts';
+import { envName, PLUGIN, resolveSettings, SETTING_KEYS, type EnvValues } from '../src/settings.ts';
 import { quote, toolDescription } from '../src/text.ts';
 import { levelRow, pluginLogDir, PluginLogQueue, type PluginLogLevel } from '../src/plugin-log.ts';
 import { VERSION } from '../src/version.ts';
@@ -28,6 +28,8 @@ type State = {
   /** The options the plugin registered with: what applies where /config has no row. */
   options: Record<string, unknown>;
   errors: string[];
+  /** The option variables as the last successful read held them: what a failed read falls back to. */
+  env: EnvValues;
   /** The option errors last reported, so a new prompt does not report them again. */
   errorKey: string;
   settingsFrom: string;
@@ -268,7 +270,7 @@ async function start($: EngineInterface, st: State): Promise<void> {
     st.ctl.loadPersisted(EMPTY_PERSISTED);
   }
   await restoreSession($, st);
-  reportErrors($, st, st.errors);
+  applyLayers($, st, st.options, await currentEnv($, st), 'plugin options');
   try {
     await ensureTool($, st);
   } catch (error) {
@@ -334,19 +336,67 @@ async function saveMarks($: EngineInterface, st: State, changed: readonly string
   }
 }
 
-// The options as /config holds them now, over the options the plugin registered with.
+// The environment variables of the options, each spelled as a string literal (Claude Code reads the names off the source)
+// and all asked in one round.
+async function readEnv($: EngineInterface): Promise<EnvValues> {
+  const asked = {
+    floor: $.env.get('AUTO_EFFORT_FLOOR'),
+    ceiling: $.env.get('AUTO_EFFORT_CEILING'),
+    planLevel: $.env.get('AUTO_EFFORT_PLAN_LEVEL'),
+    planUpshiftPatterns: $.env.get('AUTO_EFFORT_PLAN_UPSHIFT_PATTERNS'),
+    planUpshiftChars: $.env.get('AUTO_EFFORT_PLAN_UPSHIFT_CHARS'),
+    turnReminder: $.env.get('AUTO_EFFORT_TURN_REMINDER'),
+    escalateAfterFailures: $.env.get('AUTO_EFFORT_ESCALATE_AFTER_FAILURES'),
+    failurePatterns: $.env.get('AUTO_EFFORT_FAILURE_PATTERNS'),
+    failureTools: $.env.get('AUTO_EFFORT_FAILURE_TOOLS'),
+    userEffortPins: $.env.get('AUTO_EFFORT_USER_EFFORT_PINS'),
+    models: $.env.get('AUTO_EFFORT_MODELS'),
+    unknownModels: $.env.get('AUTO_EFFORT_UNKNOWN_MODELS'),
+    probationSwitches: $.env.get('AUTO_EFFORT_PROBATION_SWITCHES'),
+    canaryThreshold: $.env.get('AUTO_EFFORT_CANARY_THRESHOLD'),
+    cacheTtlSeconds: $.env.get('AUTO_EFFORT_CACHE_TTL_SECONDS'),
+    statusLine: $.env.get('AUTO_EFFORT_STATUS_LINE'),
+    logFile: $.env.get('AUTO_EFFORT_LOG_FILE'),
+  };
+  const values = await Promise.all(Object.values(asked));
+  return Object.fromEntries(Object.keys(asked).map((key, index) => [key, values[index]])) as EnvValues;
+}
+
+// The variables now. A read that fails is reported and the last successful read stands: the overrides are never dropped silently.
+async function currentEnv($: EngineInterface, st: State): Promise<EnvValues> {
+  try {
+    st.env = await readEnv($);
+  } catch (error) {
+    note($, st, 'warning', 'env-unreadable', 'hooks/auto-effort.ts#currentEnv', 'reading the option environment variables', error, 'the variables of the last read stay');
+  }
+  return st.env;
+}
+
+/** The option layer: the `/config` rows of this plugin, by option. */
+function rowLayer(rows: readonly ConfigRow[]): Record<string, unknown> {
+  const layer: Record<string, unknown> = {};
+  for (const row of rows) {
+    const field = ROW_KEY.exec(row.key)?.[1];
+    if (field !== undefined && (SETTING_KEYS as readonly string[]).includes(field)) layer[field] = row.value;
+  }
+  return layer;
+}
+
+/** The settings of the layers, the variables over the options: applied, their errors reported, and where they came from kept for status. */
+function applyLayers($: EngineInterface, st: State, options: Readonly<Record<string, unknown>>, env: EnvValues, base: string) {
+  const resolved = resolveSettings(options, env);
+  st.settingsFrom = resolved.fromEnv.length === 0 ? base : `${base}; environment overrides: ${resolved.fromEnv.map(envName).join(', ')}`;
+  reportErrors($, st, resolved.errors);
+  st.ctl.applySettings(resolved.settings);
+  return resolved;
+}
+
+// The options as /config holds them now, over the options the plugin registered with, under their variables.
 async function refresh($: EngineInterface, st: State): Promise<void> {
   try {
     const rows: readonly ConfigRow[] = await $.config.list();
-    const fromRows: Record<string, unknown> = {};
-    for (const row of rows) {
-      const field = ROW_KEY.exec(row.key)?.[1];
-      if (field !== undefined && (SETTING_KEYS as readonly string[]).includes(field)) fromRows[field] = row.value;
-    }
-    st.settingsFrom = Object.keys(fromRows).length > 0 ? '/config' : 'plugin options';
-    const { settings, errors } = resolveSettings({ ...st.options, ...fromRows });
-    reportErrors($, st, errors);
-    st.ctl.applySettings(settings);
+    const fromRows = rowLayer(rows);
+    applyLayers($, st, { ...st.options, ...fromRows }, await currentEnv($, st), Object.keys(fromRows).length > 0 ? '/config' : 'plugin options');
     await saveMarks($, st, []);
     await ensureTool($, st);
   } catch (error) {
@@ -410,9 +460,14 @@ async function runCommand($: EngineInterface, st: State, args: string): Promise<
       const saved = await $.config.set({ key, value: typed });
       if ('deny' in saved && saved.deny !== undefined) return `Not changed: the settings refused "${command.key}": ${saved.deny}`;
       st.options[command.key] = typed;
-      st.ctl.applySettings(next.settings);
+      // What the next prompt would compute: the options with this one saved, under the variables.
+      const fromRows = rowLayer(rows);
+      const applied = applyLayers($, st, { ...st.options, ...fromRows, [command.key]: typed }, await currentEnv($, st), Object.keys(fromRows).length > 0 ? '/config' : 'plugin options');
       await ensureTool($, st);
       present($, st, st.ctl.statusNow());
+      const now = JSON.stringify(applied.settings[command.key]);
+      if (applied.fromEnv.includes(command.key)) return `${command.key} is saved as ${JSON.stringify(typed)}, but ${envName(command.key)} is set and still applies: ${command.key} stays ${now}.`;
+      if (now !== JSON.stringify(typed)) return `${command.key} is saved as ${JSON.stringify(typed)}, but ${now} is in effect: see the option errors in /auto-effort status.`;
       return `${command.key} is now ${JSON.stringify(typed)}.`;
     }
     case 'status': {
@@ -428,6 +483,7 @@ export const register: Register = (on, options) => {
     ctl: new Controller(settings, EMPTY_PERSISTED, () => Date.now()),
     options: { ...options },
     errors,
+    env: {},
     errorKey: '',
     settingsFrom: 'plugin options',
     starting: undefined,
