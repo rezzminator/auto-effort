@@ -540,6 +540,8 @@ suite('environment options', () => {
     AUTO_EFFORT_CACHE_TTL_SECONDS: '3600',
     AUTO_EFFORT_STATUS_LINE: '0',
     AUTO_EFFORT_LOG_FILE: '/var/log/effort.jsonl',
+    AUTO_EFFORT_LOWER_ON_PASS: 'false',
+    AUTO_EFFORT_TEST_COMMAND_PATTERNS: '["\\\\bmytest\\\\b"]',
   };
 
   it('reads every option from its own variable', async () => {
@@ -548,7 +550,7 @@ suite('environment options', () => {
     await e.prompt();
     const text = (await e.command('status')).text;
     expect(text).toContain('settings (plugin options; environment overrides: AUTO_EFFORT_FLOOR, AUTO_EFFORT_CEILING');
-    for (const shown of ['floor=low', 'ceiling=max', 'planLevel=medium', 'planUpshiftPatterns=[\\bplan]', 'planUpshiftChars=2000', 'turnReminder=false', 'escalateAfterFailures=3', 'failurePatterns=[boom]', 'failureTools=[PowerShell]', 'userEffortPins=false', 'models=[claude-x=deny]', 'unknownModels=allow', 'probationSwitches=8', 'canaryThreshold=0.5', 'cacheTtlSeconds=3600', 'statusLine=false', 'logFile=/var/log/effort.jsonl']) {
+    for (const shown of ['floor=low', 'ceiling=max', 'planLevel=medium', 'planUpshiftPatterns=[\\bplan]', 'planUpshiftChars=2000', 'turnReminder=false', 'escalateAfterFailures=3', 'failurePatterns=[boom]', 'failureTools=[PowerShell]', 'userEffortPins=false', 'models=[claude-x=deny]', 'unknownModels=allow', 'probationSwitches=8', 'canaryThreshold=0.5', 'cacheTtlSeconds=3600', 'statusLine=false', 'logFile=/var/log/effort.jsonl', 'lowerOnPass=false', 'testCommandPatterns=[\\bmytest\\b]']) {
       expect(text, shown).toContain(shown);
     }
     expect(e.logs.filter((line) => line.includes('option'))).toEqual([]);
@@ -648,7 +650,7 @@ suite('environment options', () => {
       return read(name);
     };
     await e.prompt();
-    expect(seen).toEqual({ calls: 17, inFlight: 0, peak: 17 });
+    expect(seen).toEqual({ calls: 19, inFlight: 0, peak: 19 });
   });
 
   it('answers `set` as a success when the environment cannot be read', async () => {
@@ -709,22 +711,46 @@ suite('set_effort and escalation', () => {
     expect(await e.tool({ tool: TOOL, level: 'medium', agentId: 'agent-7' })).toEqual({ result: 'Not applied: set_effort applies to the main chat only.' });
   });
 
-  it('adds the escalation line to the second failing Bash result of the main chat only', async () => {
+  it('adds the escalation line to the second failing test run of the main chat only, and the lowering line to the passing one', async () => {
     const e = engine();
     await e.start();
     await e.prompt();
     await e.step({});
     await e.tool({ tool: TOOL, level: 'medium', reason: 'rename' });
     await e.step({ index: 1 });
+    const run = { command: 'npm test' };
     const failing = { result: 'x', text: '2 failed, 1 passed', context: ['from another hook'] };
-    expect((await e.tool({}, failing)).context).toEqual(['from another hook']);
-    expect((await e.tool({ agentId: 'agent-7' }, failing)).context).toEqual(['from another hook']);
-    const second = await e.tool({}, failing);
+    expect((await e.tool(run, failing)).context).toEqual(['from another hook']);
+    expect((await e.tool({ ...run, agentId: 'agent-7' }, failing)).context).toEqual(['from another hook']);
+    expect((await e.tool({ command: 'cat test.log' }, failing)).context).toEqual(['from another hook']);
+    const second = await e.tool(run, failing);
     expect(second.context).toHaveLength(2);
     expect(second.context[0]).toBe('from another hook');
     expect(second.context[1]).toContain('medium');
     expect(second.context[1]).toContain('high');
     expect(await e.step({ index: 2 })).toMatchObject({ effort: 'high' });
+    const passing = await e.tool(run, { result: 'x', text: '3 passed', context: ['from another hook'] });
+    expect(passing.context).toHaveLength(2);
+    expect(passing.context[1]).toContain('back to medium from high');
+    expect(await e.step({ index: 3 })).toMatchObject({ effort: 'medium' });
+  });
+
+  it('hands the controller the call\'s command beside the result text, and nothing for a call without one', async () => {
+    const e = engine();
+    await e.start();
+    const spy = vi.spyOn(Controller.prototype, 'onToolResult');
+    try {
+      await e.tool({ command: 'go test ./...' }, { result: 'x', text: 'FAILED' });
+      await e.tool({ tool: 'Read', file_path: 'a.txt' }, { result: 'x', text: 'body' });
+      await e.tool({ command: 42 }, { result: 'x', text: 'ok' });
+      expect(spy.mock.calls.map((call) => call[0])).toEqual([
+        { tool: 'Bash', command: 'go test ./...', text: 'FAILED' },
+        { tool: 'Read', command: undefined, text: 'body' },
+        { tool: 'Bash', command: undefined, text: 'ok' },
+      ]);
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it('passes a tool result through untouched when the decision fails', async () => {

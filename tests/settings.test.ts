@@ -14,6 +14,7 @@ describe('resolveSettings', () => {
       planUpshiftChars: 1500,
       turnReminder: true,
       escalateAfterFailures: 2,
+      lowerOnPass: true,
       userEffortPins: true,
       unknownModels: 'off',
       probationSwitches: 5,
@@ -22,6 +23,7 @@ describe('resolveSettings', () => {
     });
     expect(DEFAULTS.planUpshiftPatterns).toEqual(['\\bthink', '\\bdesign']);
     expect(DEFAULTS.failurePatterns).toEqual(['--- FAIL', 'FAIL(ED)?', '(?<!\\d)[1-9]\\d* (failed|failing)', 'AssertionError', 'panic:', 'Traceback']);
+    expect(DEFAULTS.testCommandPatterns).toHaveLength(15);
     expect(DEFAULTS.models).toEqual([
       'claude-opus-5-5=allow',
       'claude-fable-5-1=allow',
@@ -47,6 +49,7 @@ describe('resolveSettings', () => {
     ['probationSwitches', 'many', 5],
     ['canaryThreshold', 1.5, 0.9],
     ['turnReminder', 'maybe', true],
+    ['lowerOnPass', 'sometimes', true],
     ['unknownModels', 'sometimes', 'off'],
     ['cacheTtlSeconds', 0, 300],
   ] as const)('reports %s = %j and applies the default %j', (key, value, fallback) => {
@@ -63,6 +66,18 @@ describe('resolveSettings', () => {
     expect(errors).toHaveLength(1);
     expect(errors[0]).toContain('"failurePatterns"');
     expect(errors[0]).toContain('(unclosed');
+  });
+
+  it('reports a test command pattern that is not a regular expression, and uses none of that list', () => {
+    const taken = resolveSettings({ testCommandPatterns: ['\\bmytest\\b'] });
+    expect(taken.errors).toEqual([]);
+    expect(taken.settings.testCommandPatterns).toEqual(['\\bmytest\\b']);
+    const { settings, errors } = resolveSettings({ testCommandPatterns: ['\\bmytest\\b', '(unclosed'] });
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toContain('"testCommandPatterns"');
+    expect(errors[0]).toContain('(unclosed');
+    expect(settings.testCommandPatterns).toEqual(DEFAULTS.testCommandPatterns);
+    expect(compile(settings).testCommand.map((re) => re.source)).not.toContain('(unclosed');
   });
 
   it('reads a list given as lines of text', () => {
@@ -117,6 +132,8 @@ describe('resolveSettings with environment variables', () => {
     cacheTtlSeconds: 'AUTO_EFFORT_CACHE_TTL_SECONDS',
     statusLine: 'AUTO_EFFORT_STATUS_LINE',
     logFile: 'AUTO_EFFORT_LOG_FILE',
+    lowerOnPass: 'AUTO_EFFORT_LOWER_ON_PASS',
+    testCommandPatterns: 'AUTO_EFFORT_TEST_COMMAND_PATTERNS',
   } as const;
 
   it('names one variable per option', () => {
@@ -144,6 +161,10 @@ describe('resolveSettings with environment variables', () => {
     ['canaryThreshold', '0.5', 0.8, 0.5],
     ['cacheTtlSeconds', '3600', 60, 3600],
     ['logFile', '/var/log/effort.jsonl', '/other.jsonl', '/var/log/effort.jsonl'],
+    ['lowerOnPass', ' False ', true, false],
+    ['lowerOnPass', '1', false, true],
+    ['testCommandPatterns', '["\\\\bmytest\\\\b"]', ['\\bother\\b'], ['\\bmytest\\b']],
+    ['testCommandPatterns', '[]', ['\\bother\\b'], []],
   ] as const)('%s: the variable %j beats the option and the default', (key, text, option, value) => {
     const { settings, errors } = resolveSettings({ [key]: option }, { [key]: text });
     expect(errors).toEqual([]);
@@ -171,6 +192,9 @@ describe('resolveSettings with environment variables', () => {
     ['probationSwitches', 'many', 2],
     ['canaryThreshold', '1.5', 0.8],
     ['cacheTtlSeconds', '-3', 60],
+    ['lowerOnPass', 'sometimes', false],
+    ['testCommandPatterns', '["(unclosed"]', ['\\bother\\b']],
+    ['testCommandPatterns', '\\bmytest\\b', ['\\bother\\b']],
   ] as const)('%s: a bad variable %j is reported by name and the default applies, not the option %j', (key, text, option) => {
     const { settings, errors } = resolveSettings({ [key]: option }, { [key]: text });
     expect(settings[key]).toEqual(DEFAULTS[key]);
@@ -225,6 +249,45 @@ describe('compile', () => {
     expect(compiled.failure.some((re) => re.test('--- FAIL: TestX (0.00s)'))).toBe(true);
     expect(compiled.failure.some((re) => re.test('3 failed, 2 passed'))).toBe(true);
     expect(compiled.failure.some((re) => re.test('all tests passed, 0 failures'))).toBe(false);
+  });
+
+  it('knows the common test runners by their command, and no command that only reads output', () => {
+    const testCommand = compile(DEFAULTS).testCommand;
+    const isTest = (command: string) => testCommand.some((re) => re.test(command));
+    for (const command of [
+      'go test ./...',
+      'go -C engine test -run TestX ./internal/...',
+      'npm test',
+      'npm run test -- --watch=false',
+      'pnpm test',
+      'yarn test',
+      'bun test',
+      'npx vitest run tests/a.test.ts',
+      'jest --ci',
+      'python -m pytest -q',
+      'cargo test',
+      'cargo nextest run',
+      'make -C engine test',
+      'make check',
+      'make verify',
+      'just test',
+      'mvn -q test',
+      './gradlew test',
+      'dotnet test',
+      'deno test',
+      'swift test',
+      'mix test',
+      'bundle exec rspec',
+      'vendor/bin/phpunit',
+      'ctest --output-on-failure',
+      'tox -e py312',
+      'nox -s tests',
+      'bash scripts/test-unit.sh',
+      'cd app && ./script/test.sh',
+    ]) expect(isTest(command), command).toBe(true);
+    for (const command of ['cat build.log', 'grep -rn FAIL .', 'sed -n 1,40p out.txt', 'ls tests/', 'npm install', 'make build; echo test', 'git log --grep latest', 'echo contest']) {
+      expect(isTest(command), command).toBe(false);
+    }
   });
 
   it('counts a run with failures, never a green run that reports 0 failed, in time linear in the result', () => {

@@ -357,6 +357,8 @@ async function readEnv($: EngineInterface): Promise<EnvValues> {
     cacheTtlSeconds: $.env.get('AUTO_EFFORT_CACHE_TTL_SECONDS'),
     statusLine: $.env.get('AUTO_EFFORT_STATUS_LINE'),
     logFile: $.env.get('AUTO_EFFORT_LOG_FILE'),
+    lowerOnPass: $.env.get('AUTO_EFFORT_LOWER_ON_PASS'),
+    testCommandPatterns: $.env.get('AUTO_EFFORT_TEST_COMMAND_PATTERNS'),
   };
   const values = await Promise.all(Object.values(asked));
   return Object.fromEntries(Object.keys(asked).map((key, index) => [key, values[index]])) as EnvValues;
@@ -561,7 +563,9 @@ export const register: Register = (on, options) => {
     if (e.agentId !== undefined || result.deny !== undefined) return result;
     try {
       const text = result.text ?? (typeof result.result === 'string' ? result.result : '');
-      const seen = st.ctl.onToolResult({ tool: e.tool, text });
+      // The tool's arguments ride beside `tool` (`e.command` for Bash); a call without a command is no test run.
+      const command = typeof e.command === 'string' ? e.command : undefined;
+      const seen = st.ctl.onToolResult({ tool: e.tool, command, text });
       record($, st, seen.rows);
       if (seen.context !== undefined) return { ...result, context: [...(result.context ?? []), seen.context] };
     } catch (error) {
