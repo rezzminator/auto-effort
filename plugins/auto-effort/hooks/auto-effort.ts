@@ -6,8 +6,9 @@ import { EMPTY_PERSISTED, mergeModels, readPersisted } from '../src/gate.ts';
 import { levelsWithin } from '../src/levels.ts';
 import { expandHome, fillSegments, SEGMENT_ROWS, sessionLogPath } from '../src/log.ts';
 import { normalizeModel } from '../src/model.ts';
-import { PLUGIN, resolveSettings, SETTING_KEYS } from '../src/settings.ts';
+import { envName, PLUGIN, resolveSettings, SETTING_KEYS, type EnvValues } from '../src/settings.ts';
 import { quote, toolDescription } from '../src/text.ts';
+import { levelRow, pluginLogDir, PluginLogQueue, type PluginLogLevel } from '../src/plugin-log.ts';
 import { VERSION } from '../src/version.ts';
 
 // Thin adapter: every decision lives in src/controller.ts. A failure is logged with its context and the request,
@@ -27,6 +28,8 @@ type State = {
   /** The options the plugin registered with: what applies where /config has no row. */
   options: Record<string, unknown>;
   errors: string[];
+  /** The option variables as the last successful read held them: what a failed read falls back to. */
+  env: EnvValues;
   /** The option errors last reported, so a new prompt does not report them again. */
   errorKey: string;
   settingsFrom: string;
@@ -48,10 +51,48 @@ type State = {
   /** Each session log's newest file and its text, so a flush rewrites at most SEGMENT_ROWS rows and reads nothing. */
   segments: Map<string, { segment: number; text: string }>;
   writing: Promise<void>;
+  pluginLog?: PluginLogQueue;
+  pluginWriting: Promise<void>;
+  pluginFailure: boolean;
 };
 
-function note($: EngineInterface, what: string, error: unknown, then: string): void {
-  $.ui.log(`auto-effort: ${what} failed: ${message(error)}; ${then}`);
+function pluginFallback($: EngineInterface, notice: string): void {
+  $.ui.log(`auto-effort: ${notice}`);
+}
+
+function runPluginLog($: EngineInterface, argv: string[]) {
+  return $.process.run(argv, { timeoutMs: 5000 });
+}
+
+function plog($: EngineInterface, st: State, level: PluginLogLevel, event: string, msg: string, where: string, detail?: Record<string, unknown>): void {
+  const session = st.sessionId;
+  st.pluginWriting = st.pluginWriting.then(async () => {
+    try {
+      if (st.pluginLog === undefined) {
+        const env = await $.env.get('PLUGIN_LOG_DIR');
+        const home = await $.env.get('HOME');
+        st.pluginLog = new PluginLogQueue(pluginLogDir(env, home, PLUGIN), PLUGIN, (notice) => pluginFallback($, notice));
+      }
+      const row = levelRow({ plugin: PLUGIN, level, event, msg, where, session, detail }, await $.clock.now());
+      st.pluginLog.add(row);
+      await st.pluginLog.flush((argv) => runPluginLog($, argv));
+      st.pluginFailure = false;
+    } catch (error) {
+      if (!st.pluginFailure) {
+        st.pluginFailure = true;
+        try { pluginFallback($, `plugin log initialization failed: ${message(error)}; 1 rows dropped`); }
+        catch (screenError) { // With both outputs gone, contain the failure so the request still goes through.
+          void screenError;
+        }
+      }
+    }
+  });
+}
+
+function note($: EngineInterface, st: State, level: PluginLogLevel, event: string, where: string, what: string, error: unknown, then: string): void {
+  const text = `auto-effort: ${what} failed: ${message(error)}; ${then}`;
+  plog($, st, level, event, text, where, { error: message(error) });
+  $.ui.log(text);
 }
 
 function toUsage(raw: unknown): Usage | null {
@@ -110,7 +151,7 @@ async function flush($: EngineInterface, st: State): Promise<void> {
         newest.text = part.text;
       }
     } catch (error) {
-      note($, 'writing the decision log', error, `${left} rows were not kept`);
+      note($, st, 'error', 'decision-log-write-failed', 'hooks/auto-effort.ts#flush', 'writing the decision log', error, `${left} rows were not kept`);
     }
   }
 }
@@ -122,17 +163,17 @@ function record($: EngineInterface, st: State, rows: readonly Row[]): void {
   st.writing = st.writing.then(() => flush($, st));
 }
 
-function present($: EngineInterface, status: string | undefined, toast?: string): void {
+function present($: EngineInterface, st: State, status: string | undefined, toast?: string): void {
   try {
     $.ui.status(status);
   } catch (error) {
-    note($, 'showing the status line', error, 'the request goes on');
+    note($, st, 'warning', 'status-failed', 'hooks/auto-effort.ts#present', 'showing the status line', error, 'the request goes on');
   }
   if (toast === undefined) return;
   try {
     $.ui.toast(toast);
   } catch (error) {
-    note($, 'showing a notice', error, `the notice was: ${toast}`);
+    note($, st, 'warning', 'toast-failed', 'hooks/auto-effort.ts#present', 'showing a notice', error, `the notice was: ${toast}`);
   }
 }
 
@@ -140,7 +181,10 @@ function reportErrors($: EngineInterface, st: State, errors: string[]): void {
   st.errors = errors;
   const key = errors.join('\n');
   if (key === st.errorKey) return;
-  for (const line of errors) $.ui.log(line);
+  for (const line of errors) {
+    plog($, st, 'warning', 'option-error', line, 'hooks/auto-effort.ts#reportErrors');
+    $.ui.log(line);
+  }
   st.errorKey = key;
   record($, st, errors.map((line) => ({ event: 'option-error', message: line })));
 }
@@ -179,14 +223,14 @@ async function restoreSession($: EngineInterface, st: State): Promise<void> {
     if (value !== undefined) {
       const saved = readSessionState(value);
       if (saved === undefined) {
-        note($, 'reading the saved on/off and pin', new Error(`${quote(value)} is not in the expected form`), 'this session is on and unpinned');
+        note($, st, 'warning', 'saved-switch-unreadable', 'hooks/auto-effort.ts#restoreSession', 'reading the saved on/off and pin', new Error(`${quote(value)} is not in the expected form`), 'this session is on and unpinned');
       } else {
         st.ctl.restoreSession(saved);
         st.savedSession = JSON.stringify(st.ctl.sessionState());
       }
     }
   } catch (error) {
-    note($, 'reading the saved on/off and pin', error, 'this session is on and unpinned');
+    note($, st, 'warning', 'saved-switch-unreadable', 'hooks/auto-effort.ts#restoreSession', 'reading the saved on/off and pin', error, 'this session is on and unpinned');
   }
 }
 
@@ -210,32 +254,32 @@ async function saveSession($: EngineInterface, st: State): Promise<void> {
   // The save is tried again at each request; it is said once for each state that cannot be saved.
   if (st.saveFailed === text) return;
   st.saveFailed = text;
-  note($, 'saving the on/off and pin', failure, 'they hold in this session, but a reload would lose them');
+  note($, st, 'warning', 'saved-switch-unsaved', 'hooks/auto-effort.ts#saveSession', 'saving the on/off and pin', failure, 'they hold in this session, but a reload would lose them');
 }
 
 async function start($: EngineInterface, st: State): Promise<void> {
   try {
     st.sessionId ??= await $.session.id();
   } catch (error) {
-    note($, 'reading the session id', error, 'the log file is named at the first row');
+    note($, st, 'warning', 'session-id-unreadable', 'hooks/auto-effort.ts#start', 'reading the session id', error, 'the log file is named at the first row');
   }
   try {
     st.ctl.loadPersisted(readPersisted(await $.store.get(STORE_KEY)));
   } catch (error) {
-    note($, 'reading the saved model marks', error, 'starting with none');
+    note($, st, 'warning', 'saved-marks-unreadable', 'hooks/auto-effort.ts#start', 'reading the saved model marks', error, 'starting with none');
     st.ctl.loadPersisted(EMPTY_PERSISTED);
   }
   await restoreSession($, st);
-  reportErrors($, st, st.errors);
+  applyLayers($, st, st.options, await currentEnv($, st), 'plugin options');
   try {
     await ensureTool($, st);
   } catch (error) {
-    note($, 'registering the set_effort tool', error, 'the turn reminder and the planning level still apply; the next prompt tries again');
+    note($, st, 'warning', 'tool-register-failed', 'hooks/auto-effort.ts#start', 'registering the set_effort tool', error, 'the turn reminder and the planning level still apply; the next prompt tries again');
   }
   try {
     await $.command.register({ name: PLUGIN, description: 'Show or change automatic reasoning effort: status, on, off, set <key> <value>, clear [model]' });
   } catch (error) {
-    note($, `registering the /${PLUGIN} command`, error, 'automatic effort works without it');
+    note($, st, 'warning', 'command-register-failed', 'hooks/auto-effort.ts#start', `registering the /${PLUGIN} command`, error, 'automatic effort works without it');
   }
 }
 
@@ -256,7 +300,7 @@ async function followSession($: EngineInterface, st: State): Promise<void> {
   try {
     id = await $.session.id();
   } catch (error) {
-    note($, 'reading the session id', error, 'this stays with the session it had');
+    note($, st, 'warning', 'session-id-unreadable', 'hooks/auto-effort.ts#followSession', 'reading the session id', error, 'this stays with the session it had');
     return;
   }
   if (st.sessionId !== undefined && id !== st.sessionId) {
@@ -287,28 +331,78 @@ async function saveMarks($: EngineInterface, st: State, changed: readonly string
     await syncMarks($, st, changed);
     return true;
   } catch (error) {
-    note($, 'reading or saving the model marks', error, 'they hold in this session, and the next prompt tries again');
+    note($, st, 'warning', 'marks-failed', 'hooks/auto-effort.ts#saveMarks', 'reading or saving the model marks', error, 'they hold in this session, and the next prompt tries again');
     return false;
   }
 }
 
-// The options as /config holds them now, over the options the plugin registered with.
+// The environment variables of the options, each spelled as a string literal (Claude Code reads the names off the source)
+// and all asked in one round.
+async function readEnv($: EngineInterface): Promise<EnvValues> {
+  const asked = {
+    floor: $.env.get('AUTO_EFFORT_FLOOR'),
+    ceiling: $.env.get('AUTO_EFFORT_CEILING'),
+    planLevel: $.env.get('AUTO_EFFORT_PLAN_LEVEL'),
+    planUpshiftPatterns: $.env.get('AUTO_EFFORT_PLAN_UPSHIFT_PATTERNS'),
+    planUpshiftChars: $.env.get('AUTO_EFFORT_PLAN_UPSHIFT_CHARS'),
+    turnReminder: $.env.get('AUTO_EFFORT_TURN_REMINDER'),
+    escalateAfterFailures: $.env.get('AUTO_EFFORT_ESCALATE_AFTER_FAILURES'),
+    failurePatterns: $.env.get('AUTO_EFFORT_FAILURE_PATTERNS'),
+    failureTools: $.env.get('AUTO_EFFORT_FAILURE_TOOLS'),
+    userEffortPins: $.env.get('AUTO_EFFORT_USER_EFFORT_PINS'),
+    models: $.env.get('AUTO_EFFORT_MODELS'),
+    unknownModels: $.env.get('AUTO_EFFORT_UNKNOWN_MODELS'),
+    probationSwitches: $.env.get('AUTO_EFFORT_PROBATION_SWITCHES'),
+    canaryThreshold: $.env.get('AUTO_EFFORT_CANARY_THRESHOLD'),
+    cacheTtlSeconds: $.env.get('AUTO_EFFORT_CACHE_TTL_SECONDS'),
+    statusLine: $.env.get('AUTO_EFFORT_STATUS_LINE'),
+    logFile: $.env.get('AUTO_EFFORT_LOG_FILE'),
+    lowerOnPass: $.env.get('AUTO_EFFORT_LOWER_ON_PASS'),
+    testCommandPatterns: $.env.get('AUTO_EFFORT_TEST_COMMAND_PATTERNS'),
+  };
+  const values = await Promise.all(Object.values(asked));
+  return Object.fromEntries(Object.keys(asked).map((key, index) => [key, values[index]])) as EnvValues;
+}
+
+// The variables now. A read that fails is reported and the last successful read stands: the overrides are never dropped silently.
+async function currentEnv($: EngineInterface, st: State): Promise<EnvValues> {
+  try {
+    st.env = await readEnv($);
+  } catch (error) {
+    note($, st, 'warning', 'env-unreadable', 'hooks/auto-effort.ts#currentEnv', 'reading the option environment variables', error, 'the variables of the last read stay');
+  }
+  return st.env;
+}
+
+/** The option layer: the `/config` rows of this plugin, by option. */
+function rowLayer(rows: readonly ConfigRow[]): Record<string, unknown> {
+  const layer: Record<string, unknown> = {};
+  for (const row of rows) {
+    const field = ROW_KEY.exec(row.key)?.[1];
+    if (field !== undefined && (SETTING_KEYS as readonly string[]).includes(field)) layer[field] = row.value;
+  }
+  return layer;
+}
+
+/** The settings of the layers, the variables over the options: applied, their errors reported, and where they came from kept for status. */
+function applyLayers($: EngineInterface, st: State, options: Readonly<Record<string, unknown>>, env: EnvValues, base: string) {
+  const resolved = resolveSettings(options, env);
+  st.settingsFrom = resolved.fromEnv.length === 0 ? base : `${base}; environment overrides: ${resolved.fromEnv.map(envName).join(', ')}`;
+  reportErrors($, st, resolved.errors);
+  st.ctl.applySettings(resolved.settings);
+  return resolved;
+}
+
+// The options as /config holds them now, over the options the plugin registered with, under their variables.
 async function refresh($: EngineInterface, st: State): Promise<void> {
   try {
     const rows: readonly ConfigRow[] = await $.config.list();
-    const fromRows: Record<string, unknown> = {};
-    for (const row of rows) {
-      const field = ROW_KEY.exec(row.key)?.[1];
-      if (field !== undefined && (SETTING_KEYS as readonly string[]).includes(field)) fromRows[field] = row.value;
-    }
-    st.settingsFrom = Object.keys(fromRows).length > 0 ? '/config' : 'plugin options';
-    const { settings, errors } = resolveSettings({ ...st.options, ...fromRows });
-    reportErrors($, st, errors);
-    st.ctl.applySettings(settings);
+    const fromRows = rowLayer(rows);
+    applyLayers($, st, { ...st.options, ...fromRows }, await currentEnv($, st), Object.keys(fromRows).length > 0 ? '/config' : 'plugin options');
     await saveMarks($, st, []);
     await ensureTool($, st);
   } catch (error) {
-    note($, 'reading the plugin options', error, 'the settings of the last prompt stay');
+    note($, st, 'warning', 'options-unreadable', 'hooks/auto-effort.ts#refresh', 'reading the plugin options', error, 'the settings of the last prompt stay');
   }
 }
 
@@ -316,11 +410,12 @@ async function finishStep($: EngineInterface, st: State, raw: unknown): Promise<
   try {
     const end = st.ctl.endStep(toUsage(raw));
     record($, st, end.rows);
-    if (end.toast !== undefined) present($, st.ctl.statusNow(), end.toast);
+    if (end.warning !== undefined) plog($, st, 'warning', end.warning.event, end.warning.msg, end.warning.where);
+    if (end.toast !== undefined) present($, st, st.ctl.statusNow(), end.toast);
     if (end.model !== undefined) await saveMarks($, st, [end.model]);
   } catch (error) {
     st.ctl.failStep();
-    note($, 'judging the request', error, 'the next request is not compared with it');
+    note($, st, 'warning', 'judge-failed', 'hooks/auto-effort.ts#finishStep', 'judging the request', error, 'the next request is not compared with it');
   }
 }
 
@@ -330,7 +425,7 @@ function answerSetEffort($: EngineInterface, st: State, e: Record<string, unknow
     record($, st, answer.rows);
     return { result: answer.text };
   } catch (error) {
-    note($, 'applying set_effort', error, 'the effort stays as it was');
+    note($, st, 'error', 'set-effort-failed', 'hooks/auto-effort.ts#answerSetEffort', 'applying set_effort', error, 'the effort stays as it was');
     return { result: 'Not applied: the effort stays as it was.' };
   }
 }
@@ -344,7 +439,7 @@ async function runCommand($: EngineInterface, st: State, args: string): Promise<
     case 'off':
       st.ctl.setEnabled(command.kind === 'on');
       await saveSession($, st);
-      present($, st.ctl.statusNow());
+      present($, st, st.ctl.statusNow());
       return `auto-effort is ${command.kind} for this session.`;
     case 'clear': {
       const stored = readPersisted(await $.store.get(STORE_KEY));
@@ -367,9 +462,14 @@ async function runCommand($: EngineInterface, st: State, args: string): Promise<
       const saved = await $.config.set({ key, value: typed });
       if ('deny' in saved && saved.deny !== undefined) return `Not changed: the settings refused "${command.key}": ${saved.deny}`;
       st.options[command.key] = typed;
-      st.ctl.applySettings(next.settings);
+      // What the next prompt would compute: the options with this one saved, under the variables.
+      const fromRows = rowLayer(rows);
+      const applied = applyLayers($, st, { ...st.options, ...fromRows, [command.key]: typed }, await currentEnv($, st), Object.keys(fromRows).length > 0 ? '/config' : 'plugin options');
       await ensureTool($, st);
-      present($, st.ctl.statusNow());
+      present($, st, st.ctl.statusNow());
+      const now = JSON.stringify(applied.settings[command.key]);
+      if (applied.fromEnv.includes(command.key)) return `${command.key} is saved as ${JSON.stringify(typed)}, but ${envName(command.key)} is set and still applies: ${command.key} stays ${now}.`;
+      if (now !== JSON.stringify(typed)) return `${command.key} is saved as ${JSON.stringify(typed)}, but ${now} is in effect: see the option errors in /auto-effort status.`;
       return `${command.key} is now ${JSON.stringify(typed)}.`;
     }
     case 'status': {
@@ -385,6 +485,7 @@ export const register: Register = (on, options) => {
     ctl: new Controller(settings, EMPTY_PERSISTED, () => Date.now()),
     options: { ...options },
     errors,
+    env: {},
     errorKey: '',
     settingsFrom: 'plugin options',
     starting: undefined,
@@ -397,6 +498,8 @@ export const register: Register = (on, options) => {
     unsaved: new Set(),
     segments: new Map(),
     writing: Promise.resolve(),
+    pluginWriting: Promise.resolve(),
+    pluginFailure: false,
   };
 
   on('session.start', async ($, e, next) => {
@@ -414,7 +517,7 @@ export const register: Register = (on, options) => {
       record($, st, out.rows);
       if (out.reminder !== undefined) context = [...(e.context ?? []), out.reminder];
     } catch (error) {
-      note($, 'planning the turn', error, 'the prompt goes through unchanged');
+      note($, st, 'warning', 'plan-failed', 'hooks/auto-effort.ts#prompt.submit', 'planning the turn', error, 'the prompt goes through unchanged');
     }
     return next(context === e.context ? e : { ...e, context });
   });
@@ -428,20 +531,25 @@ export const register: Register = (on, options) => {
       plan = st.ctl.beginStep({ turnId: e.turnId, index: e.index, model: e.model, effort: e.effort, messageCount: e.messageCount });
     } catch (error) {
       st.ctl.failStep();
-      note($, `choosing the effort of request ${e.index}`, error, `it goes at ${String(e.effort)}`);
+      note($, st, 'warning', 'choose-effort-failed', 'hooks/auto-effort.ts#turn.step', `choosing the effort of request ${e.index}`, error, `it goes at ${String(e.effort)}`);
     }
     if (plan !== undefined) {
       record($, st, plan.rows);
       // Never on the request's path: the save is the host's, and the request goes now.
       void saveSession($, st);
-      present($, plan.status, plan.toast);
-      if (plan.send !== undefined) request = { ...e, effort: plan.send };
+      if (plan.warning !== undefined) plog($, st, 'warning', plan.warning.event, plan.warning.msg, plan.warning.where);
+      present($, st, plan.status, plan.toast);
+      if (plan.send !== undefined) {
+        request = { ...e, effort: plan.send };
+        plog($, st, 'info', 'effort-applied', `effort applied: ${plan.send}`, 'hooks/auto-effort.ts#turn.step', { level: plan.send, source: plan.source });
+      }
     }
     let result;
     try {
       result = yield* next(request);
     } catch (error) {
       if (plan !== undefined) st.ctl.failStep();
+      plog($, st, 'error', 'hook-threw', `request failed: ${message(error)}`, 'hooks/auto-effort.ts#turn.step', { error: message(error) });
       throw error;
     }
     if (plan !== undefined) await finishStep($, st, result.usage);
@@ -455,11 +563,13 @@ export const register: Register = (on, options) => {
     if (e.agentId !== undefined || result.deny !== undefined) return result;
     try {
       const text = result.text ?? (typeof result.result === 'string' ? result.result : '');
-      const seen = st.ctl.onToolResult({ tool: e.tool, text });
+      // The tool's arguments ride beside `tool` (`e.command` for Bash); a call without a command is no test run.
+      const command = typeof e.command === 'string' ? e.command : undefined;
+      const seen = st.ctl.onToolResult({ tool: e.tool, command, text });
       record($, st, seen.rows);
       if (seen.context !== undefined) return { ...result, context: [...(result.context ?? []), seen.context] };
     } catch (error) {
-      note($, `reading the ${e.tool} result`, error, 'the result goes through unchanged');
+      note($, st, 'warning', 'tool-result-unreadable', 'hooks/auto-effort.ts#tool.call', `reading the ${e.tool} result`, error, 'the result goes through unchanged');
     }
     return result;
   });
@@ -470,7 +580,7 @@ export const register: Register = (on, options) => {
     try {
       record($, st, st.ctl.completeTurn({ turnId: e.turnId, durationMs: e.durationMs, usage: toUsage(e.usage) ?? undefined }));
     } catch (error) {
-      note($, 'recording the turn', error, 'the turn ended as it would have');
+      note($, st, 'warning', 'turn-record-failed', 'hooks/auto-effort.ts#turn.complete', 'recording the turn', error, 'the turn ended as it would have');
     }
     return result;
   });
@@ -482,13 +592,18 @@ export const register: Register = (on, options) => {
     return result;
   });
 
+  on('session.end', async ($, e, next) => {
+    await st.pluginWriting;
+    return next(e);
+  });
+
   on('command.run', { command: PLUGIN }, async ($, e) => {
     try {
       await ensureStarted($, st);
       await followSession($, st);
       return { text: await runCommand($, st, e.args) };
     } catch (error) {
-      note($, `/${PLUGIN} ${e.args}`, error, 'nothing was changed');
+      note($, st, 'error', 'command-failed', 'hooks/auto-effort.ts#command.run', `/${PLUGIN} ${e.args}`, error, 'nothing was changed');
       return { text: `/${PLUGIN} failed: ${message(error)}\n${USAGE}` };
     }
   });

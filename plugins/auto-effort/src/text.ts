@@ -41,6 +41,11 @@ export function escalationLine(failures: number, from: Effort, to: Effort): stri
   return `auto-effort: ${failures} failing test runs this turn, so your reasoning effort rises from ${from} to ${to} for the requests that follow.`;
 }
 
+/** The one line a passing test run adds when it undoes the rises of the failing streak before it. */
+export function deescalationLine(from: Effort, to: Effort): string {
+  return `auto-effort: the tests pass again, so your reasoning effort is back to ${to} from ${from} for the requests that follow.`;
+}
+
 export type Shown = 'plan' | 'model' | 'escalation' | 'pin';
 
 /** The pinned status line: `effort auto: {level} · {short reason} ({source})`. */

@@ -1,5 +1,6 @@
-// Every knob is a plugin option. Defaults agree in three places: here, plugin.json's userConfig and the README table.
-// A bad value is reported by key and value, and the default applies.
+// Every knob is a plugin option, and each also reads the environment variable AUTO_EFFORT_{OPTION} (the option in upper snake case),
+// which wins over the option, which wins over the default. Defaults agree in three places: here, plugin.json's userConfig and the README table.
+// A bad value is reported by key and value (a bad variable by its name), and the default applies.
 
 import { isEffort, LEVELS, rank, type Effort } from './levels.ts';
 import { normalizeModel } from './model.ts';
@@ -18,8 +19,10 @@ export type Settings = {
   planUpshiftChars: number;
   turnReminder: boolean;
   escalateAfterFailures: number;
+  lowerOnPass: boolean;
   failurePatterns: string[];
   failureTools: string[];
+  testCommandPatterns: string[];
   userEffortPins: boolean;
   models: string[];
   unknownModels: UnknownModels;
@@ -38,8 +41,26 @@ export const DEFAULTS: Settings = {
   planUpshiftChars: 1500,
   turnReminder: true,
   escalateAfterFailures: 2,
+  lowerOnPass: true,
   failurePatterns: ['--- FAIL', 'FAIL(ED)?', '(?<!\\d)[1-9]\\d* (failed|failing)', 'AssertionError', 'panic:', 'Traceback'],
   failureTools: ['Bash'],
+  testCommandPatterns: [
+    '\\bgo\\s+(-C\\s+\\S+\\s+)?test\\b',
+    '\\b(npm|pnpm|yarn|bun)\\s+(run\\s+)?test\\b',
+    '\\bvitest\\b',
+    '\\bjest\\b',
+    '\\bpytest\\b',
+    '\\bcargo\\s+(test|nextest)\\b',
+    '\\bmake\\b[^;&|\\n]*?\\b(test|check|verify)\\b',
+    '\\bjust\\b[^;&|\\n]*?\\b(test|check)\\b',
+    '\\b(mvn|gradle|gradlew)\\b[^;&|\\n]*?\\btest\\b',
+    '\\bdotnet\\s+test\\b',
+    '\\bdeno\\s+test\\b',
+    '\\bswift\\s+test\\b',
+    '\\bmix\\s+test\\b',
+    '\\b(rspec|phpunit|ctest|tox|nox)\\b',
+    '\\bscripts?/test[\\w.-]*\\.sh\\b',
+  ],
   userEffortPins: true,
   models: ['claude-opus-5-5=allow', 'claude-fable-5-1=allow', 'claude-sonnet-5-5=probation', 'claude-haiku-5-5=probation', 'claude-sonnet-5=deny'],
   unknownModels: 'off',
@@ -51,6 +72,12 @@ export const DEFAULTS: Settings = {
 };
 
 export const SETTING_KEYS = Object.keys(DEFAULTS) as Array<keyof Settings>;
+
+/** The variable an option reads: AUTO_EFFORT_ and the option in upper snake case (`planLevel` is AUTO_EFFORT_PLAN_LEVEL). */
+export const envName = (key: string): string => `AUTO_EFFORT_${key.replace(/[A-Z]/g, (letter) => `_${letter}`).toUpperCase()}`;
+
+/** The text of each option's variable, as the environment holds it; undefined where it is unset. */
+export type EnvValues = Readonly<Partial<Record<keyof Settings, string | undefined>>>;
 
 type Parsed<T> = { ok: true; value: T } | { ok: false; why: string };
 const good = <T>(value: T): Parsed<T> => ({ ok: true, value });
@@ -123,8 +150,10 @@ const PARSERS: { [K in keyof Settings]: (raw: unknown) => Parsed<Settings[K] | '
   planUpshiftChars: parseInt1,
   turnReminder: parseBool,
   escalateAfterFailures: parseInt1,
+  lowerOnPass: parseBool,
   failurePatterns: listOf(regexItem),
   failureTools: listOf(nameItem),
+  testCommandPatterns: listOf(regexItem),
   userEffortPins: parseBool,
   models: listOf(modelItem),
   unknownModels: parseUnknownModels,
@@ -135,15 +164,48 @@ const PARSERS: { [K in keyof Settings]: (raw: unknown) => Parsed<Settings[K] | '
   logFile: parseText,
 };
 
-function errorLine(key: string, raw: unknown, why: string): string {
-  return `auto-effort: option "${key}" is ${quote(raw)}, ${why}; using the default ${JSON.stringify(DEFAULTS[key as keyof Settings])}`;
+function errorLine(key: string, raw: unknown, why: string, from?: string): string {
+  return `auto-effort: option "${key}"${from === undefined ? '' : ` (${from})`} is ${quote(raw)}, ${why}; using the default ${JSON.stringify(DEFAULTS[key as keyof Settings])}`;
 }
 
-/** Every option read, validated and defaulted; `errors` holds one line per rejected option. */
-export function resolveSettings(raw: Readonly<Record<string, unknown>>): { settings: Settings; errors: string[] } {
+/** A variable's text as the option's own parser reads it: 1|0|true|false for a boolean, a JSON array of strings for a list. */
+function parseEnv(key: keyof Settings, text: string): Parsed<unknown> {
+  const parser = PARSERS[key] as (raw: unknown) => Parsed<unknown>;
+  if (typeof DEFAULTS[key] === 'boolean') {
+    const word = text.toLowerCase();
+    if (word === '1' || word === 'true') return good(true);
+    if (word === '0' || word === 'false') return good(false);
+    return bad('not 1, 0, true or false');
+  }
+  if (Array.isArray(DEFAULTS[key])) {
+    let list: unknown;
+    try {
+      list = JSON.parse(text);
+    } catch {
+      return bad('not a JSON array of strings');
+    }
+    if (!Array.isArray(list) || !list.every((item) => typeof item === 'string')) return bad('not a JSON array of strings');
+    return parser(list);
+  }
+  return parser(text);
+}
+
+/** Every option read, validated and defaulted: its variable (`env`), else the option (`raw`), else the default. `errors` holds one line per rejected value. */
+export function resolveSettings(raw: Readonly<Record<string, unknown>>, env: EnvValues = {}): { settings: Settings; errors: string[]; fromEnv: Array<keyof Settings> } {
   const settings: Record<string, unknown> = { ...DEFAULTS };
   const errors: string[] = [];
+  /** The options a valid variable decided: the ones a bad variable or a floor/ceiling reset gave back to the default are not among them. */
+  let fromEnv: Array<keyof Settings> = [];
   for (const key of SETTING_KEYS) {
+    const text = env[key]?.trim() ?? '';
+    if (text !== '') {
+      const parsed = parseEnv(key, text);
+      if (parsed.ok) {
+        settings[key] = parsed.value;
+        fromEnv.push(key);
+      } else errors.push(errorLine(key, text, parsed.why, `environment variable ${envName(key)}`));
+      continue;
+    }
     const value = raw[key];
     if (value === undefined) continue;
     const parsed = (PARSERS[key] as (raw: unknown) => Parsed<unknown>)(value);
@@ -152,20 +214,23 @@ export function resolveSettings(raw: Readonly<Record<string, unknown>>): { setti
   }
   const out = settings as Settings;
   if (rank(out.floor) > rank(out.ceiling)) {
-    errors.push(`auto-effort: option "floor" (${JSON.stringify(out.floor)}) is above option "ceiling" (${JSON.stringify(out.ceiling)}); using the defaults ${JSON.stringify(DEFAULTS.floor)} and ${JSON.stringify(DEFAULTS.ceiling)}`);
+    const origin = (key: 'floor' | 'ceiling'): string => (fromEnv.includes(key) ? `, from ${envName(key)}` : '');
+    errors.push(`auto-effort: option "floor" (${JSON.stringify(out.floor)}${origin('floor')}) is above option "ceiling" (${JSON.stringify(out.ceiling)}${origin('ceiling')}); using the defaults ${JSON.stringify(DEFAULTS.floor)} and ${JSON.stringify(DEFAULTS.ceiling)}`);
     out.floor = DEFAULTS.floor;
     out.ceiling = DEFAULTS.ceiling;
+    fromEnv = fromEnv.filter((key) => key !== 'floor' && key !== 'ceiling');
   }
-  return { settings: out, errors };
+  return { settings: out, errors, fromEnv };
 }
 
 export type Compiled = {
   upshift: RegExp[];
   failure: RegExp[];
+  testCommand: RegExp[];
   models: Record<string, ModelStatus>;
 };
 
-/** The lists as regular expressions (a prompt pattern ignores case, a failure pattern does not) and the model entries as a map. */
+/** The lists as regular expressions (a prompt pattern ignores case, a failure or test command pattern does not) and the model entries as a map. */
 export function compile(settings: Settings): Compiled {
   const models: Record<string, ModelStatus> = {};
   for (const entry of settings.models) {
@@ -175,6 +240,7 @@ export function compile(settings: Settings): Compiled {
   return {
     upshift: settings.planUpshiftPatterns.map((source) => new RegExp(source, 'i')),
     failure: settings.failurePatterns.map((source) => new RegExp(source)),
+    testCommand: settings.testCommandPatterns.map((source) => new RegExp(source)),
     models,
   };
 }

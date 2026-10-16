@@ -1,4 +1,9 @@
 import { readFileSync } from 'node:fs';
+import { execFile } from 'node:child_process';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { promisify } from 'node:util';
 import { describe as suite, expect, it, vi } from 'vitest';
 import { register } from '../plugins/auto-effort/hooks/auto-effort.ts';
 import { Controller } from '../plugins/auto-effort/src/controller.ts';
@@ -9,7 +14,7 @@ const TOOL = 'mcp__auto-effort__set_effort';
 const OPUS = 'claude-opus-5-5';
 const usage = (input: number, cacheRead: number, cacheWrite: number, output = 100) => ({ input_tokens: input, output_tokens: output, cache_read_input_tokens: cacheRead, cache_creation_input_tokens: cacheWrite, model: OPUS });
 
-function engine(options: Record<string, unknown> = {}, o: { configRows?: unknown[]; storeGet?: () => Promise<unknown>; storeValue?: unknown } = {}) {
+function engine(options: Record<string, unknown> = {}, o: { configRows?: unknown[]; storeGet?: () => Promise<unknown>; storeValue?: unknown; env?: Record<string, string | undefined> } = {}) {
   const hooks: Array<{ name: string; matcher?: Record<string, unknown>; fn: Hook }> = [];
   const logs: string[] = [];
   const statuses: Array<string | undefined> = [];
@@ -25,6 +30,7 @@ function engine(options: Record<string, unknown> = {}, o: { configRows?: unknown
   const state = new Map<string, unknown>();
   const stateKey = (ref: { plugin: string; key: string; id?: string }) => `${ref.plugin}/${ref.key}/${ref.id ?? ''}`;
   const $ = {
+    process: { run: async (_argv: string[], _options?: unknown) => ({ exitCode: 0, stdout: '', stderr: '' }) },
     tool: { register: async (spec: any) => (registered.push(spec), { tool: `mcp__auto-effort__${spec.name}` }) },
     command: { register: async (spec: any) => (commands.push(spec), { name: spec.name }) },
     store: {
@@ -41,7 +47,7 @@ function engine(options: Record<string, unknown> = {}, o: { configRows?: unknown
     },
     ui: { log: (line: string) => logs.push(line), status: (text?: string) => statuses.push(text), toast: (text: string) => toasts.push(text) },
     session: { id: async () => sess.id, model: async () => OPUS, cwd: async () => '/work' },
-    env: { get: async (name: string) => (name === 'HOME' ? '/fake-home/u' : undefined) },
+    env: { get: async (name: string) => (o.env === undefined ? (name === 'HOME' ? '/fake-home/u' : undefined) : o.env[name]) },
     config: {
       list: async () => o.configRows ?? [],
       set: async (args: unknown) => (configSets.push(args), { value: (args as { value: unknown }).value }),
@@ -67,6 +73,7 @@ function engine(options: Record<string, unknown> = {}, o: { configRows?: unknown
       hooks.length = 0;
       load(opts);
     },
+    end: () => find('session.end')($, {}, async () => ({})),
     start: () => find('session.start')($, { cwd: '/work', surface: null, isInteractive: true }, async (e: any) => ({ cwd: e.cwd })),
     prompt: async (text = 'fix the parser bug', extra: Record<string, unknown> = {}) => {
       let seen: any;
@@ -120,7 +127,8 @@ suite('plugin reload', () => {
     await e.prompt();
     const kept = await e.step({ turnId: 't3', effort: 'low' });
     expect(kept).toMatchObject({ effort: 'low' });
-    expect(e.statuses.at(-1)).toContain('you set /effort');
+    expect(e.statuses.some((text) => text?.startsWith('effort auto: ') === true)).toBe(true);
+    expect(e.statuses.at(-1)).toBeUndefined();
   });
 
   it('starts a new session after /clear on and unpinned, even after a reload', async () => {
@@ -511,6 +519,181 @@ suite('prompt.submit', () => {
   });
 });
 
+// The environment layer: AUTO_EFFORT_{OPTION} read through $.env.get at the start and at each prompt, over /config and the options.
+suite('environment options', () => {
+  const HOME = { HOME: '/fake-home/u' };
+  const envEngine = (env: Record<string, string>, options: Record<string, unknown> = {}) => engine(options, { env: { ...HOME, ...env } });
+  const ALL: Record<string, string> = {
+    AUTO_EFFORT_FLOOR: 'low',
+    AUTO_EFFORT_CEILING: 'max',
+    AUTO_EFFORT_PLAN_LEVEL: 'medium',
+    AUTO_EFFORT_PLAN_UPSHIFT_PATTERNS: '["\\\\bplan"]',
+    AUTO_EFFORT_PLAN_UPSHIFT_CHARS: '2000',
+    AUTO_EFFORT_TURN_REMINDER: 'false',
+    AUTO_EFFORT_ESCALATE_AFTER_FAILURES: '3',
+    AUTO_EFFORT_FAILURE_PATTERNS: '["boom"]',
+    AUTO_EFFORT_FAILURE_TOOLS: '["PowerShell"]',
+    AUTO_EFFORT_USER_EFFORT_PINS: 'false',
+    AUTO_EFFORT_MODELS: '["claude-x=deny"]',
+    AUTO_EFFORT_UNKNOWN_MODELS: 'allow',
+    AUTO_EFFORT_PROBATION_SWITCHES: '8',
+    AUTO_EFFORT_CANARY_THRESHOLD: '0.5',
+    AUTO_EFFORT_CACHE_TTL_SECONDS: '3600',
+    AUTO_EFFORT_STATUS_LINE: '0',
+    AUTO_EFFORT_LOG_FILE: '/var/log/effort.jsonl',
+    AUTO_EFFORT_LOWER_ON_PASS: 'false',
+    AUTO_EFFORT_TEST_COMMAND_PATTERNS: '["\\\\bmytest\\\\b"]',
+  };
+
+  it('reads every option from its own variable', async () => {
+    const e = envEngine(ALL);
+    await e.start();
+    await e.prompt();
+    const text = (await e.command('status')).text;
+    expect(text).toContain('settings (plugin options; environment overrides: AUTO_EFFORT_FLOOR, AUTO_EFFORT_CEILING');
+    for (const shown of ['floor=low', 'ceiling=max', 'planLevel=medium', 'planUpshiftPatterns=[\\bplan]', 'planUpshiftChars=2000', 'turnReminder=false', 'escalateAfterFailures=3', 'failurePatterns=[boom]', 'failureTools=[PowerShell]', 'userEffortPins=false', 'models=[claude-x=deny]', 'unknownModels=allow', 'probationSwitches=8', 'canaryThreshold=0.5', 'cacheTtlSeconds=3600', 'statusLine=false', 'logFile=/var/log/effort.jsonl', 'lowerOnPass=false', 'testCommandPatterns=[\\bmytest\\b]']) {
+      expect(text, shown).toContain(shown);
+    }
+    expect(e.logs.filter((line) => line.includes('option'))).toEqual([]);
+  });
+
+  it('spells each variable as a string literal in the hooks file', () => {
+    const source = readFileSync(new URL('../plugins/auto-effort/hooks/auto-effort.ts', import.meta.url), 'utf8');
+    const calls = [...source.matchAll(/\$\.env\.get\(([^)]*)\)/g)].map((m) => m[1]!.trim());
+    const named = calls.filter((arg) => arg.startsWith("'AUTO_EFFORT_")).map((arg) => arg.slice(1, -1));
+    expect(named.sort()).toEqual(Object.keys(ALL).sort());
+    expect(calls.every((arg) => /^'[A-Z_]+'$/.test(arg))).toBe(true);
+  });
+
+  it('registers set_effort for the floor and ceiling the variables give, before any prompt', async () => {
+    const e = envEngine({ AUTO_EFFORT_FLOOR: 'high', AUTO_EFFORT_CEILING: 'xhigh' }, { floor: 'low', ceiling: 'max' });
+    await e.start();
+    expect(e.registered).toHaveLength(1);
+    expect(e.registered[0].inputSchema.properties.level.enum).toEqual(['high', 'xhigh']);
+  });
+
+  it('lets a variable beat /config and the registered options at the next prompt', async () => {
+    const e = envEngine({ AUTO_EFFORT_PLAN_LEVEL: 'medium' }, { planLevel: 'xhigh' });
+    await e.start();
+    e.$.config.list = async () => [{ key: 'auto-effort.planLevel', value: 'xhigh', kind: 'text' }];
+    await e.prompt();
+    expect(await e.step({})).toMatchObject({ effort: 'medium' });
+  });
+
+  it('reports a bad variable by name, in the log and in status, and uses the default', async () => {
+    const e = envEngine({ AUTO_EFFORT_PLAN_LEVEL: 'bogus' }, { planLevel: 'xhigh' });
+    await e.start();
+    await e.prompt();
+    expect(await e.step({})).toMatchObject({ effort: 'high' });
+    expect(e.logs.filter((line) => line.includes('AUTO_EFFORT_PLAN_LEVEL'))).toHaveLength(1);
+    expect((await e.command('status')).text).toContain('option errors:\n  auto-effort: option "planLevel" (environment variable AUTO_EFFORT_PLAN_LEVEL) is "bogus"');
+  });
+
+  it('applies an unset variable as absent: the option decides', async () => {
+    const e = envEngine({ AUTO_EFFORT_PLAN_LEVEL: '  ' }, { planLevel: 'xhigh' });
+    await e.start();
+    await e.prompt();
+    expect(await e.step({})).toMatchObject({ effort: 'xhigh' });
+    expect((await e.command('status')).text).toContain('settings (plugin options)');
+  });
+
+  it('says so when `set` saves an option a variable still overrides', async () => {
+    const e = envEngine({ AUTO_EFFORT_PLAN_LEVEL: 'medium' });
+    await e.start();
+    const reply = (await e.command('set planLevel low')).text;
+    expect(e.configSets).toEqual([{ key: 'auto-effort.planLevel', value: 'low' }]);
+    expect(reply).toBe('planLevel is saved as "low", but AUTO_EFFORT_PLAN_LEVEL is set and still applies: planLevel stays "medium".');
+    await e.prompt();
+    expect(await e.step({})).toMatchObject({ effort: 'medium' });
+  });
+
+  // A read that fails (a host refusal) is said once per read, and the variables of the last good read stay.
+  const failEnv = (e: ReturnType<typeof engine>) => {
+    const read = e.$.env.get;
+    e.$.env.get = async (name: string) => {
+      if (name.startsWith('AUTO_EFFORT_')) throw new Error('env unavailable');
+      return read(name);
+    };
+  };
+
+  it('keeps the variables of the last read, still applies /config, and names the environment when a read fails', async () => {
+    const e = envEngine({ AUTO_EFFORT_FLOOR: 'high' });
+    await e.start();
+    failEnv(e);
+    e.$.config.list = async () => [{ key: 'auto-effort.planLevel', value: 'xhigh', kind: 'text' }];
+    await e.prompt();
+    expect(await e.step({})).toMatchObject({ effort: 'xhigh' });
+    expect((await e.command('status')).text).toContain('floor=high');
+    expect(e.logs.some((line) => line.includes('reading the option environment variables failed: env unavailable'))).toBe(true);
+    expect(e.logs.some((line) => line.includes('reading the plugin options'))).toBe(false);
+  });
+
+  it('starts, registers the tool and says why when the environment cannot be read at the start', async () => {
+    const e = envEngine({});
+    failEnv(e);
+    await e.start();
+    expect(e.registered).toHaveLength(1);
+    expect(e.logs.some((line) => line.includes('reading the option environment variables failed: env unavailable'))).toBe(true);
+  });
+
+  it('reads the variables in one parallel round per prompt', async () => {
+    const e = envEngine({});
+    await e.start();
+    const read = e.$.env.get;
+    const seen = { calls: 0, inFlight: 0, peak: 0 };
+    e.$.env.get = async (name: string) => {
+      if (!name.startsWith('AUTO_EFFORT_')) return read(name);
+      seen.calls += 1;
+      seen.inFlight += 1;
+      seen.peak = Math.max(seen.peak, seen.inFlight);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      seen.inFlight -= 1;
+      return read(name);
+    };
+    await e.prompt();
+    expect(seen).toEqual({ calls: 19, inFlight: 0, peak: 19 });
+  });
+
+  it('answers `set` as a success when the environment cannot be read', async () => {
+    const e = envEngine({});
+    await e.start();
+    failEnv(e);
+    const reply = (await e.command('set planLevel low')).text;
+    expect(reply).toBe('planLevel is now "low".');
+    expect(e.configSets).toEqual([{ key: 'auto-effort.planLevel', value: 'low' }]);
+  });
+
+  it('applies on `set` what the next prompt computes, and says so when a floor/ceiling conflict resets it', async () => {
+    const e = envEngine({ AUTO_EFFORT_FLOOR: 'high' }, { ceiling: 'medium' });
+    await e.start();
+    await e.prompt();
+    const conflict = 'floor=medium ceiling=xhigh';
+    expect((await e.command('status')).text).toContain(conflict);
+    const reply = (await e.command('set ceiling medium')).text;
+    expect(reply).toBe('ceiling is saved as "medium", but "xhigh" is in effect: see the option errors in /auto-effort status.');
+    expect((await e.command('status')).text).toContain(conflict);
+    await e.command('set planLevel xhigh');
+    expect((await e.command('status')).text).toContain(conflict);
+    expect(e.registered.at(-1).inputSchema.properties.level.enum).toEqual(['medium', 'high', 'xhigh']);
+  });
+
+  it('names the variable behind a floor/ceiling conflict', async () => {
+    const e = envEngine({ AUTO_EFFORT_CEILING: 'low' }, { floor: 'high' });
+    await e.start();
+    expect(e.logs.some((line) => line.includes('option "ceiling" ("low", from AUTO_EFFORT_CEILING)'))).toBe(true);
+  });
+
+  it('counts only a variable that applies as in effect, in status and in the `set` reply', async () => {
+    const e = envEngine({ AUTO_EFFORT_PLAN_LEVEL: 'bogus', AUTO_EFFORT_STATUS_LINE: '0' });
+    await e.start();
+    await e.prompt();
+    const status = (await e.command('status')).text;
+    expect(status).toContain('settings (plugin options; environment overrides: AUTO_EFFORT_STATUS_LINE):');
+    const reply = (await e.command('set planLevel low')).text;
+    expect(reply).toBe('planLevel is saved as "low", but "high" is in effect: see the option errors in /auto-effort status.');
+  });
+});
+
 suite('set_effort and escalation', () => {
   it('serves set_effort and applies the level from the next request', async () => {
     const e = engine();
@@ -529,22 +712,46 @@ suite('set_effort and escalation', () => {
     expect(await e.tool({ tool: TOOL, level: 'medium', agentId: 'agent-7' })).toEqual({ result: 'Not applied: set_effort applies to the main chat only.' });
   });
 
-  it('adds the escalation line to the second failing Bash result of the main chat only', async () => {
+  it('adds the escalation line to the second failing test run of the main chat only, and the lowering line to the passing one', async () => {
     const e = engine();
     await e.start();
     await e.prompt();
     await e.step({});
     await e.tool({ tool: TOOL, level: 'medium', reason: 'rename' });
     await e.step({ index: 1 });
+    const run = { command: 'npm test' };
     const failing = { result: 'x', text: '2 failed, 1 passed', context: ['from another hook'] };
-    expect((await e.tool({}, failing)).context).toEqual(['from another hook']);
-    expect((await e.tool({ agentId: 'agent-7' }, failing)).context).toEqual(['from another hook']);
-    const second = await e.tool({}, failing);
+    expect((await e.tool(run, failing)).context).toEqual(['from another hook']);
+    expect((await e.tool({ ...run, agentId: 'agent-7' }, failing)).context).toEqual(['from another hook']);
+    expect((await e.tool({ command: 'cat test.log' }, failing)).context).toEqual(['from another hook']);
+    const second = await e.tool(run, failing);
     expect(second.context).toHaveLength(2);
     expect(second.context[0]).toBe('from another hook');
     expect(second.context[1]).toContain('medium');
     expect(second.context[1]).toContain('high');
     expect(await e.step({ index: 2 })).toMatchObject({ effort: 'high' });
+    const passing = await e.tool(run, { result: 'x', text: '3 passed', context: ['from another hook'] });
+    expect(passing.context).toHaveLength(2);
+    expect(passing.context[1]).toContain('back to medium from high');
+    expect(await e.step({ index: 3 })).toMatchObject({ effort: 'medium' });
+  });
+
+  it('hands the controller the call\'s command beside the result text, and nothing for a call without one', async () => {
+    const e = engine();
+    await e.start();
+    const spy = vi.spyOn(Controller.prototype, 'onToolResult');
+    try {
+      await e.tool({ command: 'go test ./...' }, { result: 'x', text: 'FAILED' });
+      await e.tool({ tool: 'Read', file_path: 'a.txt' }, { result: 'x', text: 'body' });
+      await e.tool({ command: 42 }, { result: 'x', text: 'ok' });
+      expect(spy.mock.calls.map((call) => call[0])).toEqual([
+        { tool: 'Bash', command: 'go test ./...', text: 'FAILED' },
+        { tool: 'Read', command: undefined, text: 'body' },
+        { tool: 'Bash', command: undefined, text: 'ok' },
+      ]);
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it('passes a tool result through untouched when the decision fails', async () => {
@@ -685,7 +892,7 @@ suite('/auto-effort', () => {
     await e.prompt();
     await e.step({});
     const { text } = await e.command('');
-    expect(text).toContain('auto-effort 0.1.0 · on');
+    expect(text).toContain('auto-effort 0.2.3 · on');
     expect(text).toContain('level: high');
     expect(text).toContain('floor=medium');
     expect((await e.command('status')).text).toBe(text);
@@ -736,5 +943,79 @@ suite('manifest', () => {
     expect(json('package.json').version).toBe(plugin.version);
     expect(json('.claude-plugin/marketplace.json').plugins[0].version).toBe(plugin.version);
     expect(json('plugins/auto-effort/hooks/hooks.json')).toEqual({ modules: ['./auto-effort.ts'] });
+  });
+});
+
+
+suite('plugin log adapter', () => {
+  it.each([true, false])('writes error, warning and applied effort with PLUGIN_LOG_DIR set=%s', async (set) => {
+    const home = await mkdtemp(join(tmpdir(), 'auto-effort-adapter-'));
+    const root = join(home, 'logs');
+    const dir = set ? join(root, 'auto-effort') : join(home, '.local/state/auto-effort/logs');
+    const e = engine({ floor: 'lowest', logFile: '' }, { env: { HOME: home, PLUGIN_LOG_DIR: set ? root : undefined } });
+    e.$.process.run = async (argv) => { const r = await promisify(execFile)('/bin/sh', argv.slice(1)); return { exitCode: 0, ...r }; };
+    await e.start(); await e.start();
+    await e.prompt(); await e.step({}); await e.step({ index: 1, effort: 'high' });
+    const spy = vi.spyOn(Controller.prototype, 'setEffort').mockImplementation(() => { throw new Error('unknown level'); });
+    try {
+      expect(await e.tool({ tool: TOOL, level: 'medium' })).toEqual({ result: 'Not applied: the effort stays as it was.' });
+      expect(e.logs).toContain('auto-effort: applying set_effort failed: unknown level; the effort stays as it was');
+      // The unfixed tree has no end hook; observe missing rows as assertions, not a helper exception.
+      const end = e.hooks.find((h) => h.name === 'session.end');
+      if (end) await e.end();
+      const read = async (file: string) => { try { return (await readFile(join(dir, file), 'utf8')).trim().split('\n').map((l) => JSON.parse(l)); } catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []; throw error; } };
+      expect(await read('errors.jsonl')).toEqual([expect.objectContaining({ level: 'error', event: 'set-effort-failed', where: 'hooks/auto-effort.ts#answerSetEffort', session: 'sess1', detail: { error: 'unknown level' } })]);
+      expect(await read('warnings.jsonl')).toEqual([expect.objectContaining({ level: 'warning', event: 'option-error', where: 'hooks/auto-effort.ts#reportErrors' })]);
+      expect(await read('info.jsonl')).toEqual(expect.arrayContaining([expect.objectContaining({ level: 'info', event: 'effort-applied', session: 'sess1', detail: { level: 'high', source: 'plan' } })]));
+    } finally { spy.mockRestore(); await rm(home, { recursive: true, force: true }); }
+  });
+
+  it('keeps work results and reports one contextual process failure until recovery', async () => {
+    const e = engine({ floor: 'lowest', logFile: '' }, { env: { HOME: '/isolated/home', PLUGIN_LOG_DIR: '/isolated/logs' } });
+    e.$.process.run = async () => { throw new Error('cannot spawn'); };
+    await e.start();
+    await e.prompt();
+    const end = e.hooks.find((h) => h.name === 'session.end');
+    if (end) await e.end();
+    const notices = () => e.logs.filter((s) => s.includes('plugin log '));
+    expect(notices()).toEqual([expect.stringContaining('/isolated/logs/auto-effort: cannot spawn')]);
+    e.$.config.list = async () => { throw new Error('bad config'); };
+    expect((await e.prompt('unchanged')).text).toBe('unchanged');
+    await e.end();
+    expect(notices()).toHaveLength(1);
+    e.$.process.run = async () => ({ exitCode: 0, stdout: '', stderr: '' });
+    await e.prompt(); await e.end();
+    e.$.process.run = async () => { throw new Error('second outage'); };
+    await e.prompt(); await e.end();
+    expect(notices()).toHaveLength(2);
+    expect(notices()[1]).toContain('second outage');
+  });
+
+  it('names missing env/home without throwing or blocking a prompt', async () => {
+    const e = engine({ floor: 'lowest', logFile: '' }, { env: {} });
+    await e.start();
+    expect((await e.prompt('unchanged')).text).toBe('unchanged');
+    const end = e.hooks.find((h) => h.name === 'session.end');
+    if (end) await e.end();
+    expect(e.logs.filter((s) => s.includes('plugin log off:'))).toEqual([expect.stringContaining('plugin log off: no PLUGIN_LOG_DIR and no HOME')]);
+  });
+
+  it('logs applied rewrites only, and preserves a next-hook rethrow', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'auto-effort-changes-'));
+    const e = engine({ logFile: '' }, { env: { HOME: home, PLUGIN_LOG_DIR: home } });
+    e.$.process.run = async (argv) => { const r = await promisify(execFile)('/bin/sh', argv.slice(1)); return { exitCode: 0, ...r }; };
+    try {
+      await e.start(); await e.prompt(); await e.step({});
+      await e.step({ index: 1, effort: 'high' });
+      const error = new Error('upstream failed');
+      const hook = e.hooks.find((h) => h.name === 'turn.step')!.fn;
+      const gen = hook(e.$, { turnId: 't1', index: 2, model: OPUS, effort: 'high', messageCount: 3 }, () => (async function* () { throw error; })());
+      await expect(gen.next()).rejects.toBe(error);
+      const end = e.hooks.find((h) => h.name === 'session.end');
+      if (end) await e.end();
+      const read = async (level: string) => { try { return (await readFile(join(home, 'auto-effort', level + '.jsonl'), 'utf8')).trim().split('\n').map((l) => JSON.parse(l)); } catch (err) { if ((err as NodeJS.ErrnoException).code === 'ENOENT') return []; throw err; } };
+      expect((await read('info')).filter((r) => r.event === 'effort-applied')).toEqual([expect.objectContaining({ detail: { level: 'high', source: 'plan' } })]);
+      expect(await read('errors')).toEqual([expect.objectContaining({ event: 'hook-threw', where: 'hooks/auto-effort.ts#turn.step', detail: { error: 'upstream failed' } })]);
+    } finally { await rm(home, { recursive: true, force: true }); }
   });
 });

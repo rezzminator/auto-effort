@@ -1,6 +1,6 @@
 {
   "name": "auto-effort",
-  "version": "0.1.0",
+  "version": "0.2.3",
   "description": "Automatic reasoning effort for the Claude Code main chat: the plugin plans each turn, the model raises or lowers it with set_effort, and a cache check keeps it safe.",
   "license": "MIT",
   "types": "./contract.d.ts",
@@ -63,15 +63,21 @@
     },
     "escalateAfterFailures": {
       "type": "number",
-      "title": "escalateAfterFailures: failing test runs that raise the effort one step",
-      "description": "After this many failing test runs in one turn the effort rises one step, up to the ceiling, for the requests that follow; the count then starts again.",
+      "title": "escalateAfterFailures: failing test runs in a row that raise the effort one step",
+      "description": "After this many failing test runs in a row in one turn the effort rises one step, up to the ceiling, for the requests that follow; the count then starts again. A passing test run sets the count back to 0.",
       "default": 2,
       "min": 1
+    },
+    "lowerOnPass": {
+      "type": "boolean",
+      "title": "lowerOnPass: a passing test run undoes the rise of failing ones",
+      "description": "On: the first passing test run after a rise returns the effort to the level the turn had before its failing streak raised it (never below floor), unless the model set a level with set_effort since. Off: the raised level holds until the turn ends.",
+      "default": true
     },
     "failurePatterns": {
       "type": "string",
       "title": "failurePatterns: what counts as a failing test run (regular expressions)",
-      "description": "One regular expression per entry, matched case-sensitively against a tool result. A result that matches any entry counts as one failing test run.",
+      "description": "One regular expression per entry, matched case-sensitively against the result of a test run (see testCommandPatterns). A test run whose result matches any entry fails; one that matches none passes.",
       "default": [
         "--- FAIL",
         "FAIL(ED)?",
@@ -84,10 +90,33 @@
     },
     "failureTools": {
       "type": "string",
-      "title": "failureTools: the tools whose results count failing test runs",
-      "description": "One tool name per entry (Bash runs the tests). Only results of these tools are matched against failurePatterns.",
+      "title": "failureTools: the tools whose calls can be test runs",
+      "description": "One tool name per entry (Bash runs the tests). A call of these tools whose command matches testCommandPatterns is a test run; its result is matched against failurePatterns.",
       "default": [
         "Bash"
+      ],
+      "multiple": true
+    },
+    "testCommandPatterns": {
+      "type": "string",
+      "title": "testCommandPatterns: which commands are test runs (regular expressions)",
+      "description": "One regular expression per entry, matched case-sensitively against the command of a failureTools call. A call whose command matches any entry is a test run and counts as failing or passing; the output of any other command (cat, grep, a build) counts nothing. A run sent to the background counts neither way.",
+      "default": [
+        "\\bgo\\s+(-C\\s+\\S+\\s+)?test\\b",
+        "\\b(npm|pnpm|yarn|bun)\\s+(run\\s+)?test\\b",
+        "\\bvitest\\b",
+        "\\bjest\\b",
+        "\\bpytest\\b",
+        "\\bcargo\\s+(test|nextest)\\b",
+        "\\bmake\\b[^;&|\\n]*?\\b(test|check|verify)\\b",
+        "\\bjust\\b[^;&|\\n]*?\\b(test|check)\\b",
+        "\\b(mvn|gradle|gradlew)\\b[^;&|\\n]*?\\btest\\b",
+        "\\bdotnet\\s+test\\b",
+        "\\bdeno\\s+test\\b",
+        "\\bswift\\s+test\\b",
+        "\\bmix\\s+test\\b",
+        "\\b(rspec|phpunit|ctest|tox|nox)\\b",
+        "\\bscripts?/test[\\w.-]*\\.sh\\b"
       ],
       "multiple": true
     },
@@ -141,7 +170,7 @@
     "statusLine": {
       "type": "boolean",
       "title": "statusLine: pin the level and its reason to the status area",
-      "description": "On: one line shows the level held, why, and what decided it (plan, model, escalation or pin). Off: nothing is shown.",
+      "description": "On: one line shows the level held, why, and what decided it (plan, model or escalation); after your own `/effort` (a pin) it shows nothing. Off: nothing is shown.",
       "default": true
     },
     "logFile": {

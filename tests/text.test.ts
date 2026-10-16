@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { escalationLine, reminderLine, shortReason, statusLine, toolDescription } from '../plugins/auto-effort/src/text.ts';
+import { deescalationLine, escalationLine, reminderLine, shortReason, statusLine, toolDescription } from '../plugins/auto-effort/src/text.ts';
 
 // R3: the description is the model's only guide; it lists the levels the clamp lets through.
 describe('toolDescription', () => {
@@ -47,6 +47,15 @@ describe('escalationLine', () => {
     expect(line).toContain('2');
     expect(line).toContain('medium');
     expect(line).toContain('high');
+    expect(line.split('\n')).toHaveLength(1);
+  });
+});
+
+describe('deescalationLine', () => {
+  it('says the tests pass again and names both levels in one line', () => {
+    const line = deescalationLine('xhigh', 'medium');
+    expect(line).toMatch(/tests pass again/);
+    expect(line).toMatch(/back to medium from xhigh/);
     expect(line.split('\n')).toHaveLength(1);
   });
 });
