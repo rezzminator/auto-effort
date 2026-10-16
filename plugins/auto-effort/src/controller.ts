@@ -211,8 +211,8 @@ export class Controller {
   statusNow(): string | undefined {
     if (!this.settingsNow.statusLine || !this.enabled) return undefined;
     if (this.lastModel !== undefined && !this.gate(this.lastModel).active) return undefined;
-    if (this.pin !== null) return statusLine(this.pin.level, 'you set /effort', 'pin');
-    if (this.turn === null) return undefined;
+    // The user's own /effort is no news to them: a pinned session shows nothing; the pin row stays in the decision log.
+    if (this.pin !== null || this.turn === null) return undefined;
     return statusLine(this.turn.level, this.turn.reason, this.turn.source);
   }
 
@@ -265,7 +265,7 @@ export class Controller {
     }
     if (this.pin !== null) {
       const plan = this.inactive(input, effort, 'you set /effort', gate, newTurn, rows, undefined, 'pin');
-      return { ...plan, level: this.pin.level, status: s.statusLine ? statusLine(this.pin.level, 'you set /effort', 'pin') : undefined };
+      return { ...plan, level: this.pin.level };
     }
 
     if (this.turn === null || this.turn.id !== input.turnId) {

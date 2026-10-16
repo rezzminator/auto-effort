@@ -5,7 +5,7 @@
 **Automatic reasoning effort for the Claude Code main chat: each turn starts at a planned level, the model raises or lowers it with one tool call, and a cache check keeps every change safe.**
 
 [![Claude Code plugin](https://img.shields.io/badge/Claude%20Code-plugin-D97757)](https://docs.claude.com/en/docs/claude-code/plugins)
-[![Version](https://img.shields.io/badge/version-0.2.2-blue)](./CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.2.3-blue)](./CHANGELOG.md)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](./LICENSE)
 
 </div>
@@ -66,7 +66,7 @@ Requires Claude Code with function hooks (tested on 2.1.296).
 | --- | --- |
 | `session.start` | Registers the `set_effort` tool (always loaded, never behind tool search) and the `/auto-effort` command; loads the saved model marks. |
 | `prompt.submit` | Reads the options as `/config` holds them, then adds one context line: the level the turn starts at and a request to call `set_effort` first. |
-| `turn.step` | Before each main-chat request, rewrites its `effort` to the level held for the turn (only when it differs from the effort the request carries), pins the status line, and afterwards runs the cache check on the answer's token usage. A sub-agent's request passes untouched. |
+| `turn.step` | Before each main-chat request, rewrites its `effort` to the level held for the turn (only when it differs from the effort the request carries), pins the status line (and clears it under your own `/effort`), and afterwards runs the cache check on the answer's token usage. A sub-agent's request passes untouched. |
 | `tool.call` | Serves `set_effort`; reads each main-chat call of `failureTools` whose command matches `testCommandPatterns` as a test run, failing when its result matches `failurePatterns` and passing otherwise. At the threshold of failing runs in a row it adds one line to the result telling the model its level rose; with `lowerOnPass`, the next passing run adds one line saying the level is back. |
 | `turn.complete` | Writes the turn's summary row to the decision log. |
 | `session.compact` | Notes the compaction, so the cache check does not judge the switch right after it. |
@@ -123,7 +123,7 @@ The order, highest first: the environment variable, the option (`/config`, `sett
 | `probationSwitches` | `AUTO_EFFORT_PROBATION_SWITCHES` | `5` | How many effort switches in a row of a probation model must keep the cache (see canaryThreshold) before it counts as allow. |
 | `canaryThreshold` | `AUTO_EFFORT_CANARY_THRESHOLD` | `0.9` | After an effort change, the switched request must read at least this fraction of the previous request's whole prompt from the prompt cache. Below it the plugin stops changing effort on that model, tells you once, and remembers across sessions until /auto-effort clear. |
 | `cacheTtlSeconds` | `AUTO_EFFORT_CACHE_TTL_SECONDS` | `300` | When more than this many seconds passed between two requests the cache may have expired on its own, so the check judges nothing. 300 fits the five-minute cache; use 3600 with the one-hour cache. |
-| `statusLine` | `AUTO_EFFORT_STATUS_LINE` | `true` | On: one line shows the level held, why, and what decided it (plan, model, escalation or pin). Off: nothing is shown. |
+| `statusLine` | `AUTO_EFFORT_STATUS_LINE` | `true` | On: one line shows the level held, why, and what decided it (plan, model or escalation); after your own `/effort` (a pin) it shows nothing. Off: nothing is shown. |
 | `logFile` | `AUTO_EFFORT_LOG_FILE` | `~/.local/state/auto-effort/decisions.jsonl` | Where decisions are appended, one JSON row per decision, request and turn, never the prompt text. The session id is inserted before the extension, one file per session; after 1000 rows the next file starts (`decisions.<session>.2.jsonl`, `.3.jsonl`, ...). A leading ~ is your home directory. Empty: no log. |
 
 ## The decision log

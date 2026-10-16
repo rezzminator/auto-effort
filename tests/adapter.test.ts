@@ -127,7 +127,8 @@ suite('plugin reload', () => {
     await e.prompt();
     const kept = await e.step({ turnId: 't3', effort: 'low' });
     expect(kept).toMatchObject({ effort: 'low' });
-    expect(e.statuses.at(-1)).toContain('you set /effort');
+    expect(e.statuses.some((text) => text?.startsWith('effort auto: ') === true)).toBe(true);
+    expect(e.statuses.at(-1)).toBeUndefined();
   });
 
   it('starts a new session after /clear on and unpinned, even after a reload', async () => {
@@ -891,7 +892,7 @@ suite('/auto-effort', () => {
     await e.prompt();
     await e.step({});
     const { text } = await e.command('');
-    expect(text).toContain('auto-effort 0.2.2 · on');
+    expect(text).toContain('auto-effort 0.2.3 · on');
     expect(text).toContain('level: high');
     expect(text).toContain('floor=medium');
     expect((await e.command('status')).text).toBe(text);

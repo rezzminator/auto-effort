@@ -390,18 +390,21 @@ describe('user pin (R7)', () => {
     return r;
   }
 
-  it('steps aside when the session effort changed between turns, and shows the pin', () => {
+  it('steps aside when the session effort changed between turns, and shows nothing while pinned', () => {
     const r = pinned();
+    expect(r.ctl.statusNow()).toMatch(/^effort auto: /);
     const plan = r.step('t3', 0, { effort: 'medium' }).plan;
     expect(plan).toMatchObject({ send: undefined, level: 'medium', source: 'pin', newTurn: true });
-    expect(plan.status).toBe('effort auto: medium · you set /effort (pin)');
+    expect(plan.status).toBeUndefined();
+    expect(r.ctl.statusNow()).toBeUndefined();
     expect(r.step('t3', 1, { effort: 'medium' }).plan).toMatchObject({ send: undefined, source: 'pin' });
     r.prompt();
     expect(r.step('t4', 0, { effort: 'medium' }).plan).toMatchObject({ send: undefined, source: 'pin' });
     r.prompt();
     const again = r.step('t5', 0, { effort: 'low' }).plan;
     expect(again).toMatchObject({ send: undefined, level: 'low', source: 'pin' });
-    expect(again.status).toBe('effort auto: low · you set /effort (pin)');
+    expect(again.status).toBeUndefined();
+    expect(r.ctl.statusNow()).toBeUndefined();
     expect(r.ctl.sessionState()).toEqual({ enabled: true, pin: 'low' });
   });
 

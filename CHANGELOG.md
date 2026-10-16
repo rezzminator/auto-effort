@@ -4,6 +4,12 @@ All notable changes to this plugin are recorded here. The format follows [Keep a
 
 ## [Unreleased]
 
+## [0.2.3] — 2026-10-16
+
+### Fixed
+
+- Your own `/effort` no longer puts a line in the status area: a pinned session shows nothing, where the chat showed `⚠ auto-effort: effort auto: xhigh · you set /effort (pin)`. The `pin` row stays in the decision log.
+
 ## [0.2.2] — 2026-10-16
 
 ### Added
