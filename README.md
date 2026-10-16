@@ -5,7 +5,7 @@
 **Automatic reasoning effort for the Claude Code main chat: each turn starts at a planned level, the model raises or lowers it with one tool call, and a cache check keeps every change safe.**
 
 [![Claude Code plugin](https://img.shields.io/badge/Claude%20Code-plugin-D97757)](https://docs.claude.com/en/docs/claude-code/plugins)
-[![Version](https://img.shields.io/badge/version-0.2.1-blue)](./CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.2.2-blue)](./CHANGELOG.md)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](./LICENSE)
 
 </div>

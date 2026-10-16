@@ -891,7 +891,7 @@ suite('/auto-effort', () => {
     await e.prompt();
     await e.step({});
     const { text } = await e.command('');
-    expect(text).toContain('auto-effort 0.2.1 · on');
+    expect(text).toContain('auto-effort 0.2.2 · on');
     expect(text).toContain('level: high');
     expect(text).toContain('floor=medium');
     expect((await e.command('status')).text).toBe(text);

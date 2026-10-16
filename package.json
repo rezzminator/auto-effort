@@ -1,6 +1,6 @@
 {
   "name": "auto-effort",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "private": true,
   "description": "Sets the main chat's reasoning effort for the work at hand: a planning level at each turn's start, a set_effort tool the model calls, escalation on repeated test failures, and a cache canary.",
   "type": "module",
