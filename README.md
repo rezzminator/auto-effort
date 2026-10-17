@@ -27,7 +27,7 @@ With this plugin the main chat's effort follows the work:
 - **Failing tests raise it, passing tests bring it back** while the automatic rules hold: two failing test runs in a row lift the level one step, and the next passing run returns it to where the failures found it. Only a test command counts: the output of `cat`, `grep` or a build that happens to print `FAIL` does not.
 - **A cache check keeps it safe.** Changing effort mid-turn must not break the prompt cache. After every change the plugin compares the cache read of the switched request with the previous request's prompt; if it drops, the plugin stops changing effort on that model and records a warning in its plugin log.
 
-Sub-agents are never touched; they keep the effort Claude Code gives them (see [agent-effort](https://github.com/rezzminator/agent-effort) to set theirs per spawn).
+Sub-agents are never touched; they keep the effort Claude Code gives them (see [effort-live-control](https://github.com/rezzminator/effort-live-control) to set theirs per spawn).
 
 ## Quick start
 
