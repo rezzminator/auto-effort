@@ -1,6 +1,6 @@
 {
   "name": "auto-effort",
-  "version": "0.2.4-alpha",
+  "version": "0.2.4-dev.2",
   "description": "Automatic reasoning effort for the Claude Code main chat: the plugin plans each turn, the model raises or lowers it with set_effort, and a cache check keeps it safe.",
   "license": "MIT",
   "types": "./contract.d.ts",
@@ -169,8 +169,8 @@
     },
     "statusLine": {
       "type": "boolean",
-      "title": "statusLine: pin the level and its reason to the status area",
-      "description": "On: one line shows the level held, why, and what decided it (plan, model or escalation); after your own `/effort` (a pin) it shows nothing. Off: nothing is shown.",
+      "title": "statusLine: show why the effort changed, as a notice",
+      "description": "On: when the effort's mode, level or reason changes, a short notice shows the reason alone. The mode and level themselves are in stateFile, for a status line to show. Off: no such notice.",
       "default": true
     },
     "logFile": {
@@ -178,6 +178,12 @@
       "title": "logFile: the decision log (JSONL)",
       "description": "Where decisions are appended, one JSON row per decision, request and turn, never the prompt text. The session id is inserted before the extension, one file per session; after 1000 rows the next file starts (decisions.<session>.2.jsonl, .3.jsonl, ...). A leading ~ is your home directory. Empty: no log.",
       "default": "~/.local/state/auto-effort/decisions.jsonl"
+    },
+    "stateFile": {
+      "type": "string",
+      "title": "stateFile: the effort's mode, level and reason, for a status line",
+      "description": "One JSON line per session naming the mode the main chat's effort is in (auto, model, pin or off), its level, the reason and the keeper that vouches for it, rewritten when one of them changes; the line at a path the plugin leaves is retired (keeper 0). The session id is inserted before the extension (state.<session>.json). A leading ~ is your home directory; a relative path is under the session's working directory, so give an absolute one. Empty: no file.",
+      "default": "~/.local/state/auto-effort/state.json"
     }
   }
 }

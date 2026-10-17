@@ -10,7 +10,7 @@ A Claude Code function-hooks plugin: automatic reasoning effort for the main cha
 - `plugins/auto-effort/src/`: every decision, pure and unit-tested. `controller.ts` holds the turn state; `settings.ts` the options, their defaults and their environment variables `AUTO_EFFORT_{OPTION}` (upper snake), each read by a string-literal `$.env.get` in the adapter's `readEnv`; `gate.ts` the model gate and the saved marks; `canary.ts` the cache check; `plan.ts` the planning level; `text.ts` every sentence the model or the user reads; `command.ts` `/auto-effort`; `log.ts` the decision log paths.
 - `tests/`: one vitest file per concern; `adapter.test.ts` drives the hooks module over a stand-in engine.
 - `types/claude-code.d.ts`: the plugin API (from `/plugin-types`), the truth for every hook's shape; grep it before using an event.
-- `plugins/auto-effort/.claude-plugin/`: `plugin.json` (the manifest and the 17 `userConfig` options) and `icon.svg`; the root `.claude-plugin/marketplace.json` makes the repo its own marketplace.
+- `plugins/auto-effort/.claude-plugin/`: `plugin.json` (the manifest and the 20 `userConfig` options) and `icon.svg`; the root `.claude-plugin/marketplace.json` makes the repo its own marketplace.
 - `scripts/dev-marketplace.sh`: builds the local `auto-effort-dev` directory marketplace from a checkout; `scripts/release-check.sh`: the version places.
 
 ## Commands

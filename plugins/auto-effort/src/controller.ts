@@ -4,14 +4,18 @@
 import { judgeSwitch, wholePrompt, type Usage } from './canary.ts';
 import type { View } from './command.ts';
 import { cleanSwitch, clearUnsafe, gateOf, markUnsafe, type Gate, type Persisted } from './gate.ts';
-import { clamp, isEffort, levelsWithin, rank, stepUp, type Effort } from './levels.ts';
+import { clamp, isEffort, levelsWithin, stepUp, type Effort } from './levels.ts';
 import { normalizeModel } from './model.ts';
 import { planFor } from './plan.ts';
 import { compile, type Compiled, type Settings } from './settings.ts';
-import { deescalationLine, escalationLine, quote, reminderLine, shortReason, statusLine, type Shown } from './text.ts';
+import { stateOf, type EffortState } from './state.ts';
+import { deescalationLine, escalationLine, handBackText, heldLine, overrideReminderLine, quote, reminderLine, setText, shortReason } from './text.ts';
 
 export type Row = Record<string, unknown>;
-export type Source = Shown;
+/** What decided a turn's level: the planning level, the main chat's own set_effort level, a failing-test rise, the user's /effort. */
+export type Source = 'plan' | 'model' | 'escalation' | 'pin';
+/** The main chat's own level, set with set_effort: it holds across turns until set_effort is called with auto. */
+export type Override = { level: Effort; reason: string };
 
 /** The effort a request carries: a level, a number on models that take one, absent on models without. */
 type Carried = Effort | number | undefined;
@@ -29,8 +33,6 @@ export type StepPlan = {
   source: Source | 'off';
   reason: string;
   newTurn: boolean;
-  /** The status line to pin; undefined clears it. */
-  status: string | undefined;
   rows: Row[];
 };
 
@@ -42,7 +44,9 @@ type Turn = {
   level: Effort;
   source: Source;
   reason: string;
+  /** The planning level and its reason: what `auto` gives the turn back. */
   startLevel: Effort;
+  planReason: string;
   steps: number;
   switches: number;
   /** Failing test runs in a row since the last rise or passing run. */
@@ -87,15 +91,19 @@ function testRunOf(settings: Settings, compiled: Compiled, input: { tool: string
 }
 
 /** What the host keeps per session so a plugin reload does not lose it. */
-export type SessionState = { enabled: boolean; pin: Effort | null };
+export type SessionState = { enabled: boolean; pin: Effort | null; override: Override | null };
 
-/** The saved state as it was written; undefined for anything else. */
+/** The saved state as it was written, a value saved before `override` existed holding none; undefined for anything else. */
 export function readSessionState(raw: unknown): SessionState | undefined {
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return undefined;
-  const { enabled, pin } = raw as Record<string, unknown>;
+  const { enabled, pin, override } = raw as Record<string, unknown>;
   if (typeof enabled !== 'boolean') return undefined;
-  if (pin === null) return { enabled, pin: null };
-  return isEffort(pin) ? { enabled, pin } : undefined;
+  if (pin !== null && !isEffort(pin)) return undefined;
+  if (override === undefined || override === null) return { enabled, pin, override: null };
+  if (typeof override !== 'object' || Array.isArray(override)) return undefined;
+  const { level, reason } = override as Record<string, unknown>;
+  if (!isEffort(level) || typeof reason !== 'string') return undefined;
+  return { enabled, pin, override: { level, reason } };
 }
 
 export class Controller {
@@ -106,6 +114,9 @@ export class Controller {
   private store: Persisted;
   private enabled = true;
   private pin: { level: Effort } | null = null;
+  private override: Override | null = null;
+  /** False after a request that carried no level: a model without an effort setting. */
+  private takesLevel = true;
   private lastSeen: { model: string; effort: Effort } | undefined;
   private turn: Turn | null = null;
   private turnId: string | undefined;
@@ -148,15 +159,16 @@ export class Controller {
     if (on) this.pin = null;
   }
 
-  /** What a plugin reload keeps within one session: on or off, and the user's /effort pin. */
+  /** What a plugin reload keeps within one session: on or off, the user's /effort pin and the main chat's own level. */
   sessionState(): SessionState {
-    return { enabled: this.enabled, pin: this.pin === null ? null : this.pin.level };
+    return { enabled: this.enabled, pin: this.pin === null ? null : this.pin.level, override: this.override === null ? null : { ...this.override } };
   }
 
   /** The state of a session a reload interrupted, given to a controller built afresh. */
   restoreSession(state: SessionState): void {
     this.enabled = state.enabled;
     this.pin = state.pin === null ? null : { level: state.pin };
+    this.override = state.override === null ? null : { ...state.override };
   }
 
   /** Lifts the cache mark from one model, or every model when none is named. */
@@ -166,10 +178,12 @@ export class Controller {
     else this.told.delete(normalizeModel(model));
   }
 
-  /** A new session in the same process (after /clear): on again, no pin, no turn, nothing to compare with; the marks stay. */
+  /** A new session in the same process (after /clear): on again, no pin, no level of the main chat's, no turn, nothing to compare with; the marks stay. */
   resetSession(): void {
     this.enabled = true;
     this.pin = null;
+    this.override = null;
+    this.takesLevel = true;
     this.lastSeen = undefined;
     this.turn = null;
     this.turnId = undefined;
@@ -203,23 +217,32 @@ export class Controller {
     const s = this.settingsNow;
     if (!s.turnReminder || !this.enabled || this.pin !== null || this.toolName === undefined || input.model === undefined) return { rows: [] };
     if (!this.gate(input.model).active) return { rows: [] };
+    if (this.override !== null) return { reminder: overrideReminderLine(clamp(this.override.level, s.floor, s.ceiling), this.toolName), rows: [] };
     return { reminder: reminderLine(planFor(s, this.compiled, input.text).level, this.toolName), rows: [] };
   }
 
-  /** The status line for the level held now; undefined when the plugin is not steering. */
-  statusNow(): string | undefined {
-    if (!this.settingsNow.statusLine || !this.enabled) return undefined;
-    if (this.lastModel !== undefined && !this.gate(this.lastModel).active) return undefined;
-    // The user's own /effort is no news to them: a pinned session shows nothing; the pin row stays in the decision log.
-    if (this.pin !== null || this.turn === null) return undefined;
-    return statusLine(this.turn.level, this.turn.reason, this.turn.source);
+  /** The mode the main chat's effort is in now, its level and why: what the state file carries. */
+  stateNow(): EffortState {
+    const { floor, ceiling } = this.settingsNow;
+    return stateOf({
+      enabled: this.enabled,
+      steered: this.steered(),
+      pin: this.pin === null ? null : this.pin.level,
+      override: this.override === null ? null : { level: clamp(this.override.level, floor, ceiling), reason: this.override.reason },
+      turn: this.turn === null ? null : { level: clamp(this.turn.level, floor, ceiling), reason: this.turn.reason },
+    });
+  }
+
+  /** False when the last main request carried no level, or the model gate keeps its model unsteered; true before any. */
+  private steered(): boolean {
+    return this.takesLevel && (this.lastModel === undefined || this.gate(this.lastModel).active);
   }
 
   private inactive(input: StepInput, wire: Carried, reason: string, gate: Gate, newTurn: boolean, rows: Row[], source: Source | 'off' = 'off'): StepPlan {
     this.turn = null;
     this.inflight = { turnId: input.turnId, index: input.index, model: input.model, wire, source, active: false, gate, switched: false, prev: this.last, compacted: this.takeCompacted(), startedAt: this.now(), messages: input.messageCount };
     if (newTurn) rows.push({ event: 'decision', turnId: input.turnId, model: input.model, level: source === 'pin' ? wire ?? null : null, source, reason, sessionEffort: wire ?? null });
-    return { send: undefined, level: undefined, source, reason, newTurn, status: undefined, rows };
+    return { send: undefined, level: undefined, source, reason, newTurn, rows };
   }
 
   private takeCompacted(): boolean {
@@ -241,9 +264,13 @@ export class Controller {
     const gate = this.gate(input.model);
     const effort = input.effort;
 
-    if (effort === undefined || typeof effort === 'number') {
-      return this.inactive(input, effort, `${input.model} takes no effort level`, gate, newTurn, rows);
+    // A level outside the five is none this plugin can steer or show: the model is left as one that takes no level.
+    if (effort === undefined || typeof effort === 'number' || !isEffort(effort)) {
+      this.takesLevel = false;
+      const why = typeof effort === 'string' ? `${input.model} carries effort ${quote(effort)}, no level auto-effort sets` : `${input.model} takes no effort level`;
+      return this.inactive(input, effort, why, gate, newTurn, rows);
     }
+    this.takesLevel = true;
 
     // The user's own /effort between turns is a pin: the session effort moved while the model stood still.
     if (newTurn && s.userEffortPins && this.pin === null && this.lastSeen !== undefined && this.lastSeen.model === name && this.lastSeen.effort !== effort) {
@@ -269,8 +296,23 @@ export class Controller {
 
     if (this.turn === null || this.turn.id !== input.turnId) {
       const plan = planFor(s, this.compiled, text ?? '');
-      this.turn = { id: input.turnId, level: plan.level, source: 'plan', reason: plan.reason, startLevel: plan.level, steps: 0, switches: 0, failures: 0, beforeRise: null, escalations: 0, setEffortCalls: 0 };
-      rows.push({ event: 'decision', turnId: input.turnId, model: input.model, level: plan.level, source: 'plan', reason: plan.reason, upshift: plan.upshift, sessionEffort: effort });
+      // The main chat's own level outranks the plan: the turn is still planned and logged, and runs at the level it set.
+      const held = this.override;
+      this.turn = {
+        id: input.turnId,
+        level: held?.level ?? plan.level,
+        source: held === null ? 'plan' : 'model',
+        reason: held?.reason ?? plan.reason,
+        startLevel: plan.level,
+        planReason: plan.reason,
+        steps: 0,
+        switches: 0,
+        failures: 0,
+        beforeRise: null,
+        escalations: 0,
+        setEffortCalls: 0,
+      };
+      rows.push({ event: 'decision', turnId: input.turnId, model: input.model, level: plan.level, source: 'plan', reason: plan.reason, upshift: plan.upshift, sessionEffort: effort, override: held?.level ?? null });
     }
     const turn = this.turn;
     turn.steps += 1;
@@ -283,7 +325,7 @@ export class Controller {
       rows.push({ event: 'switch', turnId: input.turnId, index: input.index, model: input.model, from: prev.wire ?? null, to: level, source: turn.source, reason: turn.reason });
     }
     this.inflight = { turnId: input.turnId, index: input.index, model: input.model, wire: level, source: turn.source, active: true, gate, switched, prev, compacted: this.takeCompacted(), startedAt: this.now(), messages: input.messageCount };
-    return { send, level, source: turn.source, reason: turn.reason, newTurn, status: s.statusLine ? statusLine(level, turn.reason, turn.source) : undefined, rows };
+    return { send, level, source: turn.source, reason: turn.reason, newTurn, rows };
   }
 
   /** The request answered (or carried no usage). */
@@ -357,36 +399,72 @@ export class Controller {
     this.last = undefined;
   }
 
-  /** The model's set_effort call. */
+  /**
+   * The model's set_effort call. A level is the main chat's own: it holds across turns over the plan and the failing-test
+   * rise until a call with `auto` hands the effort back to them. Off, the user's pin and the model gate outrank it: a level
+   * is refused there, while `auto` is always taken.
+   */
   setEffort(input: { input: Record<string, unknown>; agent: boolean }): { text: string; rows: Row[] } {
     const s = this.settingsNow;
     const refuse = (text: string): { text: string; rows: Row[] } => ({ text, rows: [{ event: 'set_effort', turnId: this.turn?.id ?? null, refused: text }] });
     if (input.agent) return refuse('Not applied: set_effort applies to the main chat only.');
+    const requested = input.input.level ?? input.input.effort;
+    if (requested === 'auto') return this.handBack(shortReason(input.input.reason));
     if (!this.enabled) return refuse('Not applied: auto-effort is off for this session; /auto-effort on turns it back on.');
     if (this.pin !== null) return refuse(`Not applied: the effort is pinned at ${this.pin.level} by your /effort command; /auto-effort on resumes automatic effort.`);
     const gate = this.lastModel === undefined ? undefined : this.gate(this.lastModel);
     if (gate !== undefined && !gate.active) return refuse(`Not applied: auto-effort does not change effort on ${this.lastModel} (${gate.status}).`);
-    const requested = input.input.level ?? input.input.effort;
-    if (!isEffort(requested)) return refuse(`Not applied: level must be one of ${levelsWithin(s.floor, s.ceiling).join(', ')}; got ${quote(requested ?? null)}.`);
-    const turn = this.turn;
-    if (turn === null) return refuse('Not applied: no turn is being steered yet.');
+    if (!this.takesLevel) return refuse(`Not applied: ${this.lastModel ?? 'this model'} takes no effort level.`);
+    if (!isEffort(requested)) return refuse(`Not applied: level must be auto or one of ${levelsWithin(s.floor, s.ceiling).join(', ')}; got ${quote(requested ?? null)}.`);
     const applied = clamp(requested, s.floor, s.ceiling);
     const reason = shortReason(input.input.reason);
-    const from = turn.level;
-    turn.level = applied;
-    turn.source = 'model';
-    turn.reason = reason;
-    turn.setEffortCalls += 1;
-    // The model's level stands: a passing test run no longer undoes a rise it chose over.
-    turn.beforeRise = null;
-    let text = `Effort set to ${applied} from your next request until this turn ends.`;
-    if (applied !== requested) text = `Effort set to ${applied} from your next request until this turn ends (${requested} is ${rank(requested) < rank(s.floor) ? `below the floor ${s.floor}` : `above the ceiling ${s.ceiling}`}).`;
-    return { text, rows: [{ event: 'set_effort', turnId: turn.id, requested, applied, from, reason }] };
+    const turn = this.turn;
+    const from = turn === null ? null : turn.level;
+    this.override = { level: applied, reason };
+    if (turn !== null) {
+      turn.level = applied;
+      turn.source = 'model';
+      turn.reason = reason;
+      turn.setEffortCalls += 1;
+      // The model's level stands: a passing test run no longer undoes a rise it chose over.
+      turn.beforeRise = null;
+    }
+    return { text: setText(applied, requested, s.floor, s.ceiling), rows: [{ event: 'set_effort', turnId: turn?.id ?? null, requested, applied, from, reason }] };
+  }
+
+  /** set_effort with `auto`: the main chat's level is dropped, and the turn runs at its planning level again. */
+  private handBack(reason: string): { text: string; rows: Row[] } {
+    const s = this.settingsNow;
+    const held = this.override;
+    this.override = null;
+    const turn = this.turn;
+    if (turn !== null) {
+      turn.setEffortCalls += 1;
+      if (held !== null) {
+        turn.level = turn.startLevel;
+        turn.source = 'plan';
+        turn.reason = turn.planReason;
+        turn.beforeRise = null;
+      }
+    }
+    const text = handBackText({ held: held !== null, level: turn === null ? null : clamp(turn.level, s.floor, s.ceiling), ...this.outranked() });
+    return { text, rows: [{ event: 'set_effort', turnId: turn?.id ?? null, requested: 'auto', applied: 'auto', from: held?.level ?? null, reason }] };
+  }
+
+  /** What decides the effort over the automatic rules: off, the user's pin, the model gate, a model taking no level; none while the rules apply. */
+  private outranked(): { outranked?: string } {
+    if (!this.enabled) return { outranked: 'auto-effort is off for this session until /auto-effort on' };
+    if (this.pin !== null) return { outranked: `your /effort pin at ${this.pin.level} still applies until /auto-effort on` };
+    const gate = this.lastModel === undefined ? undefined : this.gate(this.lastModel);
+    if (gate !== undefined && !gate.active) return { outranked: `auto-effort does not change effort on ${this.lastModel} (${gate.status})` };
+    if (!this.takesLevel) return { outranked: `${this.lastModel ?? 'this model'} takes no effort level, so none is steered` };
+    return {};
   }
 
   /**
    * A main-loop tool result. Failing test runs in a row raise the level one step at `escalateAfterFailures`; a passing run resets
-   * the count and, with `lowerOnPass`, returns a raised level to what the failing streak found. Any other result changes nothing.
+   * the count and, with `lowerOnPass`, returns a raised level to what the failing streak found. While the main chat's own level
+   * holds, the threshold raises nothing and says so. Any other result changes nothing.
    */
   onToolResult(input: { tool: string; command: string | undefined; text: string }): { context?: string; rows: Row[] } {
     const s = this.settingsNow;
@@ -401,6 +479,9 @@ export class Controller {
     const failures = turn.failures;
     turn.failures = 0;
     const from = clamp(turn.level, s.floor, s.ceiling);
+    if (this.override !== null) {
+      return { context: heldLine(failures, from, this.toolName ?? 'set_effort'), rows: [{ event: 'escalation', turnId: turn.id, from, to: from, failures, held: 'override' }] };
+    }
     const to = stepUp(from, s.ceiling);
     if (to === from) return { rows: [{ event: 'escalation', turnId: turn.id, from, to, failures, held: 'ceiling' }] };
     turn.beforeRise ??= { level: from, source: turn.source, reason: turn.reason };
@@ -458,6 +539,8 @@ export class Controller {
     return {
       enabled: this.enabled,
       pin: this.pin,
+      override: this.override === null ? null : { level: clamp(this.override.level, this.settingsNow.floor, this.settingsNow.ceiling), reason: this.override.reason },
+      steered: this.steered(),
       model,
       gate,
       turn: this.turn === null ? null : { level: this.turn.level, source: this.turn.source, reason: this.turn.reason },

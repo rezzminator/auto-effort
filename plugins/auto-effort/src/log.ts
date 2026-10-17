@@ -4,7 +4,7 @@
 /** `~/` expanded to the home directory; a path that does not start with it is returned as it is. */
 export function expandHome(path: string, home: string | undefined): string {
   if (path === '~' || path.startsWith('~/')) {
-    if (home === undefined || home === '') throw new Error(`auto-effort: the log path ${path} needs the home directory, which is not set`);
+    if (home === undefined || home === '') throw new Error(`auto-effort: the path ${path} needs the home directory, which is not set`);
     return home.replace(/\/+$/, '') + path.slice(1);
   }
   return path;

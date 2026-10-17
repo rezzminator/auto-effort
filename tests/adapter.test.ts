@@ -7,18 +7,24 @@ import { promisify } from 'node:util';
 import { describe as suite, expect, it, vi } from 'vitest';
 import { register } from '../plugins/auto-effort/hooks/auto-effort.ts';
 import { Controller } from '../plugins/auto-effort/src/controller.ts';
+import { KEEPER_ARGV } from '../plugins/auto-effort/src/state.ts';
+import { VERSION } from '../plugins/auto-effort/src/version.ts';
 
 // A stand-in engine: the hooks the module registers, driven the way the engine drives them, over a fake `$`.
 type Hook = (...args: any[]) => any;
 const TOOL = 'mcp__auto-effort__set_effort';
 const OPUS = 'claude-opus-5-5';
+// The state file at the default `stateFile` for session sess1: what a status line outside the plugin reads.
+const STATE = '/fake-home/u/.local/state/auto-effort/state.sess1.json';
 const usage = (input: number, cacheRead: number, cacheWrite: number, output = 100) => ({ input_tokens: input, output_tokens: output, cache_read_input_tokens: cacheRead, cache_creation_input_tokens: cacheWrite, model: OPUS });
 
-function engine(options: Record<string, unknown> = {}, o: { configRows?: unknown[]; storeGet?: () => Promise<unknown>; storeValue?: unknown; env?: Record<string, string | undefined> } = {}) {
+function engine(options: Record<string, unknown> = {}, o: { configRows?: unknown[]; storeGet?: () => Promise<unknown>; storeValue?: unknown; env?: Record<string, string | undefined>; keeper?: 'fails' | 'silent' | 'noisy' } = {}) {
   const hooks: Array<{ name: string; matcher?: Record<string, unknown>; fn: Hook }> = [];
   const logs: string[] = [];
   const statuses: Array<string | undefined> = [];
   const toasts: string[] = [];
+  /** The plugin log rows the adapter wrote through its append command. */
+  const logged: any[] = [];
   const files = new Map<string, string>();
   const writes: Array<{ path: string; rows: number }> = [];
   const store = new Map<string, unknown>(o.storeValue === undefined ? [] : [['state', o.storeValue]]);
@@ -29,8 +35,48 @@ function engine(options: Record<string, unknown> = {}, o: { configRows?: unknown
   // The host's plugin state outlives a plugin reload: one value per (plugin, key, id).
   const state = new Map<string, unknown>();
   const stateKey = (ref: { plugin: string; key: string; id?: string }) => `${ref.plugin}/${ref.key}/${ref.id ?? ''}`;
+  // Each child `$.process.spawn` starts: a keeper prints its pid (4242 on), then runs until `end()` or its loop is left.
+  // 'noisy' writes a shell warning to stderr first and its pid in two pieces; a `gate` holds the pid back until it opens.
+  const keepers: Array<{ argv: readonly string[]; pid: number; end: () => void; closed: boolean }> = [];
+  const spawning = { mode: o.keeper as 'fails' | 'silent' | 'noisy' | undefined, gate: undefined as Promise<void> | undefined };
+  let nextPid = 4242;
+  const spawn = (request: { argv: readonly string[] }) => {
+    const mode = spawning.mode;
+    const gate = spawning.gate;
+    let finish!: () => void;
+    const ended = new Promise<void>((resolve) => (finish = resolve));
+    const keeper = { argv: request.argv, pid: mode === 'fails' ? 0 : nextPid++, end: () => finish(), closed: false };
+    if (mode !== 'fails') keepers.push(keeper);
+    const stream = (async function* () {
+      if (mode === 'fails') throw new Error('cannot start /bin/sh');
+      try {
+        if (mode === 'noisy') {
+          yield { stream: 'stderr' as const, text: 'sh: setlocale: LC_ALL: cannot change locale (xx_XX.UTF-8)\n' };
+          yield { stream: 'stdout' as const, text: String(keeper.pid).slice(0, 2) };
+          yield { stream: 'stdout' as const, text: `${String(keeper.pid).slice(2)}\n` };
+        } else if (mode !== 'silent') {
+          await gate;
+          yield { stream: 'stdout' as const, text: `${keeper.pid}\n` };
+        }
+        await ended;
+        return { code: 0, signal: null };
+      } finally {
+        keeper.closed = true;
+      }
+    })();
+    // The host kills the child when its stream is closed: the loop then ends.
+    const close = stream.return.bind(stream);
+    stream.return = (value: any) => (finish(), close(value));
+    return Object.assign(stream, { result: ended.then(() => ({ code: 0, signal: null })) });
+  };
   const $ = {
-    process: { run: async (_argv: string[], _options?: unknown) => ({ exitCode: 0, stdout: '', stderr: '' }) },
+    process: {
+      run: async (argv: string[], _options?: unknown) => {
+        if (argv[3] === 'plugin-log') for (let i = 7; i < argv.length; i += 2) logged.push(JSON.parse(argv[i]!));
+        return { exitCode: 0, stdout: '', stderr: '' };
+      },
+      spawn,
+    },
     tool: { register: async (spec: any) => (registered.push(spec), { tool: `mcp__auto-effort__${spec.name}` }) },
     command: { register: async (spec: any) => (commands.push(spec), { name: spec.name }) },
     store: {
@@ -52,7 +98,7 @@ function engine(options: Record<string, unknown> = {}, o: { configRows?: unknown
       list: async () => o.configRows ?? [],
       set: async (args: unknown) => (configSets.push(args), { value: (args as { value: unknown }).value }),
     },
-    clock: { now: async () => Date.now() },
+    clock: { now: async () => Date.now(), sleep: (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, Math.min(ms, 30))) },
     state: {
       get: async (ref: { plugin: string; key: string; id?: string }) => ({ value: state.get(stateKey(ref)), version: 1 }),
       set: async (ref: { plugin: string; key: string; id?: string }, value: unknown) => (state.set(stateKey(ref), JSON.parse(JSON.stringify(value))), { isSet: true, version: 2 }),
@@ -67,7 +113,7 @@ function engine(options: Record<string, unknown> = {}, o: { configRows?: unknown
   };
   const sent: any[] = [];
   const api = {
-    $, sess, state, logs, statuses, toasts, files, writes, store, registered, commands, configSets, hooks, sent,
+    $, sess, state, logs, logged, statuses, toasts, files, writes, store, registered, commands, configSets, hooks, sent, keepers, spawning,
     // A plugin reload (or an option change): the module registers again and builds a new controller; the host's state stays.
     reload: (opts: Record<string, unknown> = options) => {
       hooks.length = 0;
@@ -94,7 +140,12 @@ function engine(options: Record<string, unknown> = {}, o: { configRows?: unknown
     complete: (e: Record<string, unknown> = {}) => find('turn.complete')($, { answer: '', durationMs: 3000, isAborted: false, turnId: 't1', reason: 'answer', ...e }, async (x: any) => x),
     command: (args: string) => find('command.run', { command: 'auto-effort' })($, { command: 'auto-effort', args, origin: { kind: 'composer' }, presentation: {} }, async () => ({ text: 'unhandled' })),
     logRows: () => [...files].filter(([path]) => path.endsWith('.jsonl')).flatMap(([, text]) => text.split('\n').filter(Boolean).map((l) => JSON.parse(l))),
-    settle: () => vi.waitFor(() => expect(files.size).toBeGreaterThan(0)),
+    settle: () => vi.waitFor(() => expect([...files.keys()].some((path) => path.endsWith('.jsonl'))).toBe(true)),
+    logFiles: () => [...files.keys()].filter((path) => path.endsWith('.jsonl')),
+    stateOf: (path = STATE) => {
+      const text = files.get(path);
+      return text === undefined ? undefined : JSON.parse(text);
+    },
   };
   return api;
 }
@@ -127,8 +178,7 @@ suite('plugin reload', () => {
     await e.prompt();
     const kept = await e.step({ turnId: 't3', effort: 'low' });
     expect(kept).toMatchObject({ effort: 'low' });
-    expect(e.statuses.some((text) => text?.startsWith('effort auto: ') === true)).toBe(true);
-    expect(e.statuses.at(-1)).toBeUndefined();
+    await vi.waitFor(() => expect(e.stateOf()).toMatchObject({ mode: 'pin', level: 'low' }));
   });
 
   it('starts a new session after /clear on and unpinned, even after a reload', async () => {
@@ -151,7 +201,7 @@ suite('plugin reload', () => {
     };
     await e.prompt();
     expect(await e.step({})).toMatchObject({ effort: 'high' });
-    expect(e.logs.some((line) => line.includes('no state') && line.includes('on and unpinned'))).toBe(true);
+    expect(e.logs.some((line) => line.includes('reading the saved on/off, the pin and the set_effort level failed: no state') && line.includes('on and unpinned, with no set_effort level'))).toBe(true);
   });
 
   it('holds on and unpinned when the saved state is not in the form it writes, and says so', async () => {
@@ -232,8 +282,8 @@ suite('plugin reload', () => {
     expect((await e.command('off')).text).toContain('off');
     await e.prompt();
     expect(await e.step({ turnId: 't2' })).toMatchObject({ effort: 'xhigh' });
-    expect(e.state.get('auto-effort/session/sess2')).toEqual({ enabled: false, pin: null });
-    expect(e.state.get('auto-effort/session/sess1')).not.toEqual({ enabled: false, pin: null });
+    expect(e.state.get('auto-effort/session/sess2')).toEqual({ enabled: false, pin: null, override: null });
+    expect(e.state.get('auto-effort/session/sess1')).not.toEqual({ enabled: false, pin: null, override: null });
   });
 
   it('sends the request while the host is still saving the on/off and pin', async () => {
@@ -253,9 +303,9 @@ suite('plugin reload', () => {
     };
     await e.prompt();
     for (let index = 0; index < 3; index += 1) await e.step({ index });
-    await vi.waitFor(() => expect(e.logs.filter((line) => line.includes('saving the on/off and pin')).length).toBeGreaterThan(0));
+    await vi.waitFor(() => expect(e.logs.filter((line) => line.includes('saving the on/off, the pin and the set_effort level')).length).toBeGreaterThan(0));
     await new Promise((done) => setTimeout(done, 20));
-    expect(e.logs.filter((line) => line.includes('saving the on/off and pin'))).toHaveLength(1);
+    expect(e.logs.filter((line) => line.includes('saving the on/off, the pin and the set_effort level'))).toHaveLength(1);
   });
 
   it('plans the turn with the reminder when the session id cannot be read at a prompt', async () => {
@@ -276,9 +326,10 @@ suite('session start', () => {
     await e.start();
     expect(e.registered).toHaveLength(1);
     expect(e.registered[0]).toMatchObject({ name: 'set_effort', isDeferred: false });
-    expect(e.registered[0].description).toContain('Call it in your first response of every user turn');
-    expect(e.registered[0].inputSchema.properties.level.enum).toEqual(['medium', 'high', 'xhigh']);
-    expect(e.registered[0].inputSchema.properties.effort.enum).toEqual(['medium', 'high', 'xhigh']);
+    expect(e.registered[0].description).toContain('Call it in your first response of a user turn whose work needs another level');
+    expect(e.registered[0].inputSchema.properties.level.enum).toEqual(['medium', 'high', 'xhigh', 'auto']);
+    expect(e.registered[0].inputSchema.properties.effort.enum).toEqual(['medium', 'high', 'xhigh', 'auto']);
+    expect(e.registered[0].inputSchema.properties.level.description).toContain('holds across turns until you call it with auto');
     expect(e.registered[0].inputSchema.required ?? []).toEqual([]);
     expect(e.commands).toEqual([expect.objectContaining({ name: 'auto-effort' })]);
   });
@@ -301,7 +352,6 @@ suite('turn.step', () => {
     await e.prompt();
     expect(await e.step({ agentId: 'agent-7', effort: 'xhigh' })).toMatchObject({ agentId: 'agent-7', effort: 'xhigh' });
     expect(await e.step({})).toMatchObject({ effort: 'high' });
-    expect(e.statuses.at(-1)).toBe('effort auto: high · planning turn (plan)');
   });
 
   it('rewrites a request only when the level differs from the effort it carries', async () => {
@@ -333,23 +383,40 @@ suite('turn.step', () => {
     expect(await e.step({ index: 1 })).toMatchObject({ effort: 'high' });
   });
 
-  it('keeps going when the status line or the log cannot be written', async () => {
+  it('keeps going when the notice, the state file or the log cannot be written', async () => {
     const e = engine();
     await e.start();
     await e.prompt();
-    e.$.ui.status = () => {
-      throw new Error('no status');
+    e.$.ui.toast = () => {
+      throw new Error('no toast');
     };
     e.$.fs.write = async () => {
       throw new Error('disk full');
     };
     expect(await e.step({})).toMatchObject({ effort: 'high' });
-    await vi.waitFor(() => expect(e.logs.some((line) => line.includes('disk full'))).toBe(true));
+    await vi.waitFor(() => expect(e.logs.some((line) => line.includes('writing the decision log failed: disk full'))).toBe(true));
+    await vi.waitFor(() => expect(e.logged.some((row) => row.level === 'warning' && row.msg.includes('writing the state file failed: disk full'))).toBe(true));
+    expect(e.logged.some((row) => row.level === 'warning' && row.msg.includes('showing a notice failed: no toast'))).toBe(true);
+    // Warnings the plugin log holds stay off the screen.
+    expect(e.logs.some((line) => line.includes('writing the state file failed') || line.includes('showing a notice failed'))).toBe(false);
   });
 
-  // R9 through the adapter: the diagnostic and the mark in the store.
-  it('logs the cache guard without a toast and stores the unsafe mark after a switch', async () => {
+  it('clears a status line left by an older version once at the start, and pins none', async () => {
     const e = engine();
+    await e.start();
+    expect(e.statuses).toEqual([undefined]);
+    await e.prompt();
+    await e.step({});
+    await e.tool({ tool: TOOL, level: 'medium', reason: 'mechanical rename' });
+    await e.step({ index: 1 });
+    await e.command('off');
+    await e.command('on');
+    expect(e.statuses).toEqual([undefined]);
+  });
+
+  // R9 through the adapter: the diagnostic and the mark in the store. statusLine off keeps the reason notices out, so any toast would be the gate's.
+  it('logs the cache guard without a toast and stores the unsafe mark after a switch', async () => {
+    const e = engine({ statusLine: false });
     await e.start();
     await e.prompt();
     await e.step({}, { usage: usage(10, 0, 5000) });
@@ -373,7 +440,7 @@ suite('turn.step', () => {
   });
 
   it('keeps a cache mark it could not save when the next prompt reads the store again, and saves it once the store takes it', async () => {
-    const e = engine();
+    const e = engine({ statusLine: false });
     await e.start();
     await e.prompt();
     expect(await e.step({}, { usage: usage(10, 0, 5000) })).toMatchObject({ effort: 'high' });
@@ -542,6 +609,7 @@ suite('environment options', () => {
     AUTO_EFFORT_CACHE_TTL_SECONDS: '3600',
     AUTO_EFFORT_STATUS_LINE: '0',
     AUTO_EFFORT_LOG_FILE: '/var/log/effort.jsonl',
+    AUTO_EFFORT_STATE_FILE: '/run/effort.json',
     AUTO_EFFORT_LOWER_ON_PASS: 'false',
     AUTO_EFFORT_TEST_COMMAND_PATTERNS: '["\\\\bmytest\\\\b"]',
   };
@@ -552,7 +620,7 @@ suite('environment options', () => {
     await e.prompt();
     const text = (await e.command('status')).text;
     expect(text).toContain('settings (plugin options; environment overrides: AUTO_EFFORT_FLOOR, AUTO_EFFORT_CEILING');
-    for (const shown of ['floor=low', 'ceiling=max', 'planLevel=medium', 'planUpshiftPatterns=[\\bplan]', 'planUpshiftChars=2000', 'turnReminder=false', 'escalateAfterFailures=3', 'failurePatterns=[boom]', 'failureTools=[PowerShell]', 'userEffortPins=false', 'models=[claude-x=deny]', 'unknownModels=allow', 'probationSwitches=8', 'canaryThreshold=0.5', 'cacheTtlSeconds=3600', 'statusLine=false', 'logFile=/var/log/effort.jsonl', 'lowerOnPass=false', 'testCommandPatterns=[\\bmytest\\b]']) {
+    for (const shown of ['floor=low', 'ceiling=max', 'planLevel=medium', 'planUpshiftPatterns=[\\bplan]', 'planUpshiftChars=2000', 'turnReminder=false', 'escalateAfterFailures=3', 'failurePatterns=[boom]', 'failureTools=[PowerShell]', 'userEffortPins=false', 'models=[claude-x=deny]', 'unknownModels=allow', 'probationSwitches=8', 'canaryThreshold=0.5', 'cacheTtlSeconds=3600', 'statusLine=false', 'logFile=/var/log/effort.jsonl', 'stateFile=/run/effort.json', 'lowerOnPass=false', 'testCommandPatterns=[\\bmytest\\b]']) {
       expect(text, shown).toContain(shown);
     }
     expect(e.logs.filter((line) => line.includes('option'))).toEqual([]);
@@ -570,7 +638,7 @@ suite('environment options', () => {
     const e = envEngine({ AUTO_EFFORT_FLOOR: 'high', AUTO_EFFORT_CEILING: 'xhigh' }, { floor: 'low', ceiling: 'max' });
     await e.start();
     expect(e.registered).toHaveLength(1);
-    expect(e.registered[0].inputSchema.properties.level.enum).toEqual(['high', 'xhigh']);
+    expect(e.registered[0].inputSchema.properties.level.enum).toEqual(['high', 'xhigh', 'auto']);
   });
 
   it('lets a variable beat /config and the registered options at the next prompt', async () => {
@@ -652,7 +720,7 @@ suite('environment options', () => {
       return read(name);
     };
     await e.prompt();
-    expect(seen).toEqual({ calls: 19, inFlight: 0, peak: 19 });
+    expect(seen).toEqual({ calls: 20, inFlight: 0, peak: 20 });
   });
 
   it('answers `set` as a success when the environment cannot be read', async () => {
@@ -675,7 +743,7 @@ suite('environment options', () => {
     expect((await e.command('status')).text).toContain(conflict);
     await e.command('set planLevel xhigh');
     expect((await e.command('status')).text).toContain(conflict);
-    expect(e.registered.at(-1).inputSchema.properties.level.enum).toEqual(['medium', 'high', 'xhigh']);
+    expect(e.registered.at(-1).inputSchema.properties.level.enum).toEqual(['medium', 'high', 'xhigh', 'auto']);
   });
 
   it('names the variable behind a floor/ceiling conflict', async () => {
@@ -702,9 +770,24 @@ suite('set_effort and escalation', () => {
     await e.prompt();
     await e.step({});
     const answered = await e.tool({ tool: TOOL, level: 'medium', reason: 'mechanical rename' });
-    expect(answered).toEqual({ result: 'Effort set to medium from your next request until this turn ends.' });
+    expect(answered).toEqual({ result: 'Effort set to medium from your next request; it holds across turns until you call set_effort with auto.' });
     expect(await e.step({ index: 1 })).toMatchObject({ effort: 'medium' });
-    expect(e.statuses.at(-1)).toBe('effort auto: medium · mechanical rename (model)');
+    await vi.waitFor(() => expect(e.stateOf()).toMatchObject({ mode: 'model', level: 'medium', reason: 'mechanical rename' }));
+  });
+
+  it('holds the main chat\'s level across turns and a reload, until set_effort with auto hands it back', async () => {
+    const e = engine();
+    await e.start();
+    await e.prompt();
+    await e.step({});
+    await e.tool({ tool: TOOL, level: 'medium', reason: 'mechanical rename' });
+    e.reload();
+    const next = await e.prompt();
+    expect(next.context.at(-1)).toContain(`the level you set with ${TOOL}; it holds across turns`);
+    expect(await e.step({ turnId: 't2' })).toMatchObject({ effort: 'medium' });
+    expect((await e.tool({ tool: TOOL, level: 'auto' })).result).toMatch(/^Effort handed back to the automatic rules: this turn runs at high again/);
+    expect(await e.step({ turnId: 't2', index: 1 })).toMatchObject({ effort: 'high' });
+    await vi.waitFor(() => expect(e.stateOf()).toMatchObject({ mode: 'auto', level: 'high', reason: 'planning turn' }));
   });
 
   it('refuses set_effort from a sub-agent', async () => {
@@ -714,12 +797,10 @@ suite('set_effort and escalation', () => {
   });
 
   it('adds the escalation line to the second failing test run of the main chat only, and the lowering line to the passing one', async () => {
-    const e = engine();
+    const e = engine({ planLevel: 'medium' });
     await e.start();
     await e.prompt();
-    await e.step({});
-    await e.tool({ tool: TOOL, level: 'medium', reason: 'rename' });
-    await e.step({ index: 1 });
+    expect(await e.step({})).toMatchObject({ effort: 'medium' });
     const run = { command: 'npm test' };
     const failing = { result: 'x', text: '2 failed, 1 passed', context: ['from another hook'] };
     expect((await e.tool(run, failing)).context).toEqual(['from another hook']);
@@ -782,7 +863,7 @@ suite('decision log', () => {
     await e.complete({ agentId: 'agent-7' });
     await e.settle();
     await vi.waitFor(() => expect(e.logRows().map((row) => row.event)).toContain('turn'));
-    expect([...e.files.keys()]).toEqual(['/logs/decisions.sess1.jsonl']);
+    expect(e.logFiles()).toEqual(['/logs/decisions.sess1.jsonl']);
     const rows = e.logRows();
     expect(rows.map((row) => row.event)).toEqual(expect.arrayContaining(['decision', 'step', 'turn']));
     expect(rows.filter((row) => row.event === 'turn')).toHaveLength(1);
@@ -796,13 +877,13 @@ suite('decision log', () => {
     await off.prompt();
     await off.step({});
     await new Promise((resolve) => setTimeout(resolve, 20));
-    expect(off.files.size).toBe(0);
+    expect(off.logFiles()).toEqual([]);
     const home = engine();
     await home.start();
     await home.prompt();
     await home.step({});
     await home.settle();
-    expect([...home.files.keys()]).toEqual(['/fake-home/u/.local/state/auto-effort/decisions.sess1.jsonl']);
+    expect(home.logFiles()).toEqual(['/fake-home/u/.local/state/auto-effort/decisions.sess1.jsonl']);
   });
 
   // F5: `$.fs` has no append, so every write rewrites a whole file; a file holds at most 1000 rows, then the next starts.
@@ -837,8 +918,8 @@ suite('decision log', () => {
     await vi.waitFor(() => expect(rowsIn(e, '/logs/decisions.sess1.3.jsonl')).toBeGreaterThan(5));
     expect(e.files.get('/logs/decisions.sess1.jsonl')).toBe(full);
     expect(e.files.get('/logs/decisions.sess1.2.jsonl')).toBe(full);
-    expect(e.writes.every((write) => write.path === '/logs/decisions.sess1.3.jsonl')).toBe(true);
-    expect([...e.files.keys()]).toHaveLength(3);
+    expect(e.writes.filter((write) => write.path.endsWith('.jsonl')).every((write) => write.path === '/logs/decisions.sess1.3.jsonl')).toBe(true);
+    expect(e.logFiles()).toHaveLength(3);
   });
 
   it('never writes over a later file of the session when an earlier one is missing', async () => {
@@ -868,9 +949,269 @@ suite('decision log', () => {
   });
 });
 
+// D: the state file a status line reads, and the reason as a notice; the band line is gone.
+suite('state file and notice', () => {
+  const idle = () => new Promise((resolve) => setTimeout(resolve, 20));
+
+  it('writes the session\'s state at the default path, once per change of its mode, level or reason', async () => {
+    const e = engine();
+    await e.start();
+    await vi.waitFor(() => expect(e.stateOf()).toMatchObject({ version: 2, mode: 'auto', level: null }));
+    await e.prompt();
+    await e.step({});
+    await vi.waitFor(() => expect(e.stateOf()).toEqual({ version: 2, mode: 'auto', level: 'high', reason: 'planning turn', keeper: expect.any(Number), updatedAt: expect.any(String) }));
+    expect(e.files.get(STATE)!.endsWith('}\n')).toBe(true);
+    const writes = () => e.writes.filter((write) => write.path === STATE).length;
+    const before = writes();
+    await e.step({ index: 1 });
+    await e.prompt();
+    await e.step({ turnId: 't2' });
+    await idle();
+    expect(writes()).toBe(before);
+    await e.command('off');
+    await vi.waitFor(() => expect(e.stateOf()).toMatchObject({ mode: 'off', level: null }));
+    expect(writes()).toBe(before + 1);
+  });
+
+  it('names the session in a `stateFile` it is given, and writes none for an empty one', async () => {
+    const set = engine({ stateFile: '/run/effort.json' });
+    await set.start();
+    await set.prompt();
+    await set.step({});
+    await vi.waitFor(() => expect(set.stateOf('/run/effort.sess1.json')).toMatchObject({ mode: 'auto', level: 'high' }));
+    const none = engine({ stateFile: '' });
+    await none.start();
+    await none.prompt();
+    await none.step({});
+    await none.settle();
+    await idle();
+    expect([...none.files.keys()].filter((path) => !path.endsWith('.jsonl'))).toEqual([]);
+  });
+
+  // D7: a line names the keeper that vouches for it, or 0 once nothing does; a status line trusts only a live keeper.
+  it('vouches for the line with the pid of a keeper it starts, whose argv carries the mark', async () => {
+    const e = engine();
+    await e.start();
+    await vi.waitFor(() => expect(e.stateOf()).toMatchObject({ mode: 'auto', keeper: 4242 }));
+    expect(e.keepers).toHaveLength(1);
+    expect(e.keepers[0]!.argv).toEqual(KEEPER_ARGV);
+    await e.prompt();
+    await e.step({});
+    await vi.waitFor(() => expect(e.stateOf()).toMatchObject({ mode: 'auto', level: 'high', keeper: 4242 }));
+    expect(e.keepers).toHaveLength(1);
+  });
+
+  it('says once that the keeper ended, and vouches with a new one from the next prompt', async () => {
+    const e = engine();
+    await e.start();
+    await vi.waitFor(() => expect(e.stateOf()).toMatchObject({ keeper: 4242 }));
+    e.keepers[0]!.end();
+    await vi.waitFor(() => expect(e.logged.filter((row) => row.level === 'warning' && row.msg.includes('the state file keeper ended'))).toHaveLength(1));
+    await e.prompt();
+    await e.step({});
+    await vi.waitFor(() => expect(e.stateOf()).toMatchObject({ mode: 'auto', level: 'high', keeper: 4243 }));
+    expect(e.keepers.map((keeper) => keeper.closed)).toEqual([true, false]);
+    expect(e.logged.filter((row) => row.level === 'warning' && row.msg.includes('the state file keeper ended'))).toHaveLength(1);
+  });
+
+  it('writes keeper 0 as soon as its keeper ends, and says so again when a later keeper ends', async () => {
+    const e = engine();
+    await e.start();
+    await vi.waitFor(() => expect(e.stateOf()).toMatchObject({ keeper: 4242 }));
+    const ended = () => e.logged.filter((row) => row.level === 'warning' && row.msg.includes('the state file keeper ended'));
+    e.keepers[0]!.end();
+    await vi.waitFor(() => expect(e.stateOf()).toMatchObject({ mode: 'auto', keeper: 0 }));
+    await e.prompt();
+    await vi.waitFor(() => expect(e.stateOf()).toMatchObject({ keeper: 4243 }));
+    e.keepers[1]!.end();
+    await vi.waitFor(() => expect(e.stateOf()).toMatchObject({ keeper: 0 }));
+    expect(ended()).toHaveLength(2);
+  });
+
+  it('takes the keeper\'s pid from its stdout alone, whatever the shell writes to stderr first', async () => {
+    const e = engine({}, { keeper: 'noisy' });
+    await e.start();
+    await vi.waitFor(() => expect(e.stateOf()).toMatchObject({ mode: 'auto', keeper: 4242 }));
+    expect(e.keepers.map((keeper) => keeper.closed)).toEqual([false]);
+    expect(e.logs.filter((line) => line.includes('keeper'))).toEqual([]);
+  });
+
+  it('never vouches again for a line retired at session end, by a keeper that came up after it', async () => {
+    const e = engine();
+    await e.start();
+    await vi.waitFor(() => expect(e.stateOf()).toMatchObject({ keeper: 4242 }));
+    e.keepers[0]!.end();
+    await vi.waitFor(() => expect(e.stateOf()).toMatchObject({ keeper: 0 }));
+    let open!: () => void;
+    e.spawning.gate = new Promise<void>((resolve) => (open = resolve));
+    e.$.clock.sleep = () => new Promise<void>(() => undefined);
+    await e.prompt();
+    await e.end();
+    open();
+    await vi.waitFor(() => expect(e.keepers[1]?.pid).toBe(4243));
+    await idle();
+    expect(e.stateOf()).toMatchObject({ mode: 'auto', keeper: 0 });
+    e.sess.id = 'sess2';
+    await e.prompt();
+    await vi.waitFor(() => expect(e.stateOf('/fake-home/u/.local/state/auto-effort/state.sess2.json')).toMatchObject({ keeper: 4243 }));
+  });
+
+  it('retires a line again at the next publish when its retire at session end did not land, and says so once', async () => {
+    const e = engine();
+    await e.start();
+    await e.prompt();
+    await e.step({});
+    await vi.waitFor(() => expect(e.stateOf()).toMatchObject({ level: 'high', keeper: 4242 }));
+    const write = e.$.fs.write;
+    let broken = true;
+    e.$.fs.write = async (path: string, text: string) => {
+      if (broken && path === STATE) throw new Error('aborted');
+      return write(path, text);
+    };
+    await e.end();
+    expect(e.stateOf()).toMatchObject({ keeper: 4242 });
+    const failed = () => e.logged.filter((row) => row.level === 'warning' && row.msg.includes('retiring the state file'));
+    expect(failed()).toHaveLength(1);
+    e.sess.id = 'sess2';
+    await e.prompt();
+    await vi.waitFor(() => expect(e.stateOf('/fake-home/u/.local/state/auto-effort/state.sess2.json')).toMatchObject({ keeper: 4242 }));
+    expect(e.stateOf()).toMatchObject({ keeper: 4242 });
+    expect(failed()).toHaveLength(1);
+    broken = false;
+    await e.prompt();
+    await vi.waitFor(() => expect(e.stateOf()).toMatchObject({ level: 'high', keeper: 0 }));
+  });
+
+  it('registers /auto-effort although the screen fails while it says no keeper can start', async () => {
+    const e = engine({}, { keeper: 'fails' });
+    e.$.ui.log = () => {
+      throw new Error('no screen');
+    };
+    await e.start();
+    expect(e.commands.map((command) => command.name)).toEqual(['auto-effort']);
+  });
+
+  it('writes keeper 0 while no keeper can start, says so once, and vouches once one does', async () => {
+    const e = engine({}, { keeper: 'fails' });
+    await e.start();
+    await vi.waitFor(() => expect(e.stateOf()).toMatchObject({ mode: 'auto', keeper: 0 }));
+    await e.prompt();
+    expect(await e.step({})).toMatchObject({ effort: 'high' });
+    await vi.waitFor(() => expect(e.stateOf()).toMatchObject({ level: 'high', keeper: 0 }));
+    const failed = () => e.logged.filter((row) => row.level === 'warning' && row.msg.includes('starting the state file keeper failed: cannot start /bin/sh'));
+    expect(failed()).toHaveLength(1);
+    e.spawning.mode = undefined;
+    await e.prompt();
+    await vi.waitFor(() => expect(e.stateOf()).toMatchObject({ level: 'high', keeper: 4242 }));
+    expect(failed()).toHaveLength(1);
+  });
+
+  it('writes keeper 0 when a keeper prints no pid within two seconds, and closes it', async () => {
+    const e = engine({}, { keeper: 'silent' });
+    await e.start();
+    await vi.waitFor(() => expect(e.stateOf()).toMatchObject({ mode: 'auto', keeper: 0 }));
+    await vi.waitFor(() => expect(e.keepers[0]!.closed).toBe(true));
+  });
+
+  it('retires the line at session end: the same state, vouched by none', async () => {
+    const e = engine();
+    await e.start();
+    await e.prompt();
+    await e.step({});
+    await vi.waitFor(() => expect(e.stateOf()).toMatchObject({ mode: 'auto', level: 'high', keeper: 4242 }));
+    await e.end();
+    expect(e.stateOf()).toEqual({ version: 2, mode: 'auto', level: 'high', reason: 'planning turn', keeper: 0, updatedAt: expect.any(String) });
+  });
+
+  it('retires the line it leaves when `stateFile` moves or empties, and the session\'s line after /clear', async () => {
+    const rows: unknown[] = [];
+    const e = engine({}, { configRows: rows });
+    await e.start();
+    await e.prompt();
+    await e.step({});
+    await vi.waitFor(() => expect(e.stateOf()).toMatchObject({ level: 'high', keeper: 4242 }));
+    await e.command('set stateFile /run/x.json');
+    await e.prompt();
+    await vi.waitFor(() => expect(e.stateOf('/run/x.sess1.json')).toMatchObject({ mode: 'auto', level: 'high', keeper: 4242 }));
+    expect(e.stateOf()).toMatchObject({ mode: 'auto', level: 'high', keeper: 0 });
+    e.sess.id = 'sess2';
+    await e.prompt();
+    await vi.waitFor(() => expect(e.stateOf('/run/x.sess2.json')).toMatchObject({ keeper: 4242 }));
+    expect(e.stateOf('/run/x.sess1.json')).toMatchObject({ mode: 'auto', level: 'high', keeper: 0 });
+    rows.push({ key: 'auto-effort.stateFile', value: '', kind: 'text' });
+    await e.prompt();
+    await vi.waitFor(() => expect(e.stateOf('/run/x.sess2.json')).toMatchObject({ keeper: 0 }));
+  });
+
+  it('says once per failing state that the state file cannot be written, sends the request, and writes it once it can', async () => {
+    const e = engine();
+    const write = e.$.fs.write;
+    let broken = true;
+    e.$.fs.write = async (path: string, text: string) => {
+      if (broken && path === STATE) throw new Error('read-only');
+      return write(path, text);
+    };
+    await e.start();
+    await e.prompt();
+    expect(await e.step({})).toMatchObject({ effort: 'high' });
+    await e.step({ index: 1 });
+    await idle();
+    const failed = () => e.logged.filter((row) => row.level === 'warning' && row.msg.includes('writing the state file failed: read-only'));
+    expect(failed()).toHaveLength(2);
+    await e.tool({ tool: TOOL, level: 'medium', reason: 'mechanical rename' });
+    await idle();
+    expect(failed()).toHaveLength(3);
+    broken = false;
+    await e.step({ index: 2 });
+    await vi.waitFor(() => expect(e.stateOf()).toMatchObject({ mode: 'model', level: 'medium' }));
+  });
+
+  it('keeps writing the state file after the failure notice itself could not be shown', async () => {
+    const e = engine();
+    const write = e.$.fs.write;
+    const log = e.$.ui.log;
+    let broken = true;
+    e.$.fs.write = async (path: string, text: string) => {
+      if (broken && path === STATE) throw new Error('read-only');
+      return write(path, text);
+    };
+    e.$.ui.log = (...args: Parameters<typeof log>) => {
+      if (broken) throw new Error('screen gone');
+      return log(...args);
+    };
+    await e.start();
+    await e.prompt();
+    await e.step({});
+    await idle();
+    broken = false;
+    await e.tool({ tool: TOOL, level: 'medium', reason: 'mechanical rename' });
+    await vi.waitFor(() => expect(e.stateOf()).toMatchObject({ mode: 'model', level: 'medium' }));
+  });
+
+  it('shows the reason alone as a notice when the mode, level or reason changes, and none with statusLine off', async () => {
+    const drive = async (e: ReturnType<typeof engine>) => {
+      await e.start();
+      await e.prompt();
+      await e.step({});
+      await e.step({ index: 1 });
+      await e.tool({ tool: TOOL, level: 'medium', reason: 'mechanical rename' });
+      await e.step({ index: 2 });
+      await e.prompt();
+      await e.step({ turnId: 't2' });
+    };
+    const on = engine();
+    await drive(on);
+    expect(on.toasts).toEqual(['planning turn', 'mechanical rename']);
+    const off = engine({ statusLine: false });
+    await drive(off);
+    expect(off.toasts).toEqual([]);
+    await vi.waitFor(() => expect(off.stateOf()).toMatchObject({ mode: 'model', level: 'medium' }));
+  });
+});
+
 suite('session.compact', () => {
   it('lets the compaction through and keeps the canary from judging a switch across it', async () => {
-    const e = engine({ logFile: '/logs/decisions.jsonl' });
+    const e = engine({ logFile: '/logs/decisions.jsonl', statusLine: false });
     await e.start();
     await e.prompt();
     await e.step({}, { usage: usage(10, 0, 5000) });
@@ -893,7 +1234,7 @@ suite('/auto-effort', () => {
     await e.prompt();
     await e.step({});
     const { text } = await e.command('');
-    expect(text).toContain('auto-effort 0.2.4-alpha · on');
+    expect(text).toContain(`auto-effort ${VERSION} · on`);
     expect(text).toContain('level: high');
     expect(text).toContain('floor=medium');
     expect((await e.command('status')).text).toBe(text);
@@ -905,7 +1246,7 @@ suite('/auto-effort', () => {
     expect((await e.command('off')).text).toContain('off');
     await e.prompt();
     expect(await e.step({})).toMatchObject({ effort: 'xhigh' });
-    expect(e.statuses.at(-1)).toBeUndefined();
+    await vi.waitFor(() => expect(e.stateOf()).toMatchObject({ mode: 'off', level: null }));
     expect((await e.command('on')).text).toContain('on');
     await e.prompt();
     expect(await e.step({ turnId: 't2' })).toMatchObject({ effort: 'high' });
@@ -957,10 +1298,10 @@ suite('plugin log adapter', () => {
       return { exitCode: 0, stdout: '', stderr: '' };
     };
     await e.prompt();
-    e.$.ui.status = () => { throw new Error('optional display unavailable'); };
+    e.$.ui.toast = () => { throw new Error('optional display unavailable'); };
     expect(await e.step({})).toMatchObject({ effort: 'high' });
     await e.end();
-    expect(written).toContainEqual(expect.objectContaining({ level: 'warning', event: 'status-failed', msg: expect.stringContaining('optional display unavailable') }));
+    expect(written).toContainEqual(expect.objectContaining({ level: 'warning', event: 'toast-failed', msg: expect.stringContaining('optional display unavailable') }));
     expect(e.logs).toEqual([]);
   });
 
