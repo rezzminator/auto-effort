@@ -4,6 +4,8 @@ All notable changes to this plugin are recorded here. The format follows [Keep a
 
 ## [Unreleased]
 
+## [0.2.4-dev.1] — 2026-10-17
+
 ### Added
 
 - `set_effort` takes `auto`: it hands the main chat's effort back to the automatic rules, so the current turn runs at its planned level again and each turn starts at its own.

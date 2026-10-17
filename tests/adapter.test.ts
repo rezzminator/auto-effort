@@ -8,6 +8,7 @@ import { describe as suite, expect, it, vi } from 'vitest';
 import { register } from '../plugins/auto-effort/hooks/auto-effort.ts';
 import { Controller } from '../plugins/auto-effort/src/controller.ts';
 import { KEEPER_ARGV } from '../plugins/auto-effort/src/state.ts';
+import { VERSION } from '../plugins/auto-effort/src/version.ts';
 
 // A stand-in engine: the hooks the module registers, driven the way the engine drives them, over a fake `$`.
 type Hook = (...args: any[]) => any;
@@ -1222,7 +1223,7 @@ suite('/auto-effort', () => {
     await e.prompt();
     await e.step({});
     const { text } = await e.command('');
-    expect(text).toContain('auto-effort 0.2.3 · on');
+    expect(text).toContain(`auto-effort ${VERSION} · on`);
     expect(text).toContain('level: high');
     expect(text).toContain('floor=medium');
     expect((await e.command('status')).text).toBe(text);
