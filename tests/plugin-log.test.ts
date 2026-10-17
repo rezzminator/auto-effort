@@ -22,6 +22,14 @@ const rows = (s: string) => s.trim().split('\n').map((l) => JSON.parse(l));
 const run = async (argv: string[]) => { const r = await exec('/bin/sh', argv.slice(1)); return { exitCode: 0, ...r }; };
 
 it.each([
+  ['error', true, true], ['error', false, true],
+  ['warning', true, false], ['warning', false, true],
+  ['info', true, false], ['info', false, true],
+])('diagnostic screen policy: %s logged=%s shows=%s', (level, logged, expected) => {
+  expect(writer().diagnosticOnScreen(level, logged)).toBe(expected);
+});
+
+it.each([
   { name: 'session known', f: fields, keys: ['ts', 'plugin', 'level', 'event', 'msg', 'where', 'session', 'detail'] },
   { name: 'session unknown', f: { ...fields, session: undefined }, keys: ['ts', 'plugin', 'level', 'event', 'msg', 'where', 'detail'] },
 ])('levelRow contract: $name', ({ f, keys }) => {

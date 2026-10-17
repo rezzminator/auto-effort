@@ -347,28 +347,29 @@ suite('turn.step', () => {
     await vi.waitFor(() => expect(e.logs.some((line) => line.includes('disk full'))).toBe(true));
   });
 
-  // R9 through the adapter: the toast and the mark in the store.
-  it('toasts once and stores the unsafe mark when the cache breaks after a switch', async () => {
+  // R9 through the adapter: the diagnostic and the mark in the store.
+  it('logs the cache guard without a toast and stores the unsafe mark after a switch', async () => {
     const e = engine();
     await e.start();
     await e.prompt();
     await e.step({}, { usage: usage(10, 0, 5000) });
     await e.tool({ tool: TOOL, level: 'medium', reason: 'rename' });
     await e.step({ index: 1 }, { usage: usage(4000, 100, 900) });
-    expect(e.toasts).toHaveLength(1);
-    expect(e.toasts[0]).toContain(OPUS);
+    await e.end();
+    expect(e.toasts).toEqual([]);
+    expect(e.logs).toEqual([]);
     expect((e.store.get('state') as any).unsafe[OPUS]).toMatchObject({ from: 'high', to: 'medium' });
     expect(await e.step({ index: 2 })).toMatchObject({ effort: 'xhigh' });
-    expect(e.toasts).toHaveLength(1);
+    expect(e.toasts).toEqual([]);
   });
 
-  it('starts off on a model the store marked unsafe, with one toast', async () => {
+  it('starts off on a model the store marked unsafe, without a diagnostic toast', async () => {
     const e = engine({}, { storeValue: { unsafe: { [OPUS]: { at: 'x', ratio: 0.1, prevPrompt: 1, cacheRead: 0, from: 'high', to: 'medium' } }, probation: {}, graduated: [] } });
     await e.start();
     await e.prompt();
     expect(await e.step({})).toMatchObject({ effort: 'xhigh' });
     await e.step({ index: 1 });
-    expect(e.toasts).toHaveLength(1);
+    expect(e.toasts).toEqual([]);
   });
 
   it('keeps a cache mark it could not save when the next prompt reads the store again, and saves it once the store takes it', async () => {
@@ -382,7 +383,7 @@ suite('turn.step', () => {
       throw new Error('store full');
     };
     await e.step({ index: 1 }, { usage: usage(4000, 100, 900) });
-    expect(e.toasts).toHaveLength(1);
+    expect(e.toasts).toEqual([]);
     expect(e.logs.some((line) => line.includes('store full'))).toBe(true);
     await e.prompt();
     expect(await e.step({ turnId: 't2' })).toMatchObject({ effort: 'xhigh' });
@@ -892,7 +893,7 @@ suite('/auto-effort', () => {
     await e.prompt();
     await e.step({});
     const { text } = await e.command('');
-    expect(text).toContain('auto-effort 0.2.3 · on');
+    expect(text).toContain('auto-effort 0.2.4-alpha · on');
     expect(text).toContain('level: high');
     expect(text).toContain('floor=medium');
     expect((await e.command('status')).text).toBe(text);
@@ -948,7 +949,52 @@ suite('manifest', () => {
 
 
 suite('plugin log adapter', () => {
-  it.each([true, false])('writes error, warning and applied effort with PLUGIN_LOG_DIR set=%s', async (set) => {
+  it('screen policy: warning stays off screen with an active log', async () => {
+    const e = engine({ logFile: '' });
+    const written: any[] = [];
+    e.$.process.run = async (argv) => {
+      for (let i = 7; i < argv.length; i += 2) written.push(JSON.parse(argv[i]!));
+      return { exitCode: 0, stdout: '', stderr: '' };
+    };
+    await e.prompt();
+    e.$.ui.status = () => { throw new Error('optional display unavailable'); };
+    expect(await e.step({})).toMatchObject({ effort: 'high' });
+    await e.end();
+    expect(written).toContainEqual(expect.objectContaining({ level: 'warning', event: 'status-failed', msg: expect.stringContaining('optional display unavailable') }));
+    expect(e.logs).toEqual([]);
+  });
+
+  it.each(['missing directory', 'write failure', 'initialization failure'])('screen policy: warning reaches screen with no log (%s)', async (failure) => {
+    const e = engine({ logFile: '' }, {
+      env: failure === 'missing directory' ? {} : { HOME: '/isolated/home' },
+      storeValue: { unsafe: { [OPUS]: { at: 'x', ratio: 0.1, prevPrompt: 1, cacheRead: 0, from: 'high', to: 'medium' } }, probation: {}, graduated: [] },
+    });
+    e.$.process.run = async () => ({ exitCode: 1, stdout: '', stderr: 'read-only log' });
+    if (failure === 'initialization failure') e.$.env.get = async (name) => {
+      if (name === 'PLUGIN_LOG_DIR') throw new Error('log environment unavailable');
+      return undefined;
+    };
+    await e.prompt();
+    await e.step({});
+    await e.end();
+    // The saved cache guard warning bypasses note(): its survival proves the log fallback, not an old note() echo.
+    expect(e.logs).toContain(`auto-effort is off for ${OPUS}: a cache check failed on it earlier. /auto-effort clear ${OPUS} turns it back on.`);
+    expect(e.logs.some((line) => line.includes('plugin log'))).toBe(true);
+  });
+
+  it.each([true, false])('screen policy: error always shows with log active=%s', async (active) => {
+    const e = engine({ logFile: '' }, { env: active ? { HOME: '/isolated/home' } : {} });
+    await e.prompt();
+    const error = new Error('upstream failed');
+    const hook = e.hooks.find((h) => h.name === 'turn.step')!.fn;
+    const gen = hook(e.$, { turnId: 't1', index: 0, model: OPUS, effort: 'xhigh', messageCount: 3 }, () => (async function* () { throw error; })());
+    await expect(gen.next()).rejects.toBe(error);
+    expect(e.logs).toContain('request failed: upstream failed');
+    await e.end();
+    expect(e.logs.filter((line) => line === 'request failed: upstream failed')).toHaveLength(1);
+  });
+
+  it.each([true, false])('writes reclassified option errors and applied effort with PLUGIN_LOG_DIR set=%s', async (set) => {
     const home = await mkdtemp(join(tmpdir(), 'auto-effort-adapter-'));
     const root = join(home, 'logs');
     const dir = set ? join(root, 'auto-effort') : join(home, '.local/state/auto-effort/logs');
@@ -964,8 +1010,11 @@ suite('plugin log adapter', () => {
       const end = e.hooks.find((h) => h.name === 'session.end');
       if (end) await e.end();
       const read = async (file: string) => { try { return (await readFile(join(dir, file), 'utf8')).trim().split('\n').map((l) => JSON.parse(l)); } catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []; throw error; } };
-      expect(await read('errors.jsonl')).toEqual([expect.objectContaining({ level: 'error', event: 'set-effort-failed', where: 'hooks/auto-effort.ts#answerSetEffort', session: 'sess1', detail: { error: 'unknown level' } })]);
-      expect(await read('warnings.jsonl')).toEqual([expect.objectContaining({ level: 'warning', event: 'option-error', where: 'hooks/auto-effort.ts#reportErrors' })]);
+      expect(await read('errors.jsonl')).toEqual([
+        expect.objectContaining({ level: 'error', event: 'option-error', where: 'hooks/auto-effort.ts#reportErrors' }),
+        expect.objectContaining({ level: 'error', event: 'set-effort-failed', where: 'hooks/auto-effort.ts#answerSetEffort', session: 'sess1', detail: { error: 'unknown level' } }),
+      ]);
+      expect(await read('warnings.jsonl')).toEqual([]);
       expect(await read('info.jsonl')).toEqual(expect.arrayContaining([expect.objectContaining({ level: 'info', event: 'effort-applied', session: 'sess1', detail: { level: 'high', source: 'plan' } })]));
     } finally { spy.mockRestore(); await rm(home, { recursive: true, force: true }); }
   });

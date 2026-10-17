@@ -7,6 +7,11 @@ export type PluginLogRun = (argv: string[]) => Promise<{ exitCode: number; stdou
 export type FlushResult = { written: number; dropped: number };
 const FILES = { error: 'errors.jsonl', warning: 'warnings.jsonl', info: 'info.jsonl' } as const;
 
+/** Errors show immediately; other diagnostics show only when their log could not keep them. */
+export function diagnosticOnScreen(level: PluginLogLevel, logged: boolean): boolean {
+  return level === 'error' || !logged;
+}
+
 function bytes(text: string): number {
   let n = 0;
   for (const c of text) { const p = c.codePointAt(0)!; n += p <= 0x7f ? 1 : p <= 0x7ff ? 2 : p <= 0xffff ? 3 : 4; }

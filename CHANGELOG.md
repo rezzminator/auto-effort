@@ -4,6 +4,14 @@ All notable changes to this plugin are recorded here. The format follows [Keep a
 
 ## [Unreleased]
 
+## [0.2.4-alpha] — 2026-10-17
+
+### Fixed
+
+- Warning and info diagnostics stay off screen while the plugin log works, including cache-safety notices. If logging is unavailable or fails, each unlogged diagnostic falls back to the screen, alongside the log's own failure notice.
+- Errors always reach the screen and the plugin log, including request failures previously logged only. Invalid settings and failed registration, state persistence, settings reads and effort-control operations are classified as errors because the requested feature could not complete.
+- Requested level status, tool replies, escalation/de-escalation context and command replies are unchanged; cache-guard diagnostics no longer produce separate toasts.
+
 ## [0.2.3] — 2026-10-16
 
 ### Fixed

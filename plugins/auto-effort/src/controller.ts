@@ -32,11 +32,10 @@ export type StepPlan = {
   /** The status line to pin; undefined clears it. */
   status: string | undefined;
   rows: Row[];
-  toast?: string;
 };
 
 /** `persisted` and `model` come together: the marks changed for that model, to be saved. */
-export type StepEnd = { warning?: PluginWarning; rows: Row[]; toast?: string; persisted?: Persisted; model?: string };
+export type StepEnd = { warning?: PluginWarning; rows: Row[]; persisted?: Persisted; model?: string };
 
 type Turn = {
   id: string;
@@ -216,11 +215,11 @@ export class Controller {
     return statusLine(this.turn.level, this.turn.reason, this.turn.source);
   }
 
-  private inactive(input: StepInput, wire: Carried, reason: string, gate: Gate, newTurn: boolean, rows: Row[], toast?: string, source: Source | 'off' = 'off'): StepPlan {
+  private inactive(input: StepInput, wire: Carried, reason: string, gate: Gate, newTurn: boolean, rows: Row[], source: Source | 'off' = 'off'): StepPlan {
     this.turn = null;
     this.inflight = { turnId: input.turnId, index: input.index, model: input.model, wire, source, active: false, gate, switched: false, prev: this.last, compacted: this.takeCompacted(), startedAt: this.now(), messages: input.messageCount };
     if (newTurn) rows.push({ event: 'decision', turnId: input.turnId, model: input.model, level: source === 'pin' ? wire ?? null : null, source, reason, sessionEffort: wire ?? null });
-    return { send: undefined, level: undefined, source, reason, newTurn, status: undefined, rows, ...(toast === undefined ? {} : { toast }) };
+    return { send: undefined, level: undefined, source, reason, newTurn, status: undefined, rows };
   }
 
   private takeCompacted(): boolean {
@@ -258,13 +257,13 @@ export class Controller {
 
     if (!this.enabled) return this.inactive(input, effort, 'auto-effort is off for this session', gate, newTurn, rows);
     if (!gate.active) {
-      const toast = gate.status === 'unsafe' && !this.told.has(name) ? `auto-effort is off for ${input.model}: a cache check failed on it earlier. /auto-effort clear ${name} turns it back on.` : undefined;
-      if (toast !== undefined) this.told.add(name);
-      const inactive = this.inactive(input, effort, `auto-effort does not change effort on ${input.model} (${gate.status})`, gate, newTurn, rows, toast);
-      return { ...inactive, ...(toast === undefined ? {} : { warning: { event: 'gate-unsafe', msg: toast, where: 'src/controller.ts#beginStep' } as PluginWarning }) };
+      const notice = gate.status === 'unsafe' && !this.told.has(name) ? `auto-effort is off for ${input.model}: a cache check failed on it earlier. /auto-effort clear ${name} turns it back on.` : undefined;
+      if (notice !== undefined) this.told.add(name);
+      const inactive = this.inactive(input, effort, `auto-effort does not change effort on ${input.model} (${gate.status})`, gate, newTurn, rows);
+      return { ...inactive, ...(notice === undefined ? {} : { warning: { event: 'gate-unsafe', msg: notice, where: 'src/controller.ts#beginStep' } as PluginWarning }) };
     }
     if (this.pin !== null) {
-      const plan = this.inactive(input, effort, 'you set /effort', gate, newTurn, rows, undefined, 'pin');
+      const plan = this.inactive(input, effort, 'you set /effort', gate, newTurn, rows, 'pin');
       return { ...plan, level: this.pin.level };
     }
 
@@ -310,7 +309,7 @@ export class Controller {
         ms: endedAt - inf.startedAt,
       },
     ];
-    let toast: string | undefined;
+    let notice: string | undefined;
     let persisted: Persisted | undefined;
     const model = normalizeModel(inf.model);
     if (inf.switched && inf.active && inf.prev !== undefined) {
@@ -345,11 +344,11 @@ export class Controller {
         persisted = this.store;
         this.told.add(normalizeModel(inf.model));
         rows.push({ event: 'gate', model: inf.model, status: 'unsafe', why: 'cache canary', ratio: verdict.ratio });
-        toast = `auto-effort stopped changing effort on ${inf.model}: after the change from ${String(prev.wire)} to ${String(inf.wire)} the cache read was ${(verdict.ratio * 100).toFixed(1)}% of the previous prompt (the check wants ${(s.canaryThreshold * 100).toFixed(0)}%). /auto-effort clear ${normalizeModel(inf.model)} turns it back on.`;
+        notice = `auto-effort stopped changing effort on ${inf.model}: after the change from ${String(prev.wire)} to ${String(inf.wire)} the cache read was ${(verdict.ratio * 100).toFixed(1)}% of the previous prompt (the check wants ${(s.canaryThreshold * 100).toFixed(0)}%). /auto-effort clear ${normalizeModel(inf.model)} turns it back on.`;
       }
     }
     this.last = usage === null ? undefined : { model: normalizeModel(inf.model), wire: inf.wire, usage, endedAt, messages: inf.messages };
-    return { rows, ...(toast === undefined ? {} : { toast, warning: { event: 'canary-failed', msg: toast, where: 'src/controller.ts#endStep' } as PluginWarning }), ...(persisted === undefined ? {} : { persisted, model }) };
+    return { rows, ...(notice === undefined ? {} : { warning: { event: 'canary-failed', msg: notice, where: 'src/controller.ts#endStep' } as PluginWarning }), ...(persisted === undefined ? {} : { persisted, model }) };
   }
 
   /** The request failed before it answered: nothing to compare the next one with. */

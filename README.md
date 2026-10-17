@@ -5,7 +5,7 @@
 **Automatic reasoning effort for the Claude Code main chat: each turn starts at a planned level, the model raises or lowers it with one tool call, and a cache check keeps every change safe.**
 
 [![Claude Code plugin](https://img.shields.io/badge/Claude%20Code-plugin-D97757)](https://docs.claude.com/en/docs/claude-code/plugins)
-[![Version](https://img.shields.io/badge/version-0.2.3-blue)](./CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.2.4--alpha-blue)](./CHANGELOG.md)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](./LICENSE)
 
 </div>
@@ -25,7 +25,7 @@ With this plugin the main chat's effort follows the work:
 - **A turn starts at a planned level** (`high` by default; `xhigh` when the prompt asks for thought or is long).
 - **The model sets the level it needs** with the `set_effort` tool, in its first response and again when the work changes. It is told to call it by the tool's description and by one line added to each prompt.
 - **Failing tests raise it, passing tests bring it back**: two failing test runs in a row lift the level one step, and the next passing run returns it to where the failures found it. Only a test command counts: the output of `cat`, `grep` or a build that happens to print `FAIL` does not.
-- **A cache check keeps it safe.** Changing effort mid-turn must not break the prompt cache. After every change the plugin compares the cache read of the switched request with the previous request's prompt; if it drops, the plugin stops changing effort on that model and tells you.
+- **A cache check keeps it safe.** Changing effort mid-turn must not break the prompt cache. After every change the plugin compares the cache read of the switched request with the previous request's prompt; if it drops, the plugin stops changing effort on that model and records a warning in its plugin log.
 
 Sub-agents are never touched; they keep the effort Claude Code gives them (see [agent-effort](https://github.com/rezzminator/agent-effort) to set theirs per spawn).
 
@@ -80,7 +80,7 @@ A level is always clamped to `floor`..`ceiling`. A model that takes no effort le
 
 ### The cache check
 
-The request that follows an effort change must read at least `canaryThreshold` of the previous request's whole prompt (uncached input plus cache read plus cache write) from the cache. If it does not, the plugin stops changing effort on that model, shows one notice, and remembers it across sessions. `/auto-effort clear <model>` turns it back on. A check that cannot hold judges nothing: more than `cacheTtlSeconds` between the two requests, a compaction in between, a different model, or a request whose message count shrank.
+The request that follows an effort change must read at least `canaryThreshold` of the previous request's whole prompt (uncached input plus cache read plus cache write) from the cache. If it does not, the plugin stops changing effort on that model, logs one warning, and remembers it across sessions. `/auto-effort clear <model>` turns it back on. A check that cannot hold judges nothing: more than `cacheTtlSeconds` between the two requests, a compaction in between, a different model, or a request whose message count shrank.
 
 ## `/auto-effort`
 
@@ -171,4 +171,4 @@ Built by Reza with [Professor](https://github.com/rezzminator/professor). MIT li
 
 ## Logs
 
-Errors, warnings and info append to `errors.jsonl`, `warnings.jsonl` and `info.jsonl` under `$PLUGIN_LOG_DIR/auto-effort/`. With `PLUGIN_LOG_DIR` unset they use `$HOME/.local/state/auto-effort/logs/`. Each row identifies its event and relative component. Rows are limited to 4096 bytes, and a file past 20 MiB moves to `.1` (replacing the previous `.1`). A write failure emits one screen notice per failing streak, re-armed after a successful write. Existing screen messages and the `logFile` decision log are unchanged.
+Errors, warnings and info append to `errors.jsonl`, `warnings.jsonl` and `info.jsonl` under `$PLUGIN_LOG_DIR/auto-effort/`. With `PLUGIN_LOG_DIR` unset they use `$HOME/.local/state/auto-effort/logs/`. Each row identifies its event and relative component. Rows are limited to 4096 bytes, and a file past 20 MiB moves to `.1` (replacing the previous `.1`). Error diagnostics appear on screen immediately and are also logged. Warning and info diagnostics stay in the plugin log only, including cache-safety warnings and optional status-display failures. When no log directory can be resolved or a log write fails, those diagnostics fall back to the screen; the log failure itself emits one screen notice per failing streak, re-armed after a successful write. Invalid settings and failures of registration, state persistence, settings reads or effort control are errors, not warnings: the requested feature could not complete. The level status line, `set_effort` replies, escalation/de-escalation context and `/auto-effort` command replies are requested product output, not diagnostics, and remain unchanged. The `logFile` decision log is unchanged.

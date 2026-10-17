@@ -495,20 +495,20 @@ describe('cache canary (R9)', () => {
   it('is clean at a ratio of 0.9 or more, logs it and marks nothing', () => {
     const { r, out } = switched(4990);
     expect(out.end.persisted).toBeUndefined();
-    expect(out.end.toast).toBeUndefined();
+    expect(out.end.warning?.msg).toBeUndefined();
     expect(r.rows.find((row) => row.event === 'canary')).toMatchObject({ verdict: 'ok', from: 'high', to: 'medium' });
     expect(r.rows.find((row) => row.event === 'canary')?.ratio).toBeCloseTo(4990 / 5010, 4);
   });
 
-  it('marks the model unsafe below the threshold, toasts once and stops switching on that model', () => {
+  it('marks the model unsafe below the threshold, warns once and stops switching on that model', () => {
     const { r, out } = switched(200);
     expect(out.end.persisted?.unsafe[OPUS]).toMatchObject({ from: 'high', to: 'medium' });
-    expect(out.end.toast).toContain(OPUS);
-    expect(out.end.toast).toContain('/auto-effort clear');
+    expect(out.end.warning?.msg).toContain(OPUS);
+    expect(out.end.warning?.msg).toContain('/auto-effort clear');
     expect(r.rows.find((row) => row.event === 'canary')).toMatchObject({ verdict: 'fail' });
     const after = r.step('t1', 2, { effort: 'xhigh' });
     expect(after.plan).toMatchObject({ send: undefined, source: 'off' });
-    expect(after.end.toast).toBeUndefined();
+    expect(after.end.warning?.msg).toBeUndefined();
     expect(r.ctl.persisted.unsafe[OPUS]).toBeDefined();
   });
 
@@ -518,8 +518,8 @@ describe('cache canary (R9)', () => {
     later.prompt();
     const first = later.step('t9', 0);
     expect(first.plan).toMatchObject({ send: undefined, source: 'off' });
-    expect(first.plan.toast).toContain(OPUS);
-    expect(later.step('t9', 1).plan.toast).toBeUndefined();
+    expect(first.plan.warning?.msg).toContain(OPUS);
+    expect(later.step('t9', 1).plan.warning?.msg).toBeUndefined();
     later.ctl.clear(OPUS);
     later.prompt();
     expect(later.step('t10', 0).plan).toMatchObject({ send: 'high', source: 'plan' });
@@ -640,15 +640,15 @@ describe('controller upkeep', () => {
     r.step('t1', 0, { effort: 'xhigh' });
     r.prompt();
     expect(r.step('t2', 0, { effort: 'low' }).plan).toMatchObject({ source: 'pin' });
-    expect(r.step('t3', 0, { model: 'claude-fable-5-1' }).plan.toast).toContain('claude-fable-5-1');
-    expect(r.step('t4', 0, { model: 'claude-fable-5-1' }).plan.toast).toBeUndefined();
+    expect(r.step('t3', 0, { model: 'claude-fable-5-1' }).plan.warning?.msg).toContain('claude-fable-5-1');
+    expect(r.step('t4', 0, { model: 'claude-fable-5-1' }).plan.warning?.msg).toBeUndefined();
     r.ctl.setEnabled(false);
     r.ctl.resetSession();
     expect(r.ctl.view()).toMatchObject({ enabled: true, pin: null, turn: null, model: undefined });
     r.prompt();
     expect(r.step('t5', 0, { effort: 'low' }).plan).toMatchObject({ send: 'high', source: 'plan', newTurn: true });
     expect(r.rows.filter((row) => row.event === 'switch' || row.event === 'pin').map((row) => row.turnId)).toEqual(['t2']);
-    expect(r.step('t6', 0, { model: 'claude-fable-5-1' }).plan.toast).toContain('claude-fable-5-1');
+    expect(r.step('t6', 0, { model: 'claude-fable-5-1' }).plan.warning?.msg).toContain('claude-fable-5-1');
   });
 
   it('takes settings changed in place', () => {
@@ -716,16 +716,16 @@ describe('session state', () => {
 });
 
 
-it('returns logging metadata for unsafe and failed-canary toasts, keeping their text', () => {
+it('returns warning diagnostics for unsafe and failed-canary decisions', () => {
   const unsafe = markUnsafe(EMPTY_PERSISTED, OPUS, { at: 'x', ratio: 0.1, prevPrompt: 1, cacheRead: 0, from: 'high', to: 'medium' });
   const off = rig({}, unsafe);
   const first = off.step('t1', 0).plan;
-  expect((first as any).warning).toEqual({ event: 'gate-unsafe', msg: first.toast, where: 'src/controller.ts#beginStep' });
-  expect(off.step('t1', 1).plan.toast).toBeUndefined();
+  expect(first.warning).toEqual({ event: 'gate-unsafe', msg: expect.stringContaining(`auto-effort is off for ${OPUS}`), where: 'src/controller.ts#beginStep' });
+  expect(off.step('t1', 1).plan.warning?.msg).toBeUndefined();
   const active = rig();
   active.prompt(); active.step('t1', 0, { u: usage(10, 0, 5000) });
   active.set({ level: 'medium', reason: 'rename' });
   const end = active.step('t1', 1, { u: usage(4000, 100, 900) }).end;
-  expect((end as any).warning).toEqual({ event: 'canary-failed', msg: end.toast, where: 'src/controller.ts#endStep' });
-  expect(end.toast).toContain('stopped changing effort');
+  expect(end.warning).toEqual({ event: 'canary-failed', msg: expect.stringContaining(`auto-effort stopped changing effort on ${OPUS}`), where: 'src/controller.ts#endStep' });
+  expect(end.warning?.msg).toContain('stopped changing effort');
 });
