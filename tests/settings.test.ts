@@ -132,6 +132,7 @@ describe('resolveSettings with environment variables', () => {
     cacheTtlSeconds: 'AUTO_EFFORT_CACHE_TTL_SECONDS',
     statusLine: 'AUTO_EFFORT_STATUS_LINE',
     logFile: 'AUTO_EFFORT_LOG_FILE',
+    stateFile: 'AUTO_EFFORT_STATE_FILE',
     lowerOnPass: 'AUTO_EFFORT_LOWER_ON_PASS',
     testCommandPatterns: 'AUTO_EFFORT_TEST_COMMAND_PATTERNS',
   } as const;
@@ -161,6 +162,7 @@ describe('resolveSettings with environment variables', () => {
     ['canaryThreshold', '0.5', 0.8, 0.5],
     ['cacheTtlSeconds', '3600', 60, 3600],
     ['logFile', '/var/log/effort.jsonl', '/other.jsonl', '/var/log/effort.jsonl'],
+    ['stateFile', '/run/effort.json', '/other.json', '/run/effort.json'],
     ['lowerOnPass', ' False ', true, false],
     ['lowerOnPass', '1', false, true],
     ['testCommandPatterns', '["\\\\bmytest\\\\b"]', ['\\bother\\b'], ['\\bmytest\\b']],

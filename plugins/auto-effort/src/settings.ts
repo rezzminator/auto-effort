@@ -31,6 +31,7 @@ export type Settings = {
   cacheTtlSeconds: number;
   statusLine: boolean;
   logFile: string;
+  stateFile: string;
 };
 
 export const DEFAULTS: Settings = {
@@ -69,6 +70,7 @@ export const DEFAULTS: Settings = {
   cacheTtlSeconds: 300,
   statusLine: true,
   logFile: '~/.local/state/auto-effort/decisions.jsonl',
+  stateFile: '~/.local/state/auto-effort/state.json',
 };
 
 export const SETTING_KEYS = Object.keys(DEFAULTS) as Array<keyof Settings>;
@@ -162,6 +164,7 @@ const PARSERS: { [K in keyof Settings]: (raw: unknown) => Parsed<Settings[K] | '
   cacheTtlSeconds: parseInt1,
   statusLine: parseBool,
   logFile: parseText,
+  stateFile: parseText,
 };
 
 function errorLine(key: string, raw: unknown, why: string, from?: string): string {

@@ -7,6 +7,7 @@ import { levelsWithin } from '../src/levels.ts';
 import { expandHome, fillSegments, SEGMENT_ROWS, sessionLogPath } from '../src/log.ts';
 import { normalizeModel } from '../src/model.ts';
 import { envName, PLUGIN, resolveSettings, SETTING_KEYS, type EnvValues } from '../src/settings.ts';
+import { KEEPER_ARGV, stateText, type EffortState } from '../src/state.ts';
 import { quote, toolDescription } from '../src/text.ts';
 import { levelRow, pluginLogDir, PluginLogQueue, type PluginLogLevel } from '../src/plugin-log.ts';
 import { VERSION } from '../src/version.ts';
@@ -54,6 +55,27 @@ type State = {
   pluginLog?: PluginLogQueue;
   pluginWriting: Promise<void>;
   pluginFailure: boolean;
+  /** The mode, level and reason last seen, so the reason shows as a notice only when one of them changes. */
+  shown: string;
+  /** The state file's path, state and keeper last written, so an unchanged line is not written again. */
+  stateWritten: string;
+  /** The path whose line names a live keeper, and the state it holds: retired (keeper 0) when the plugin leaves it. */
+  statePath: string;
+  stateLast: EffortState | undefined;
+  /** The pid of the keeper vouching for the state file's line; 0 while none runs. */
+  keeper: number;
+  keeperStarting: Promise<void> | undefined;
+  /** A keeper start failed and was said: the next failure says nothing until one starts. */
+  keeperFailed: boolean;
+  /** This keeper's end was said: a later end says nothing until another keeper starts. */
+  keeperEnded: boolean;
+  /** The session whose line was retired at its end: no publish vouches for it again until a hook follows a session. */
+  stateRetired: string | undefined;
+  /** Lines whose retire failed, by path, with the state each holds: tried again at every write; a failure said once per path. */
+  stateUnretired: Map<string, { last: EffortState; said: boolean }>;
+  /** The path and state whose write failed last, so a failure is said once per failing path and state; '' after a success. */
+  stateFailed: string;
+  stateWriting: Promise<void>;
 };
 
 function pluginFallback($: EngineInterface, notice: string): void {
@@ -163,18 +185,175 @@ function record($: EngineInterface, st: State, rows: readonly Row[]): void {
   st.writing = st.writing.then(() => flush($, st));
 }
 
-function present($: EngineInterface, st: State, status: string | undefined, toast?: string): void {
+function notice($: EngineInterface, st: State, text: string): void {
   try {
-    $.ui.status(status);
+    $.ui.toast(text);
   } catch (error) {
-    note($, st, 'warning', 'status-failed', 'hooks/auto-effort.ts#present', 'showing the status line', error, 'the request goes on');
+    note($, st, 'warning', 'toast-failed', 'hooks/auto-effort.ts#notice', 'showing a notice', error, `the notice was: ${text}`);
   }
-  if (toast === undefined) return;
+}
+
+// The keeper vouches for the state file's line while this module is loaded: the host kills it when the module unloads
+// (a disable, a reload, the session's process ending), and it exits within two seconds of the process that started it.
+// It prints its own pid first, on stdout; one that cannot start, prints no pid within two seconds or ends leaves keeper 0,
+// written to the line it vouched for at once, so the line reads stale. It never rejects.
+function ensureKeeper($: EngineInterface, st: State): Promise<void> {
+  if (st.keeper !== 0) return Promise.resolve();
+  st.keeperStarting ??= startKeeper($, st).finally(() => {
+    st.keeperStarting = undefined;
+  });
+  return st.keeperStarting;
+}
+
+async function startKeeper($: EngineInterface, st: State): Promise<void> {
   try {
-    $.ui.toast(toast);
+    const stream = $.process.spawn({ argv: KEEPER_ARGV });
+    // The pid is the first stdout line, which may come in pieces; what the shell writes to stderr is no pid.
+    const deadline = $.clock.sleep(2000).then(() => undefined);
+    let out = '';
+    let err = '';
+    let why = '';
+    while (!out.includes('\n')) {
+      const piece = await Promise.race([stream.next(), deadline]);
+      if (piece === undefined) why = 'it printed no pid within 2 s';
+      else if (piece.done) why = `it exited at once (code ${String(piece.value.code)})`;
+      else if (piece.value.stream === 'stdout') out += piece.value.text;
+      else err += piece.value.text;
+      if (why !== '') break;
+    }
+    const line = out.split('\n')[0]!.trim();
+    if (why === '' && (!/^\d+$/.test(line) || Number(line) <= 0)) why = `its first output ${JSON.stringify(line)} is no pid`;
+    if (why !== '') {
+      void stream.return(undefined as never).catch(() => undefined);
+      throw new Error(err === '' ? why : `${why}; it wrote to stderr: ${JSON.stringify(err.trim())}`);
+    }
+    st.keeper = Number(line);
+    st.keeperFailed = false;
+    st.keeperEnded = false;
+    void (async () => {
+      let why = 'it exited';
+      try {
+        for (;;) {
+          const piece = await stream.next();
+          if (piece.done) {
+            why = `it exited (code ${String(piece.value.code)}, signal ${String(piece.value.signal ?? 'none')})`;
+            break;
+          }
+        }
+      } catch (error) {
+        why = message(error);
+      }
+      st.keeper = 0;
+      try {
+        publish($, st);
+      } catch {
+        // A module the host unloaded has no state left to write: the unload retired its line.
+      }
+      if (st.keeperEnded) return;
+      st.keeperEnded = true;
+      try {
+        note($, st, 'warning', 'state-keeper-ended', 'hooks/auto-effort.ts#startKeeper', 'keeping the state file keeper', new Error(`the state file keeper ended: ${why}`), 'a status line shows the state stale until the next prompt starts another');
+      } catch {
+        // A module the host unloaded has no screen left: its keeper ending is the unload itself.
+      }
+    })();
   } catch (error) {
-    note($, st, 'warning', 'toast-failed', 'hooks/auto-effort.ts#present', 'showing a notice', error, `the notice was: ${toast}`);
+    st.keeper = 0;
+    if (st.keeperFailed) return;
+    st.keeperFailed = true;
+    try {
+      note($, st, 'warning', 'state-keeper-failed', 'hooks/auto-effort.ts#startKeeper', 'starting the state file keeper', error, 'the state file names no keeper, so a status line shows it stale; the next prompt tries again');
+    } catch (screenError) {
+      plog($, st, 'warning', 'state-keeper-failed', `auto-effort: showing the state file keeper failure failed: ${message(screenError)}; the failure was: ${message(error)}`, 'hooks/auto-effort.ts#startKeeper');
+    }
   }
+}
+
+// The line the plugin leaves: its last state, vouched by no keeper. A retire that fails is kept and tried again at every
+// write until one lands, and said once per path.
+async function retireState($: EngineInterface, st: State): Promise<void> {
+  const path = st.statePath;
+  const last = st.stateLast;
+  st.statePath = '';
+  st.stateLast = undefined;
+  st.stateWritten = '';
+  if (path === '' || last === undefined) return;
+  const held = st.stateUnretired.get(path);
+  st.stateUnretired.set(path, { last, said: held?.said ?? false });
+  await retryRetires($, st, '');
+}
+
+async function retryRetires($: EngineInterface, st: State, keep: string): Promise<void> {
+  for (const [path, held] of [...st.stateUnretired]) {
+    if (path === keep) {
+      // The line is written again with its keeper: nothing is left to retire there.
+      st.stateUnretired.delete(path);
+      continue;
+    }
+    try {
+      await $.fs.write(path, stateText(held.last, 0, new Date(await $.clock.now())));
+      st.stateUnretired.delete(path);
+    } catch (error) {
+      if (held.said) continue;
+      held.said = true;
+      try {
+        note($, st, 'warning', 'state-file-retire-failed', 'hooks/auto-effort.ts#retireState', `retiring the state file ${path}`, error, 'a status line reading it trusts it until a later write retires it');
+      } catch (screenError) {
+        plog($, st, 'warning', 'state-file-retire-failed', `auto-effort: showing the state file retire failure failed: ${message(screenError)}; the failure was: ${message(error)}`, 'hooks/auto-effort.ts#retireState');
+      }
+    }
+  }
+}
+
+// The state file a status line reads: rewritten whole when the path, the state or the keeper changes; the line at a
+// path the plugin leaves (stateFile changed or emptied, a new session) is retired first. A failed write is tried again
+// at every publish until one succeeds, and said once per failing path and state. It never rejects, so a failure cannot
+// stop the writes queued after it.
+async function writeState($: EngineInterface, st: State, state: EffortState): Promise<void> {
+  const file = st.ctl.settings.stateFile;
+  let key = `${file}\n${JSON.stringify(state)}`;
+  try {
+    let path = '';
+    if (file !== '') {
+      const id = st.sessionId ?? (st.sessionId = await $.session.id());
+      path = sessionLogPath(expandHome(file, await $.env.get('HOME')), id);
+    }
+    if (st.statePath !== '' && st.statePath !== path) await retireState($, st);
+    // A line retired at its session's end stays retired: a publish still running for that session writes nothing.
+    if (path === '' || (st.stateRetired !== undefined && st.stateRetired === st.sessionId)) {
+      await retryRetires($, st, '');
+      return;
+    }
+    await retryRetires($, st, path);
+    const keeper = st.keeper;
+    key = `${path}\n${JSON.stringify(state)}\n${String(keeper)}`;
+    if (key === st.stateWritten) return;
+    await $.fs.write(path, stateText(state, keeper, new Date(await $.clock.now())));
+    st.stateWritten = key;
+    st.statePath = path;
+    st.stateLast = state;
+    st.stateFailed = '';
+  } catch (error) {
+    if (st.stateFailed === key) return;
+    st.stateFailed = key;
+    try {
+      note($, st, 'warning', 'state-file-write-failed', 'hooks/auto-effort.ts#writeState', 'writing the state file', error, 'a status line reading it shows the state it held before');
+    } catch (screenError) {
+      plog($, st, 'warning', 'state-file-write-failed', `auto-effort: showing the state file failure failed: ${message(screenError)}; the failure was: ${message(error)}`, 'hooks/auto-effort.ts#writeState');
+    }
+  }
+}
+
+// The session's state, after anything that may change it: the reason as a notice when the mode, level or reason changed
+// while the plugin steers, and the state file, never on the request's path.
+function publish($: EngineInterface, st: State): void {
+  const state = st.ctl.stateNow();
+  const shown = `${state.mode}|${String(state.level)}|${state.reason}`;
+  if (shown !== st.shown) {
+    st.shown = shown;
+    if (st.ctl.settings.statusLine && state.level !== null && (state.mode === 'auto' || state.mode === 'model')) notice($, st, state.reason);
+  }
+  st.stateWriting = st.stateWriting.then(() => writeState($, st, state));
 }
 
 function reportErrors($: EngineInterface, st: State, errors: string[]): void {
@@ -201,8 +380,8 @@ async function ensureTool($: EngineInterface, st: State): Promise<void> {
     inputSchema: {
       type: 'object',
       properties: {
-        level: { type: 'string', enum: levels, description: 'The reasoning effort to hold from the next request until the turn ends.' },
-        effort: { type: 'string', enum: levels, description: 'The same as level.' },
+        level: { type: 'string', enum: [...levels, 'auto'], description: 'The reasoning effort from the next request on; it holds across turns until you call it with auto, which hands the effort back to the automatic rules.' },
+        effort: { type: 'string', enum: [...levels, 'auto'], description: 'The same as level.' },
         reason: { type: 'string', description: 'A few words on why this level fits the work ahead.' },
       },
     },
@@ -223,14 +402,14 @@ async function restoreSession($: EngineInterface, st: State): Promise<void> {
     if (value !== undefined) {
       const saved = readSessionState(value);
       if (saved === undefined) {
-        note($, st, 'warning', 'saved-switch-unreadable', 'hooks/auto-effort.ts#restoreSession', 'reading the saved on/off and pin', new Error(`${quote(value)} is not in the expected form`), 'this session is on and unpinned');
+        note($, st, 'warning', 'saved-switch-unreadable', 'hooks/auto-effort.ts#restoreSession', 'reading the saved on/off, the pin and the set_effort level', new Error(`${quote(value)} is not in the expected form`), 'this session is on and unpinned, with no set_effort level');
       } else {
         st.ctl.restoreSession(saved);
         st.savedSession = JSON.stringify(st.ctl.sessionState());
       }
     }
   } catch (error) {
-    note($, st, 'warning', 'saved-switch-unreadable', 'hooks/auto-effort.ts#restoreSession', 'reading the saved on/off and pin', error, 'this session is on and unpinned');
+    note($, st, 'warning', 'saved-switch-unreadable', 'hooks/auto-effort.ts#restoreSession', 'reading the saved on/off, the pin and the set_effort level', error, 'this session is on and unpinned, with no set_effort level');
   }
 }
 
@@ -254,7 +433,7 @@ async function saveSession($: EngineInterface, st: State): Promise<void> {
   // The save is tried again at each request; it is said once for each state that cannot be saved.
   if (st.saveFailed === text) return;
   st.saveFailed = text;
-  note($, st, 'warning', 'saved-switch-unsaved', 'hooks/auto-effort.ts#saveSession', 'saving the on/off and pin', failure, 'they hold in this session, but a reload would lose them');
+  note($, st, 'warning', 'saved-switch-unsaved', 'hooks/auto-effort.ts#saveSession', 'saving the on/off, the pin and the set_effort level', failure, 'they hold in this session, but a reload would lose them');
 }
 
 async function start($: EngineInterface, st: State): Promise<void> {
@@ -276,6 +455,14 @@ async function start($: EngineInterface, st: State): Promise<void> {
   } catch (error) {
     note($, st, 'warning', 'tool-register-failed', 'hooks/auto-effort.ts#start', 'registering the set_effort tool', error, 'the turn reminder and the planning level still apply; the next prompt tries again');
   }
+  // The effort line moved to the state file: a line an older version pinned to the status area goes.
+  try {
+    $.ui.status(undefined);
+  } catch (error) {
+    note($, st, 'warning', 'status-failed', 'hooks/auto-effort.ts#start', 'clearing the status line', error, 'a line an older version pinned may stay');
+  }
+  await ensureKeeper($, st);
+  publish($, st);
   try {
     await $.command.register({ name: PLUGIN, description: 'Show or change automatic reasoning effort: status, on, off, set <key> <value>, clear [model]' });
   } catch (error) {
@@ -309,6 +496,7 @@ async function followSession($: EngineInterface, st: State): Promise<void> {
     st.segments.clear();
   }
   st.sessionId = id;
+  st.stateRetired = undefined;
   if (st.restored !== id) await restoreSession($, st);
 }
 
@@ -357,6 +545,7 @@ async function readEnv($: EngineInterface): Promise<EnvValues> {
     cacheTtlSeconds: $.env.get('AUTO_EFFORT_CACHE_TTL_SECONDS'),
     statusLine: $.env.get('AUTO_EFFORT_STATUS_LINE'),
     logFile: $.env.get('AUTO_EFFORT_LOG_FILE'),
+    stateFile: $.env.get('AUTO_EFFORT_STATE_FILE'),
     lowerOnPass: $.env.get('AUTO_EFFORT_LOWER_ON_PASS'),
     testCommandPatterns: $.env.get('AUTO_EFFORT_TEST_COMMAND_PATTERNS'),
   };
@@ -411,7 +600,8 @@ async function finishStep($: EngineInterface, st: State, raw: unknown): Promise<
     const end = st.ctl.endStep(toUsage(raw));
     record($, st, end.rows);
     if (end.warning !== undefined) plog($, st, 'warning', end.warning.event, end.warning.msg, end.warning.where);
-    if (end.toast !== undefined) present($, st, st.ctl.statusNow(), end.toast);
+    if (end.toast !== undefined) notice($, st, end.toast);
+    publish($, st);
     if (end.model !== undefined) await saveMarks($, st, [end.model]);
   } catch (error) {
     st.ctl.failStep();
@@ -419,10 +609,13 @@ async function finishStep($: EngineInterface, st: State, raw: unknown): Promise<
   }
 }
 
-function answerSetEffort($: EngineInterface, st: State, e: Record<string, unknown>): { result: string } {
+// The main chat's level is the session's, like the on/off and the pin: saved, so a reload keeps it.
+async function answerSetEffort($: EngineInterface, st: State, e: Record<string, unknown>): Promise<{ result: string }> {
   try {
     const answer = st.ctl.setEffort({ input: { level: e.level, effort: e.effort, reason: e.reason }, agent: e.agentId !== undefined });
     record($, st, answer.rows);
+    publish($, st);
+    await saveSession($, st);
     return { result: answer.text };
   } catch (error) {
     note($, st, 'error', 'set-effort-failed', 'hooks/auto-effort.ts#answerSetEffort', 'applying set_effort', error, 'the effort stays as it was');
@@ -439,7 +632,7 @@ async function runCommand($: EngineInterface, st: State, args: string): Promise<
     case 'off':
       st.ctl.setEnabled(command.kind === 'on');
       await saveSession($, st);
-      present($, st, st.ctl.statusNow());
+      publish($, st);
       return `auto-effort is ${command.kind} for this session.`;
     case 'clear': {
       const stored = readPersisted(await $.store.get(STORE_KEY));
@@ -449,6 +642,7 @@ async function runCommand($: EngineInterface, st: State, args: string): Promise<
         return command.model === undefined ? 'Nothing to clear: no model has a cache mark.' : `Nothing to clear: ${command.model} has no cache mark.`;
       }
       st.ctl.clear(command.model);
+      publish($, st);
       const saved = await saveMarks($, st, named);
       const cleared = `Cache mark cleared for ${command.model ?? 'every model'}; automatic effort applies to it again.`;
       return saved ? cleared : `${cleared} Saving it failed, so it holds in this session; the next prompt tries again.`;
@@ -466,7 +660,7 @@ async function runCommand($: EngineInterface, st: State, args: string): Promise<
       const fromRows = rowLayer(rows);
       const applied = applyLayers($, st, { ...st.options, ...fromRows, [command.key]: typed }, await currentEnv($, st), Object.keys(fromRows).length > 0 ? '/config' : 'plugin options');
       await ensureTool($, st);
-      present($, st, st.ctl.statusNow());
+      publish($, st);
       const now = JSON.stringify(applied.settings[command.key]);
       if (applied.fromEnv.includes(command.key)) return `${command.key} is saved as ${JSON.stringify(typed)}, but ${envName(command.key)} is set and still applies: ${command.key} stays ${now}.`;
       if (now !== JSON.stringify(typed)) return `${command.key} is saved as ${JSON.stringify(typed)}, but ${now} is in effect: see the option errors in /auto-effort status.`;
@@ -500,6 +694,18 @@ export const register: Register = (on, options) => {
     writing: Promise.resolve(),
     pluginWriting: Promise.resolve(),
     pluginFailure: false,
+    shown: '',
+    stateWritten: '',
+    statePath: '',
+    stateLast: undefined,
+    keeper: 0,
+    keeperStarting: undefined,
+    keeperFailed: false,
+    keeperEnded: false,
+    stateRetired: undefined,
+    stateUnretired: new Map(),
+    stateFailed: '',
+    stateWriting: Promise.resolve(),
   };
 
   on('session.start', async ($, e, next) => {
@@ -515,6 +721,9 @@ export const register: Register = (on, options) => {
       await refresh($, st);
       const out = st.ctl.onPrompt({ text: e.text, model: await $.session.model(), midTurn: e.turnId !== undefined, wait: e.wait });
       record($, st, out.rows);
+      publish($, st);
+      // A keeper that ended is started again off the request's path; the line names it once it runs.
+      if (st.keeper === 0) void ensureKeeper($, st).then(() => publish($, st));
       if (out.reminder !== undefined) context = [...(e.context ?? []), out.reminder];
     } catch (error) {
       note($, st, 'warning', 'plan-failed', 'hooks/auto-effort.ts#prompt.submit', 'planning the turn', error, 'the prompt goes through unchanged');
@@ -538,7 +747,8 @@ export const register: Register = (on, options) => {
       // Never on the request's path: the save is the host's, and the request goes now.
       void saveSession($, st);
       if (plan.warning !== undefined) plog($, st, 'warning', plan.warning.event, plan.warning.msg, plan.warning.where);
-      present($, st, plan.status, plan.toast);
+      if (plan.toast !== undefined) notice($, st, plan.toast);
+      publish($, st);
       if (plan.send !== undefined) {
         request = { ...e, effort: plan.send };
         plog($, st, 'info', 'effort-applied', `effort applied: ${plan.send}`, 'hooks/auto-effort.ts#turn.step', { level: plan.send, source: plan.source });
@@ -592,7 +802,13 @@ export const register: Register = (on, options) => {
     return result;
   });
 
+  // The session's line is retired at its end: its last state, vouched by no keeper. A publish still running for the
+  // ended session writes nothing; once a hook follows the session again (the process goes on after /clear), the next
+  // publish writes the line with the keeper.
   on('session.end', async ($, e, next) => {
+    st.stateRetired = st.sessionId;
+    st.stateWriting = st.stateWriting.then(() => retireState($, st));
+    await st.stateWriting;
     await st.pluginWriting;
     return next(e);
   });

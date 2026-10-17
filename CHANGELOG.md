@@ -4,6 +4,16 @@ All notable changes to this plugin are recorded here. The format follows [Keep a
 
 ## [Unreleased]
 
+### Added
+
+- `set_effort` takes `auto`: it hands the main chat's effort back to the automatic rules, so the current turn runs at its planned level again and each turn starts at its own.
+- The `stateFile` option (`AUTO_EFFORT_STATE_FILE`, default `~/.local/state/auto-effort/state.json`): one JSON line per session, `state.<session>.json`, naming the effort's mode (`auto`, `model`, `pin` or `off`), its level, the reason and `keeper`, the pid of a keeper process that lives while the plugin is loaded, so a status line shows a line no plugin stands behind as stale. The line is retired (`keeper` 0) at the session's end and when `stateFile` moves or empties, a retire that cannot be written is tried again at each later write, and a keeper that ends leaves `keeper` 0 at once. The keeper's pid is read from its stdout alone, whatever the shell writes to stderr. README § The state file is its contract.
+
+### Changed
+
+- A level the model sets with `set_effort` holds across turns, over the planned level, the turn's start and test-failure rises, until the model calls `set_effort` with `auto`; it was dropped when the turn ended. At the failure threshold the model is told its level stays, and decides. Your `/effort` and `/auto-effort off` still outrank it, and it survives a plugin reload. On a model whose requests carry no effort level, or a level outside the five, `set_effort` refuses a level and says with `auto` that nothing is steered, and `/auto-effort status` shows a held level as kept, not in effect.
+- No line in the status area any more: the plugin clears the `⚠ auto-effort: effort auto: …` line an older version pinned. With `statusLine` on, the reason shows as a notice when the mode, level or reason changes while the plugin sets the level; the mode and level are in `stateFile`.
+
 ## [0.2.3] — 2026-10-16
 
 ### Fixed

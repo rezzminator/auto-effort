@@ -22,18 +22,41 @@ export function toolDescription(floor: Effort, ceiling: Effort): string {
       return `- ${level}: ${text}.`;
     });
   return [
-    'set_effort: set your reasoning effort for the requests after this call, until this turn ends.',
+    'set_effort: set your reasoning effort for the requests after this call. A level you set holds across turns, over the automatic rules, until you call set_effort with auto.',
+    'auto hands the effort back to the automatic rules: each turn starts at its planned level, and failing test runs raise it.',
     'Main chat only: a sub-agent never calls it.',
-    'Call it in your first response of every user turn, alongside your first tool calls.',
+    'Call it in your first response of a user turn whose work needs another level than the one in effect, alongside your first tool calls.',
     ...lines,
     'Raise it the moment the work turns harder than planned: a test fails for a reason you cannot name, or a fix you were sure of did not hold. Lower it once only mechanical steps remain.',
     'If the answer itself needs deep thought and there is no tool work, call this first and answer after its result.',
   ].join('\n');
 }
 
-/** The one line added to each prompt: the level the turn starts at, and the tool. */
+/** The one line added to each prompt while the automatic rules hold: the level the turn starts at, and the tool. */
 export function reminderLine(level: Effort, tool: string): string {
-  return `Your reasoning effort starts this turn at ${level}, and this first response runs at ${level}. Call ${tool} first, with the level the work ahead needs; it holds until the turn ends. With no call, the turn stays at ${level}.`;
+  return `Your reasoning effort starts this turn at ${level}, and this first response runs at ${level}. Call ${tool} first, with the level the work ahead needs; a level you set holds across turns until you call it with auto. With no call, the turn stays at ${level}.`;
+}
+
+/** The one line added to each prompt while the main chat's own level holds. */
+export function overrideReminderLine(level: Effort, tool: string): string {
+  return `Your reasoning effort is ${level}, the level you set with ${tool}; it holds across turns. Call it with another level when the work changes, or with auto to hand it back to the automatic rules.`;
+}
+
+/** The answer to a level set with set_effort, with why a clamped level differs from the one asked. */
+export function setText(applied: Effort, requested: Effort, floor: Effort, ceiling: Effort): string {
+  const clamped = applied === requested ? '' : ` (${requested} is ${rank(requested) < rank(floor) ? `below the floor ${floor}` : `above the ceiling ${ceiling}`})`;
+  return `Effort set to ${applied} from your next request${clamped}; it holds across turns until you call set_effort with auto.`;
+}
+
+/**
+ * The answer to set_effort with auto. `held`: a level of the main chat's was held; `level`: what the current turn runs at
+ * again, null with no turn steered; `outranked`: what still decides the effort instead (a pin, off, the model gate).
+ */
+export function handBackText(input: { held: boolean; level: Effort | null; outranked?: string }): string {
+  if (input.outranked !== undefined) return `Effort handed back to the automatic rules; ${input.outranked}.`;
+  if (!input.held) return 'Nothing to hand back: your reasoning effort already follows the automatic rules.';
+  if (input.level === null) return 'Effort handed back to the automatic rules: each turn starts at its planned level.';
+  return `Effort handed back to the automatic rules: this turn runs at ${input.level} again from your next request, and each turn starts at its planned level.`;
 }
 
 /** The one line a rise adds to the tool result that caused it. */
@@ -41,16 +64,14 @@ export function escalationLine(failures: number, from: Effort, to: Effort): stri
   return `auto-effort: ${failures} failing test runs this turn, so your reasoning effort rises from ${from} to ${to} for the requests that follow.`;
 }
 
+/** The one line the rise's threshold adds while the main chat's own level holds: no rise, and the way up. */
+export function heldLine(failures: number, level: Effort, tool: string): string {
+  return `auto-effort: ${failures} failing test runs this turn; your reasoning effort stays at ${level}, the level you set. Call ${tool} with a higher level if the work needs more, or with auto to let failing tests raise it.`;
+}
+
 /** The one line a passing test run adds when it undoes the rises of the failing streak before it. */
 export function deescalationLine(from: Effort, to: Effort): string {
   return `auto-effort: the tests pass again, so your reasoning effort is back to ${to} from ${from} for the requests that follow.`;
-}
-
-export type Shown = 'plan' | 'model' | 'escalation' | 'pin';
-
-/** The pinned status line: `effort auto: {level} · {short reason} ({source})`. */
-export function statusLine(level: Effort, reason: string, source: Shown): string {
-  return `effort auto: ${level} · ${reason} (${source})`;
 }
 
 const REASON_MAX = 60;
@@ -65,7 +86,7 @@ export function quote(value: unknown): string {
   return clip(JSON.stringify(value) ?? String(value));
 }
 
-/** A reason as the status line and the log carry it: one line, at most 60 characters. */
+/** A reason as the state file and the log carry it: one line, at most 60 characters. */
 export function shortReason(reason: unknown): string {
   if (typeof reason !== 'string') return 'no reason given';
   const text = reason.replace(/\s+/g, ' ').trim();

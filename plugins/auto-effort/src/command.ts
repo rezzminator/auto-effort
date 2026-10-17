@@ -36,6 +36,10 @@ export function parseCommand(args: string): Command {
 export type View = {
   enabled: boolean;
   pin: { level: string } | null;
+  /** The main chat's own level as it is sent (clamped), set with set_effort and held across turns until set_effort auto. */
+  override: { level: string; reason: string } | null;
+  /** False when the last main request carried no level or the model gate keeps its model unsteered. */
+  steered: boolean;
   model: string | undefined;
   gate: Gate | undefined;
   turn: { level: string; source: string; reason: string } | null;
@@ -51,9 +55,14 @@ function show(value: unknown): string {
 export function statusText(input: { view: View; settings: Settings; errors: readonly string[]; version: string; settingsFrom: string }): string {
   const { view, settings, errors, version, settingsFrom } = input;
   const lines = [`auto-effort ${version} · ${view.enabled ? 'on' : 'off'} (this session)`];
+  const held = view.override;
   if (view.pin !== null) lines.push(`level: ${view.pin.level} · pin · you set /effort; /auto-effort on resumes automatic effort`);
+  else if (held !== null && view.enabled && view.steered) lines.push(`level: ${held.level} · model, held across turns until set_effort auto · ${held.reason}`);
   else if (view.turn !== null) lines.push(`level: ${view.turn.level} · ${view.turn.source} · ${view.turn.reason}`);
   else lines.push('level: none yet · the first request of the next turn runs at the planning level');
+  if (held !== null && !view.enabled) lines.push(`main chat's own level: ${held.level} · kept while auto-effort is off · ${held.reason}`);
+  else if (held !== null && view.pin !== null) lines.push(`main chat's own level: ${held.level} · kept behind your /effort pin until /auto-effort on · ${held.reason}`);
+  else if (held !== null && !view.steered) lines.push(`main chat's own level: ${held.level} · kept while this model is not steered · ${held.reason}`);
   if (view.model !== undefined && view.gate !== undefined) {
     let gate = `model: ${view.model} · ${view.gate.status}`;
     if (view.gate.status === 'probation') gate += ` (${view.probation ?? 0} of ${settings.probationSwitches} clean switches)`;
