@@ -14,7 +14,7 @@
 {"version":2,"mode":"model","level":"xhigh","reason":"root cause not found","keeper":48213,"updatedAt":"2026-10-17T09:30:00.000Z"}
 ```
 
-<sup>The state file the plugin keeps per session, for your status line to show the mode, the level and where it came from (such as `effort ▰▰▰▰▱ xhigh · model's pick`); the reason shows as a notice when it changes.</sup>
+<sup>The state file the plugin keeps per session, for your status line to show the mode, the level and where it came from (such as `▰▰▰▰ xhigh · model's pick`); the reason shows as a notice when it changes.</sup>
 
 ```text
 Agent({
