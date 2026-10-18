@@ -1,9 +1,9 @@
-// `/auto-effort`: parsing the arguments and the status text.
+// `/auto-effort-control`: parsing the arguments and the status text.
 
 import type { Gate, Unsafe } from './gate.ts';
 import { DEFAULTS, PLUGIN, SETTING_KEYS, type Settings } from './settings.ts';
 
-export const USAGE = '/auto-effort [on|off|status] | /auto-effort set <key> <value> | /auto-effort clear [model]';
+export const USAGE = '/auto-effort-control [on|off|status] | /auto-effort-control set <key> <value> | /auto-effort-control clear [model]';
 
 export type Command =
   | { kind: 'status' }
@@ -54,23 +54,24 @@ function show(value: unknown): string {
 
 export function statusText(input: { view: View; settings: Settings; errors: readonly string[]; version: string; settingsFrom: string }): string {
   const { view, settings, errors, version, settingsFrom } = input;
-  const lines = [`auto-effort ${version} · ${view.enabled ? 'on' : 'off'} (this session)`];
+  const lines = [`auto-effort-control ${version} · ${view.enabled ? 'on' : 'off'} (this session)`];
   const held = view.override;
-  if (view.pin !== null) lines.push(`level: ${view.pin.level} · pin · you set /effort; /auto-effort on resumes automatic effort`);
+  if (view.pin !== null) lines.push(`level: ${view.pin.level} · pin · you set /effort; /auto-effort-control on resumes automatic effort`);
   else if (held !== null && view.enabled && view.steered) lines.push(`level: ${held.level} · model, held across turns until set_effort auto · ${held.reason}`);
   else if (view.turn !== null) lines.push(`level: ${view.turn.level} · ${view.turn.source} · ${view.turn.reason}`);
   else lines.push('level: none yet · the first request of the next turn runs at the planning level');
-  if (held !== null && !view.enabled) lines.push(`main chat's own level: ${held.level} · kept while auto-effort is off · ${held.reason}`);
-  else if (held !== null && view.pin !== null) lines.push(`main chat's own level: ${held.level} · kept behind your /effort pin until /auto-effort on · ${held.reason}`);
+  if (held !== null && !view.enabled) lines.push(`main chat's own level: ${held.level} · kept while auto-effort-control is off · ${held.reason}`);
+  else if (held !== null && view.pin !== null) lines.push(`main chat's own level: ${held.level} · kept behind your /effort pin until /auto-effort-control on · ${held.reason}`);
   else if (held !== null && !view.steered) lines.push(`main chat's own level: ${held.level} · kept while this model is not steered · ${held.reason}`);
   if (view.model !== undefined && view.gate !== undefined) {
     let gate = `model: ${view.model} · ${view.gate.status}`;
     if (view.gate.status === 'probation') gate += ` (${view.probation ?? 0} of ${settings.probationSwitches} clean switches)`;
-    if (view.unsafe !== undefined) gate += ` · cache read ${(view.unsafe.ratio * 100).toFixed(1)}% of the previous prompt at ${view.unsafe.at}; /auto-effort clear ${view.model} turns it back on`;
+    if (view.unsafe !== undefined) gate += ` · cache read ${(view.unsafe.ratio * 100).toFixed(1)}% of the previous prompt at ${view.unsafe.at}; /auto-effort-control clear ${view.model} turns it back on`;
     lines.push(gate);
   }
   if (errors.length > 0) lines.push('option errors:', ...errors.map((line) => `  ${line}`));
   lines.push(`settings (${settingsFrom}): ${SETTING_KEYS.map((key) => `${key}=${show(settings[key])}`).join(' ')}`);
-  lines.push(`change one: /auto-effort set <key> <value>, /config, or pluginConfigs["${PLUGIN}@<marketplace>"].options in settings.json (key "${PLUGIN}@inline" when loaded with --plugin-dir)`);
+  lines.push(`change one: /auto-effort-control set <key> <value>, /config, or pluginConfigs["${PLUGIN}@<marketplace>"].options in settings.json (key "${PLUGIN}@inline" when loaded with --plugin-dir)`);
+  lines.push('environment migration: checks known legacy names and settings.env only; this engine cannot enumerate other OS variables (AUTO_EFFORT_* / EFFORT_LIVE_CONTROL_* -> AUTO_EFFORT_CONTROL_*).');
   return lines.join('\n');
 }

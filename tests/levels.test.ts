@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { clamp, isEffort, levelsWithin, stepUp } from '../plugins/auto-effort/src/levels.ts';
+import { clamp, isEffort, levelsWithin, stepUp } from '../plugins/auto-effort-control/src/levels.ts';
 
 // R6: every level is clamped to [floor, ceiling]; `max` only when the ceiling is `max`.
 describe('clamp', () => {

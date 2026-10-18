@@ -1,6 +1,6 @@
 /** What the plugin keeps for a session, so a plugin reload (an option change) does not lose it. */
-export type AutoEffortSession = {
-  /** False after `/auto-effort off`. */
+export type AutoEffortControlSession = {
+  /** False after `/auto-effort-control off`. */
   enabled: boolean;
   /** The level the user pinned with /effort; null while none is pinned. */
   pin: 'low' | 'medium' | 'high' | 'xhigh' | 'max' | null;
@@ -10,6 +10,6 @@ export type AutoEffortSession = {
 
 declare module 'claude-code' {
   interface PluginState {
-    'auto-effort': { session: StateFamily<AutoEffortSession> };
+    'auto-effort-control': { session: StateFamily<AutoEffortControlSession>; pin: StateFamily<{ level: 'low' | 'medium' | 'high' | 'xhigh' | 'max' | number | null }> };
   }
 }

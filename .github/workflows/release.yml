@@ -2,7 +2,7 @@ name: release
 
 on:
   push:
-    tags: ['auto-effort--v*']
+    tags: ['auto-effort-control--v*']
 
 permissions:
   contents: write
@@ -18,13 +18,13 @@ jobs:
         run: git merge-base --is-ancestor "$GITHUB_SHA" origin/main
       - name: The tag matches the manifest and CHANGELOG
         run: |
-          v="${GITHUB_REF_NAME#auto-effort--v}"
-          manifest_v="$(node -p 'require("./plugins/auto-effort/.claude-plugin/plugin.json").version')"
-          [ "$v" = "$manifest_v" ] || { echo "::error::tag $GITHUB_REF_NAME (version $v) does not match plugins/auto-effort/.claude-plugin/plugin.json's version $manifest_v at the tagged commit"; exit 1; }
+          v="${GITHUB_REF_NAME#auto-effort-control--v}"
+          manifest_v="$(node -p 'require("./plugins/auto-effort-control/.claude-plugin/plugin.json").version')"
+          [ "$v" = "$manifest_v" ] || { echo "::error::tag $GITHUB_REF_NAME (version $v) does not match plugins/auto-effort-control/.claude-plugin/plugin.json's version $manifest_v at the tagged commit"; exit 1; }
           scripts/release-check.sh
           v_re=$(printf '%s' "$v" | sed 's/[.]/[.]/g')
           awk -v v="$v_re" '$0 ~ "^## \\[" v "\\]" {f=1; next} /^## \[/ || /^\[/ {f=0} f' CHANGELOG.md > notes.md
           test -s notes.md
-      - run: gh release create "$GITHUB_REF_NAME" --title "auto-effort ${GITHUB_REF_NAME#auto-effort--v}" --notes-file notes.md --verify-tag
+      - run: gh release create "$GITHUB_REF_NAME" --title "auto-effort-control ${GITHUB_REF_NAME#auto-effort-control--v}" --notes-file notes.md --verify-tag
         env:
           GH_TOKEN: ${{ github.token }}

@@ -1,5 +1,5 @@
 import { describe as suite, expect, it } from 'vitest';
-import { fillSegments, sessionLogPath } from '../plugins/auto-effort/src/log.ts';
+import { fillSegments, sessionLogPath } from '../plugins/auto-effort-control/src/log.ts';
 
 const rows = (from: number, count: number) => Array.from({ length: count }, (_, n) => `{"n":${from + n}}`);
 const text = (list: string[]) => list.join('\n') + '\n';

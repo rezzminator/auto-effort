@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { judgeSwitch, wholePrompt } from '../plugins/auto-effort/src/canary.ts';
+import { judgeSwitch, wholePrompt } from '../plugins/auto-effort-control/src/canary.ts';
 
 const usage = (input: number, cacheRead: number, cacheWrite: number) => ({ input_tokens: input, output_tokens: 50, cache_read_input_tokens: cacheRead, cache_creation_input_tokens: cacheWrite });
 const base = {

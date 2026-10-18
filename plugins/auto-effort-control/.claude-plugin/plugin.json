@@ -1,0 +1,376 @@
+{
+  "name": "auto-effort-control",
+  "version": "0.3.0-dev.1",
+  "description": "Automatic reasoning effort for main chats and sub-agents, with planning, cache checks, spawn tags, tripwires and control tools.",
+  "license": "MIT",
+  "types": "./contract.d.ts",
+  "author": {
+    "name": "Reza \u00b7 Professor",
+    "url": "https://github.com/rezzminator/professor"
+  },
+  "keywords": [
+    "claude-code",
+    "claude-code-plugin",
+    "effort",
+    "reasoning-effort",
+    "thinking",
+    "function-hooks",
+    "claude-mods",
+    "token-cost",
+    "prompt-cache"
+  ],
+  "userConfig": {
+    "floor": {
+      "type": "string",
+      "title": "floor: the lowest effort auto-effort-control ever sends",
+      "description": "The lowest reasoning effort the plugin sends: low, medium, high, xhigh or max. A lower level the model asks for is raised to this one. Must not be above ceiling.",
+      "default": "medium"
+    },
+    "ceiling": {
+      "type": "string",
+      "title": "ceiling: the highest effort auto-effort-control ever sends",
+      "description": "The highest reasoning effort the plugin sends: low, medium, high, xhigh or max. A higher level the model asks for, or an escalation, is lowered to this one. Must not be below floor.",
+      "default": "xhigh"
+    },
+    "planLevel": {
+      "type": "string",
+      "title": "planLevel: the effort every turn starts at",
+      "description": "The effort the first request of every turn runs at, before the model has said what the work needs: low, medium, high, xhigh or max.",
+      "default": "high"
+    },
+    "planUpshiftPatterns": {
+      "type": "string",
+      "title": "planUpshiftPatterns: prompts that start a turn at xhigh (regular expressions)",
+      "description": "One regular expression per entry, matched case-insensitively against the prompt. A prompt that matches any entry starts its turn at xhigh instead of planLevel.",
+      "default": [
+        "\\bthink",
+        "\\bdesign"
+      ],
+      "multiple": true
+    },
+    "planUpshiftChars": {
+      "type": "number",
+      "title": "planUpshiftChars: prompt length that starts a turn at xhigh",
+      "description": "A prompt longer than this many characters starts its turn at xhigh instead of planLevel.",
+      "default": 1500,
+      "min": 1
+    },
+    "turnReminder": {
+      "type": "boolean",
+      "title": "turnReminder: remind the model of its starting effort on every prompt",
+      "description": "On: each prompt carries one line naming the effort the turn starts at and asking the model to call set_effort in its first response. Off: only the tool's description asks for the call.",
+      "default": true
+    },
+    "escalateAfterFailures": {
+      "type": "number",
+      "title": "escalateAfterFailures: failing test runs in a row that raise the effort one step",
+      "description": "After this many failing test runs in a row in one turn the effort rises one step, up to the ceiling, for the requests that follow; the count then starts again. A passing test run sets the count back to 0.",
+      "default": 2,
+      "min": 1
+    },
+    "lowerOnPass": {
+      "type": "boolean",
+      "title": "lowerOnPass: a passing test run undoes the rise of failing ones",
+      "description": "On: the first passing test run after a rise returns the effort to the level the turn had before its failing streak raised it (never below floor), unless the model set a level with set_effort since. Off: the raised level holds until the turn ends.",
+      "default": true
+    },
+    "failurePatterns": {
+      "type": "string",
+      "title": "failurePatterns: what counts as a failing test run (regular expressions)",
+      "description": "One regular expression per entry, matched case-sensitively against the result of a test run (see testCommandPatterns). A test run whose result matches any entry fails; one that matches none passes.",
+      "default": [
+        "--- FAIL",
+        "FAIL(ED)?",
+        "(?<!\\d)[1-9]\\d* (failed|failing)",
+        "AssertionError",
+        "panic:",
+        "Traceback"
+      ],
+      "multiple": true
+    },
+    "failureTools": {
+      "type": "string",
+      "title": "failureTools: the tools whose calls can be test runs",
+      "description": "One tool name per entry (Bash runs the tests). A call of these tools whose command matches testCommandPatterns is a test run; its result is matched against failurePatterns.",
+      "default": [
+        "Bash"
+      ],
+      "multiple": true
+    },
+    "testCommandPatterns": {
+      "type": "string",
+      "title": "testCommandPatterns: which commands are test runs (regular expressions)",
+      "description": "Regular expressions prefixed main: or subagent: select that scope; unprefixed expressions apply to both. Defaults retain each original scope.",
+      "default": [
+        "main:\\bgo\\s+(-C\\s+\\S+\\s+)?test\\b",
+        "main:\\b(npm|pnpm|yarn|bun)\\s+(run\\s+)?test\\b",
+        "main:\\bvitest\\b",
+        "main:\\bjest\\b",
+        "main:\\bpytest\\b",
+        "main:\\bcargo\\s+(test|nextest)\\b",
+        "main:\\bmake\\b[^;&|\\n]*?\\b(test|check|verify)\\b",
+        "main:\\bjust\\b[^;&|\\n]*?\\b(test|check)\\b",
+        "main:\\b(mvn|gradle|gradlew)\\b[^;&|\\n]*?\\btest\\b",
+        "main:\\bdotnet\\s+test\\b",
+        "main:\\bdeno\\s+test\\b",
+        "main:\\bswift\\s+test\\b",
+        "main:\\bmix\\s+test\\b",
+        "main:\\b(rspec|phpunit|ctest|tox|nox)\\b",
+        "main:\\bscripts?/test[\\w.-]*\\.sh\\b",
+        "subagent:\\bgo\\s+(-C\\s+\\S+\\s+)?test\\b",
+        "subagent:\\b(npm|pnpm|yarn|bun)\\s+(run\\s+)?test\\b",
+        "subagent:\\bvitest\\b",
+        "subagent:\\bjest\\b",
+        "subagent:\\bpytest\\b",
+        "subagent:\\bpython(\\d(\\.\\d+)?)?\\s+-m\\s+unittest\\b",
+        "subagent:\\bnode\\s+(--test|--test-only)\\b",
+        "subagent:\\bcargo\\s+(test|nextest)\\b",
+        "subagent:\\bmake\\b[^;&|\\n]*?\\b(test|check|verify)\\b",
+        "subagent:\\bjust\\b[^;&|\\n]*?\\b(test|check)\\b",
+        "subagent:\\b(mvn|gradle|gradlew)\\b[^;&|\\n]*?\\btest\\b",
+        "subagent:\\bdotnet\\s+test\\b",
+        "subagent:\\bdeno\\s+test\\b",
+        "subagent:\\bswift\\s+test\\b",
+        "subagent:\\bmix\\s+test\\b",
+        "subagent:\\b(rspec|phpunit|ctest|tox|nox)\\b",
+        "subagent:\\bscripts?/test[\\w.-]*\\.sh\\b"
+      ],
+      "multiple": true
+    },
+    "userEffortPins": {
+      "type": "boolean",
+      "title": "userEffortPins: a /effort change between turns pins the session",
+      "description": "On: when you change the effort yourself with /effort, auto-effort-control stops steering that session until /auto-effort-control on. Off: it keeps steering whatever you set.",
+      "default": true
+    },
+    "models": {
+      "type": "string",
+      "title": "models: which models auto-effort-control may steer",
+      "description": "Scope-tagged entries: main:model=allow|probation|deny and subagent:model-prefix. Unqualified entries are rejected.",
+      "default": [
+        "main:claude-opus-5-5=allow",
+        "main:claude-fable-5-1=allow",
+        "main:claude-sonnet-5-5=probation",
+        "main:claude-haiku-5-5=probation",
+        "main:claude-sonnet-5=deny",
+        "subagent:claude-opus-5-5",
+        "subagent:claude-fable-5-1",
+        "subagent:claude-sonnet-5-5"
+      ],
+      "multiple": true
+    },
+    "unknownModels": {
+      "type": "string",
+      "title": "unknownModels: what a model without an entry in models gets",
+      "description": "off leaves it untouched; allow, probation and deny act as in models.",
+      "default": "off"
+    },
+    "probationSwitches": {
+      "type": "number",
+      "title": "probationSwitches: clean switches a probation model needs",
+      "description": "How many effort switches in a row of a probation model must keep the cache (see canaryThreshold) before it counts as allow.",
+      "default": 5,
+      "min": 1
+    },
+    "canaryThreshold": {
+      "type": "number",
+      "title": "canaryThreshold: cache read the switched request must keep (0 to 1)",
+      "description": "After an effort change, the switched request must read at least this fraction of the previous request's whole prompt from the prompt cache. Below it the plugin stops changing effort on that model, tells you once, and remembers across sessions until /auto-effort-control clear.",
+      "default": 0.9,
+      "min": 0.01,
+      "max": 1
+    },
+    "cacheTtlSeconds": {
+      "type": "number",
+      "title": "cacheTtlSeconds: seconds after which a cache check is skipped",
+      "description": "When more than this many seconds passed between two requests the cache may have expired on its own, so the check judges nothing. 300 fits the five-minute cache; use 3600 with the one-hour cache.",
+      "default": 300,
+      "min": 1
+    },
+    "statusLine": {
+      "type": "boolean",
+      "title": "statusLine: show why the effort changed, as a notice",
+      "description": "On: when the effort's mode, level or reason changes, a short notice shows the reason alone. The mode and level themselves are in stateFile, for a status line to show. Off: no such notice.",
+      "default": true
+    },
+    "logFile": {
+      "type": "string",
+      "title": "logFile: the decision log (JSONL)",
+      "description": "One JSON row per decision. Main-chat rows use decisions.<session>.jsonl, then .2.jsonl, .3.jsonl after every 1000 rows. Sub-agent rows use decisions.<session>.subagent.jsonl and retain the newest 5000 rows, so the two writers never overwrite each other. The configured basename and extension are kept. Main rows never hold prompt text; sub-agent judge packets are included only with logPackets on. A leading ~ is your home directory. Empty: no log.",
+      "default": "~/.local/state/auto-effort-control/decisions.jsonl"
+    },
+    "stateFile": {
+      "type": "string",
+      "title": "stateFile: the effort's mode, level and reason, for a status line",
+      "description": "One JSON line per session naming the mode the main chat's effort is in (auto, model, pin or off), its level, the reason and the keeper that vouches for it, rewritten when one of them changes; the line at a path the plugin leaves is retired (keeper 0). The session id is inserted before the extension (state.<session>.json). A leading ~ is your home directory; a relative path is under the session's working directory, so give an absolute one. Empty: no file.",
+      "default": "~/.local/state/auto-effort-control/state.json"
+    },
+    "parentTag": {
+      "type": "string",
+      "title": "parentTag: honor or ignore the parent's effort tag on an agent that sets its own effort",
+      "description": "honor (default): an [effort: ...] tag on the Agent prompt wins over the effort: in the agent's definition; a steered agent starts at the tag held within its floor and ceiling. ignore: the definition's effort keeps and the tag is ignored. An agent's effortControl.parentTag overrides it.",
+      "default": "honor"
+    },
+    "judge": {
+      "type": "boolean",
+      "title": "judge: ask the judge at a tripwire",
+      "description": "Off (default): every tripwire (a failing test run, a sub-task that returned red, a red result sent back) raises the effort one step. On: a tripwire makes one cheap model call that estimates the probability that the trouble continues; the effort rises one step only when it is at least judgeRaiseAt. An agent's effortControl.judge overrides it.",
+      "default": false
+    },
+    "judgeRaiseAt": {
+      "type": "number",
+      "title": "judgeRaiseAt: the probability that raises the effort",
+      "description": "With the judge on: a probability (0 to 100) at or above this raises the effort one step; below it the effort holds. The judge never lowers it.",
+      "default": 25,
+      "min": 0,
+      "max": 100
+    },
+    "tripwires": {
+      "type": "string",
+      "title": "tripwires: which events raise the effort",
+      "description": "The armed tripwires, comma-separated: fail1 (the first failing test run), fail2 (the 2nd failing run in a row, then every even count), red (a sub-task returned red), redispatch (a red result sent back). A disarmed tripwire is counted but raises nothing; empty arms none. An agent's effortControl.tripwires overrides it.",
+      "default": "fail1,fail2,red,redispatch"
+    },
+    "struggleDecay": {
+      "type": "number",
+      "title": "struggleDecay: requests without a new tripwire before a raised effort comes home",
+      "description": "A steered agent's open struggle ends once it has made this many requests without a new tripwire: its effort returns to the level it had before, and the red sub-agent returns still open and the failing-test streak are cleared. A later tripwire opens a new struggle. 0 turns it off. An agent's effortControl.struggleDecay overrides it.",
+      "default": 20,
+      "min": 0
+    },
+    "judgeModel": {
+      "type": "string",
+      "title": "judgeModel: the model that judges",
+      "description": "The model alias or id of the judge call (it costs one call per tripwire).",
+      "default": "haiku"
+    },
+    "judgeEffort": {
+      "type": "string",
+      "title": "judgeEffort: the judge call's own effort",
+      "description": "The reasoning effort of the judge call: low, medium, high, xhigh or max.",
+      "default": "xhigh"
+    },
+    "judgeTimeoutMs": {
+      "type": "number",
+      "title": "judgeTimeoutMs: milliseconds the judge call may take",
+      "description": "A judge call that has not answered after this many milliseconds is dropped and the effort rises one step instead.",
+      "default": 45000,
+      "min": 1
+    },
+    "buttons": {
+      "type": "boolean",
+      "title": "buttons: give agents effort_up, effort_down and effort_auto tools",
+      "description": "On: every agent can call effort_up, effort_down and effort_auto; a live-controlled agent moves its own effort one step and holds it there until effort_auto hands it back to the automatic rules at its home level; any other agent is refused, the main chat with the name of its own effort control. Off: the tools are not registered.",
+      "default": true
+    },
+    "announce": {
+      "type": "boolean",
+      "title": "announce: tell the agent when its effort changes",
+      "description": "On: the agent's next tool result carries one line naming its new effort and why. Off: it is not told.",
+      "default": true
+    },
+    "readOnlyCommands": {
+      "type": "string",
+      "title": "readOnlyCommands: programs that only read or print, so never run a test (names)",
+      "description": "One program name per entry. A command whose program is listed is skipped when a Bash call is checked for a test run, so grep, cat, echo or git naming a test command is not one. The Bash call is split at ; & | and newlines, heredoc bodies are dropped, and env, time, nice, nohup, sudo, command, exec and timeout are looked through. source and . are not listed because they execute. A foreground Bash call whose every command is listed is also a file read, the only shell call a return line is read from.",
+      "default": [
+        "cat",
+        "grep",
+        "egrep",
+        "fgrep",
+        "rg",
+        "ag",
+        "ack",
+        "echo",
+        "printf",
+        "sed",
+        "awk",
+        "head",
+        "tail",
+        "less",
+        "more",
+        "ls",
+        "find",
+        "fd",
+        "git",
+        "wc",
+        "which",
+        "type",
+        "man",
+        "file",
+        "stat",
+        "diff",
+        "jq",
+        "yq",
+        "sort",
+        "uniq",
+        "cut",
+        "tr",
+        "tee",
+        "test",
+        "[",
+        "[[",
+        "cd",
+        "pushd",
+        "popd",
+        "mkdir",
+        "rm",
+        "cp",
+        "mv",
+        "touch",
+        "chmod",
+        "ln",
+        "basename",
+        "dirname",
+        "realpath",
+        "readlink",
+        "date",
+        "sleep",
+        "true",
+        "false",
+        "export",
+        "read",
+        "wait",
+        "kill"
+      ],
+      "multiple": true
+    },
+    "redWords": {
+      "type": "string",
+      "title": "redWords: words that open a red return line",
+      "description": "A sub-agent answer or a read result whose line is WORD, WORD name or WORD name: detail with one of these words is a failed return. Case-sensitive.",
+      "default": [
+        "FAIL",
+        "FAILED",
+        "BLOCKED",
+        "PARTIAL",
+        "SPEC-DRIFT"
+      ],
+      "multiple": true
+    },
+    "greenWords": {
+      "type": "string",
+      "title": "greenWords: words that open a green return line",
+      "description": "Like redWords, for a return that clears an earlier red one from the same unit.",
+      "default": [
+        "DONE",
+        "PASS",
+        "FIXED"
+      ],
+      "multiple": true
+    },
+    "agentDirs": {
+      "type": "string",
+      "title": "agentDirs: extra directories of agent definitions",
+      "description": "One directory per entry, searched after .claude/agents of the project, of CLAUDE_CONFIG_DIR and of the home directory, for the definition of an agent type (its effort and effortControl).",
+      "default": [],
+      "multiple": true
+    },
+    "logPackets": {
+      "type": "boolean",
+      "title": "logPackets: put the judge's snapshot and answer in the log",
+      "description": "On: judge rows carry the snapshot sent to the judge and its answer, which holds the agent's opening brief and last words. Off: they do not.",
+      "default": false
+    }
+  }
+}

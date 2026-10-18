@@ -8,7 +8,7 @@ import { shortReason } from './text.ts';
 export const STATE_VERSION = 2;
 
 /** The last argument of the keeper's argv: a reader checks a process carries it before it trusts the pid. */
-export const KEEPER_MARK = 'auto-effort-keeper';
+export const KEEPER_MARK = 'auto-effort-control-keeper';
 
 /**
  * The keeper, a child the adapter starts for the plugin's life: the host kills it when the plugin's hooks unload, and
@@ -39,9 +39,9 @@ export type StateInput = {
 
 /** The session's state, highest rule first: off, not steered, the user's pin, the main chat's level, the rules. */
 export function stateOf(input: StateInput): EffortState {
-  if (!input.enabled) return { version: STATE_VERSION, mode: 'off', level: null, reason: 'auto-effort is off; /auto-effort on resumes' };
+  if (!input.enabled) return { version: STATE_VERSION, mode: 'off', level: null, reason: 'auto-effort-control is off; /auto-effort-control on resumes' };
   if (!input.steered) return { version: STATE_VERSION, mode: 'off', level: null, reason: 'this model is not steered' };
-  if (input.pin !== null) return { version: STATE_VERSION, mode: 'pin', level: input.pin, reason: 'you set /effort; /auto-effort on resumes' };
+  if (input.pin !== null) return { version: STATE_VERSION, mode: 'pin', level: input.pin, reason: 'you set /effort; /auto-effort-control on resumes' };
   if (input.override !== null) return { version: STATE_VERSION, mode: 'model', level: input.override.level, reason: shortReason(input.override.reason) };
   if (input.turn === null) return { version: STATE_VERSION, mode: 'auto', level: null, reason: 'the next turn starts at its planned level' };
   return { version: STATE_VERSION, mode: 'auto', level: input.turn.level, reason: shortReason(input.turn.reason) };
