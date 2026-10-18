@@ -37,15 +37,16 @@ function engine(options: Record<string, unknown> = {}, o: { configRows?: unknown
   const stateKey = (ref: { plugin: string; key: string; id?: string }) => `${ref.plugin}/${ref.key}/${ref.id ?? ''}`;
   // Each child `$.process.spawn` starts: a keeper prints its pid (4242 on), then runs until `end()` or its loop is left.
   // 'noisy' writes a shell warning to stderr first and its pid in two pieces; a `gate` holds the pid back until it opens.
-  const keepers: Array<{ argv: readonly string[]; pid: number; end: () => void; closed: boolean }> = [];
+  const keepers: Array<{ argv: readonly string[]; pid: number; end: (signal?: string) => void; closed: boolean }> = [];
   const spawning = { mode: o.keeper as 'fails' | 'silent' | 'noisy' | undefined, gate: undefined as Promise<void> | undefined };
   let nextPid = 4242;
   const spawn = (request: { argv: readonly string[] }) => {
     const mode = spawning.mode;
     const gate = spawning.gate;
     let finish!: () => void;
+    let how: { code: number | null; signal: string | null } = { code: 0, signal: null };
     const ended = new Promise<void>((resolve) => (finish = resolve));
-    const keeper = { argv: request.argv, pid: mode === 'fails' ? 0 : nextPid++, end: () => finish(), closed: false };
+    const keeper = { argv: request.argv, pid: mode === 'fails' ? 0 : nextPid++, end: (signal?: string) => { if (signal !== undefined) how = { code: null, signal }; finish(); }, closed: false };
     if (mode !== 'fails') keepers.push(keeper);
     const stream = (async function* () {
       if (mode === 'fails') throw new Error('cannot start /bin/sh');
@@ -59,7 +60,7 @@ function engine(options: Record<string, unknown> = {}, o: { configRows?: unknown
           yield { stream: 'stdout' as const, text: `${keeper.pid}\n` };
         }
         await ended;
-        return { code: 0, signal: null };
+        return how;
       } finally {
         keeper.closed = true;
       }
@@ -1012,6 +1013,23 @@ suite('state file and notice', () => {
     await vi.waitFor(() => expect(e.stateOf()).toMatchObject({ mode: 'auto', level: 'high', keeper: 4243 }));
     expect(e.keepers.map((keeper) => keeper.closed)).toEqual([true, false]);
     expect(e.logged.filter((row) => row.level === 'warning' && row.msg.includes('the state file keeper ended'))).toHaveLength(1);
+  });
+
+  it('does not warn when the host stops the keeper with SIGTERM: it logs that at info, writes keeper 0 and vouches again from the next prompt', async () => {
+    const e = engine();
+    await e.start();
+    await vi.waitFor(() => expect(e.stateOf()).toMatchObject({ keeper: 4242 }));
+    e.keepers[0]!.end('SIGTERM');
+    await vi.waitFor(() => expect(e.stateOf()).toMatchObject({ mode: 'auto', keeper: 0 }));
+    await vi.waitFor(() => expect(e.logged.filter((row) => row.event === 'state-keeper-stopped')).toHaveLength(1));
+    expect(e.logged.find((row) => row.event === 'state-keeper-stopped')).toMatchObject({ level: 'info' });
+    expect(e.logged.filter((row) => row.level === 'warning' || row.level === 'error')).toEqual([]);
+    expect(e.logs.filter((line) => line.includes('keeper'))).toEqual([]);
+    await e.prompt();
+    await vi.waitFor(() => expect(e.stateOf()).toMatchObject({ keeper: 4243 }));
+    // Positive control: a keeper that ends any other way is still a warning.
+    e.keepers[1]!.end('SIGKILL');
+    await vi.waitFor(() => expect(e.logged.filter((row) => row.level === 'warning' && row.msg.includes('the state file keeper ended'))).toHaveLength(1));
   });
 
   it('writes keeper 0 as soon as its keeper ends, and says so again when a later keeper ends', async () => {

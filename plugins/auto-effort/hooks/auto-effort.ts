@@ -246,11 +246,13 @@ async function startKeeper($: EngineInterface, st: State): Promise<void> {
     st.keeperEnded = false;
     void (async () => {
       let why = 'it exited';
+      let stopped = false;
       try {
         for (;;) {
           const piece = await stream.next();
           if (piece.done) {
             why = `it exited (code ${String(piece.value.code)}, signal ${String(piece.value.signal ?? 'none')})`;
+            stopped = piece.value.signal === 'SIGTERM';
             break;
           }
         }
@@ -266,7 +268,9 @@ async function startKeeper($: EngineInterface, st: State): Promise<void> {
       if (st.keeperEnded) return;
       st.keeperEnded = true;
       try {
-        note($, st, 'warning', 'state-keeper-ended', 'hooks/auto-effort.ts#startKeeper', 'keeping the state file keeper', new Error(`the state file keeper ended: ${why}`), 'a status line shows the state stale until the next prompt starts another');
+        // SIGTERM is the host unloading the plugin (a session's end, a reload, a disable): the expected end, not a fault.
+        if (stopped) plog($, st, 'info', 'state-keeper-stopped', 'auto-effort: the state file keeper was stopped by the host (SIGTERM); a status line shows the state stale until the next prompt starts another', 'hooks/auto-effort.ts#startKeeper');
+        else note($, st, 'warning', 'state-keeper-ended', 'hooks/auto-effort.ts#startKeeper', 'keeping the state file keeper', new Error(`the state file keeper ended: ${why}`), 'a status line shows the state stale until the next prompt starts another');
       } catch {
         // A module the host unloaded has no screen left: its keeper ending is the unload itself.
       }

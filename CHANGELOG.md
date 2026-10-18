@@ -4,6 +4,12 @@ All notable changes to this plugin are recorded here. The format follows [Keep a
 
 ## [Unreleased]
 
+## [0.2.4-dev.3] — 2026-10-18
+
+### Fixed
+
+- The state file keeper stopped by the host with SIGTERM (a session's end, a reload, a disable) is the expected end: it is logged at info as `state-keeper-stopped`, no longer as a `state-keeper-ended` warning (one per session). The line still reads `keeper` 0 at once, and a keeper that ends any other way is still a warning.
+
 ## [0.2.4-dev.2] — 2026-10-17
 
 ### Fixed
