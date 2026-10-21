@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { deescalationLine, escalationLine, handBackText, heldLine, overrideReminderLine, reminderLine, setText, shortReason, toolDescription } from '../plugins/auto-effort-control/src/text.ts';
+import { deescalationLine, escalationLine, handBackText, heldLine, reminderLine, setText, shortReason, toolDescription } from '../plugins/auto-effort-control/src/text.ts';
 
 // R3: the description is the model's only guide; it lists the levels the clamp lets through.
 describe('toolDescription', () => {
@@ -18,11 +18,10 @@ describe('toolDescription', () => {
   });
 
   // The main chat's own level wins over the automatic rules until it hands it back.
-  it('says a level holds across turns over the automatic rules, and that auto hands it back', () => {
+  it('says a level holds until the turn ends over automatic rules, and auto hands it back', () => {
     const text = toolDescription('medium', 'xhigh');
-    expect(text.split('\n')[0]).toBe('set_effort: set your reasoning effort for the requests after this call. A level you set holds across turns, over the automatic rules, until you call set_effort with auto.');
-    expect(text).toContain('auto hands the effort back to the automatic rules: each turn starts at its planned level, and failing test runs raise it.');
-    expect(text).not.toContain('until this turn ends');
+    expect(text.split('\n')[0]).toBe('set_effort: set your reasoning effort for the requests after this call. A level you set holds until this turn ends, over the automatic rules; the next turn starts at its planned level again.');
+    expect(text).toContain('auto hands the effort back to the automatic rules for the rest of this turn: its planned level, and failing test runs raise it.');
   });
 
   it('follows the floor and the ceiling', () => {
@@ -33,30 +32,18 @@ describe('toolDescription', () => {
 });
 
 describe('reminderLine', () => {
-  it('names the level and the tool', () => {
-    const line = reminderLine('xhigh', 'mcp__auto-effort-control__set_effort');
-    expect(line).toContain('xhigh');
-    expect(line).toContain('mcp__auto-effort-control__set_effort');
-    expect(line.split('\n')).toHaveLength(1);
-  });
-
-  // Pilot (first round): every turn's first request runs at the planning level before the call can apply, so the reminder says so.
-  it('says the first response still runs at the starting level and asks for the call first', () => {
-    const line = reminderLine('high', 'mcp__auto-effort-control__set_effort');
-    expect(line).toContain('this first response runs at high');
-    expect(line).toContain('Call mcp__auto-effort-control__set_effort first');
-    expect(line).toContain('With no call, the turn stays at high.');
-    expect(line).toContain('a level you set holds across turns until you call it with auto');
-    expect(line).not.toContain('until the turn ends');
-  });
-});
-
-describe('overrideReminderLine', () => {
-  it('names the level the main chat set, that it holds across turns, and the way back to the rules, in one line', () => {
-    expect(overrideReminderLine('medium', 'mcp__auto-effort-control__set_effort')).toBe(
-      'Your reasoning effort is medium, the level you set with mcp__auto-effort-control__set_effort; it holds across turns. Call it with another level when the work changes, or with auto to hand it back to the automatic rules.',
-    );
-  });
+  for (const upshift of [null, 'length', 'pattern'] as const) {
+    for (const hints of [[], ['design'], ['design', 'architecture'], ['design', 'architecture', 'spec']]) {
+      it(`explains ${upshift} with ${hints.length} hints in one line`, () => {
+        const why = upshift === 'length' ? ' because the prompt is long (1600 characters)' : upshift === 'pattern' ? ' because the prompt matches planUpshiftPatterns' : '';
+        const words = hints.length === 1 ? '"design"' : hints.length === 2 ? '"design" and "architecture"' : '"design", "architecture" and "spec"';
+        const hint = hints.length ? ` This prompt names ${words}: the set_effort guide places that kind of work at xhigh; whether this turn is that work is your call.` : '';
+        const line = reminderLine({ level: 'high', tool: 'set_effort', upshift, chars: 1600, hints, hintLevel: 'xhigh' });
+        expect(line).toBe(`Your reasoning effort starts this turn at high${why}, and this first response runs at high. Call set_effort first, with the level the work ahead needs; a level you set lasts until this turn ends. With no call, the turn stays at high.${hint}`);
+        expect(line.split('\n')).toHaveLength(1);
+      });
+    }
+  }
 });
 
 describe('heldLine', () => {
@@ -68,13 +55,13 @@ describe('heldLine', () => {
 });
 
 describe('setText', () => {
-  it('names the level applied and that it holds across turns until auto', () => {
-    expect(setText('medium', 'medium', 'medium', 'xhigh')).toBe('Effort set to medium from your next request; it holds across turns until you call set_effort with auto.');
+  it('names the level applied and that it holds until the turn ends or auto', () => {
+    expect(setText('medium', 'medium', 'medium', 'xhigh')).toBe('Effort set to medium from your next request; it holds until this turn ends, or until you call set_effort with auto.');
   });
 
   it('says why a clamped level differs from the one asked', () => {
-    expect(setText('medium', 'low', 'medium', 'xhigh')).toBe('Effort set to medium from your next request (low is below the floor medium); it holds across turns until you call set_effort with auto.');
-    expect(setText('xhigh', 'max', 'medium', 'xhigh')).toBe('Effort set to xhigh from your next request (max is above the ceiling xhigh); it holds across turns until you call set_effort with auto.');
+    expect(setText('medium', 'low', 'medium', 'xhigh')).toBe('Effort set to medium from your next request (low is below the floor medium); it holds until this turn ends, or until you call set_effort with auto.');
+    expect(setText('xhigh', 'max', 'medium', 'xhigh')).toBe('Effort set to xhigh from your next request (max is above the ceiling xhigh); it holds until this turn ends, or until you call set_effort with auto.');
   });
 });
 

@@ -331,7 +331,7 @@ suite('session start', () => {
     expect(e.registered[0].description).toContain('Call it in your first response of a user turn whose work needs another level');
     expect(e.registered[0].inputSchema.properties.level.enum).toEqual(['medium', 'high', 'xhigh', 'auto']);
     expect(e.registered[0].inputSchema.properties.effort.enum).toEqual(['medium', 'high', 'xhigh', 'auto']);
-    expect(e.registered[0].inputSchema.properties.level.description).toContain('holds across turns until you call it with auto');
+    expect(e.registered[0].inputSchema.properties.level.description).toContain('holds until this turn ends or you call it with auto');
     expect(e.registered[0].inputSchema.required ?? []).toEqual([]);
     expect(e.commands).toEqual([expect.objectContaining({ name: 'auto-effort-control' })]);
   });
@@ -539,7 +539,7 @@ suite('prompt.submit', () => {
   });
 
   it('plans the next turn from a prompt typed to wait for the running one, with the reminder', async () => {
-    const e = engine();
+    const e = engine({ planUpshiftPatterns: ['design'] });
     await e.start();
     const waiting = await e.prompt('think about the retry design', { turnId: 't1', wait: true });
     expect(waiting.context).toEqual([expect.stringContaining(TOOL)]);
@@ -722,7 +722,7 @@ suite('environment options', () => {
       return read(name);
     };
     await e.prompt();
-    expect(seen).toEqual({ calls: 35, inFlight: 0, peak: 35 });
+    expect(seen).toEqual({ calls: 36, inFlight: 0, peak: 36 });
   });
 
   it('answers `set` as a success when the environment cannot be read', async () => {
@@ -772,23 +772,19 @@ suite('set_effort and escalation', () => {
     await e.prompt();
     await e.step({});
     const answered = await e.tool({ tool: TOOL, level: 'medium', reason: 'mechanical rename' });
-    expect(answered).toEqual({ result: 'Effort set to medium from your next request; it holds across turns until you call set_effort with auto.' });
+    expect(answered).toEqual({ result: 'Effort set to medium from your next request; it holds until this turn ends, or until you call set_effort with auto.' });
     expect(await e.step({ index: 1 })).toMatchObject({ effort: 'medium' });
     await vi.waitFor(() => expect(e.stateOf()).toMatchObject({ mode: 'model', level: 'medium', reason: 'mechanical rename' }));
   });
 
-  it('holds the main chat\'s level across turns and a reload, until set_effort with auto hands it back', async () => {
-    const e = engine();
-    await e.start();
-    await e.prompt();
-    await e.step({});
+  it('keeps a model level through a mid-turn reload and replans the next turn', async () => {
+    const e = engine(); await e.start(); await e.prompt(); await e.step({});
     await e.tool({ tool: TOOL, level: 'medium', reason: 'mechanical rename' });
     e.reload();
+    expect(await e.step({ index: 1 })).toMatchObject({ effort: 'medium' });
     const next = await e.prompt();
-    expect(next.context.at(-1)).toContain(`the level you set with ${TOOL}; it holds across turns`);
-    expect(await e.step({ turnId: 't2' })).toMatchObject({ effort: 'medium' });
-    expect((await e.tool({ tool: TOOL, level: 'auto' })).result).toMatch(/^Effort handed back to the automatic rules: this turn runs at high again/);
-    expect(await e.step({ turnId: 't2', index: 1 })).toMatchObject({ effort: 'high' });
+    expect(next.context.at(-1)).toContain('starts this turn at high');
+    expect(await e.step({ turnId: 't2' })).toMatchObject({ effort: 'high' });
     await vi.waitFor(() => expect(e.stateOf()).toMatchObject({ mode: 'auto', level: 'high', reason: 'planning turn' }));
   });
 
@@ -1220,11 +1216,11 @@ suite('state file and notice', () => {
     };
     const on = engine();
     await drive(on);
-    expect(on.toasts).toEqual(['planning turn', 'mechanical rename']);
+    expect(on.toasts).toEqual(['planning turn', 'mechanical rename', 'planning turn']);
     const off = engine({ statusLine: false });
     await drive(off);
     expect(off.toasts).toEqual([]);
-    await vi.waitFor(() => expect(off.stateOf()).toMatchObject({ mode: 'model', level: 'medium' }));
+    await vi.waitFor(() => expect(off.stateOf()).toMatchObject({ mode: 'auto', level: 'high' }));
   });
 });
 
@@ -1523,5 +1519,24 @@ suite('composed scopes', () => {
     await dispatch('tool.call', { tool: 'Bash', command, tool_use_id: 'sub-test', agentId: 'a1' }, async () => ({ result: {}, text: 'FAIL one', isError: false }));
     expect(await step('a1', OPUS)).toBe(models === undefined ? 'high' : 'low');
     await dispatch('session.end', {});
+  });
+});
+
+suite('built-in effort command wiring', () => {
+  it.each([false, true])('passes through unchanged, observes after next and preserves result on controller failure=%s', async (fails) => {
+    const e = engine(); await e.start();
+    const hook = e.hooks.find((h) => h.name === 'command.run' && h.matcher?.command === 'effort');
+    expect(hook).toBeDefined();
+    const order: string[] = [];
+    const spy = vi.spyOn(Controller.prototype, 'onEffortCommand').mockImplementation((args) => {
+      order.push(args); if (fails) throw new Error('broken reader'); return { rows: [] };
+    });
+    try {
+      const event = { command: 'effort', args: ' High ', origin: { kind: 'composer' }, presentation: {} };
+      const result = { text: 'host result' };
+      expect(await hook!.fn(e.$, event, async (seen: unknown) => { expect(seen).toBe(event); order.push('next'); return result; })).toBe(result);
+      expect(order).toEqual(['next', ' High ']);
+      if (fails) expect(e.logs.join('\n')).toContain('auto-effort-control: reading /effort failed: broken reader; the effort follows the session setting');
+    } finally { spy.mockRestore(); await e.end(); }
   });
 });

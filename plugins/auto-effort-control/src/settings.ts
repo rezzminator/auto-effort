@@ -16,6 +16,7 @@ export type Settings = {
   ceiling: Effort;
   planLevel: Effort;
   planUpshiftPatterns: string[];
+  hintPatterns: string[];
   planUpshiftChars: number;
   turnReminder: boolean;
   escalateAfterFailures: number;
@@ -38,7 +39,8 @@ export const DEFAULTS: Settings = {
   floor: 'medium',
   ceiling: 'xhigh',
   planLevel: 'high',
-  planUpshiftPatterns: ['\\bthink', '\\bdesign'],
+  planUpshiftPatterns: [],
+  hintPatterns: ['\\bdesign', '\\barchitect', '\\btrade-?offs?\\b', '\\broot[- ]?causes?\\b', '\\bspec(s|ced|ification)?\\b', '\\bthink (hard|harder|deeply|carefully|it through)\\b', '\\bultrathink\\b'],
   planUpshiftChars: 1500,
   turnReminder: true,
   escalateAfterFailures: 2,
@@ -149,6 +151,7 @@ const PARSERS: { [K in keyof Settings]: (raw: unknown) => Parsed<Settings[K] | '
   ceiling: parseLevel,
   planLevel: parseLevel,
   planUpshiftPatterns: listOf(regexItem),
+  hintPatterns: listOf(regexItem),
   planUpshiftChars: parseInt1,
   turnReminder: parseBool,
   escalateAfterFailures: parseInt1,
@@ -228,6 +231,7 @@ export function resolveSettings(raw: Readonly<Record<string, unknown>>, env: Env
 
 export type Compiled = {
   upshift: RegExp[];
+  hints: RegExp[];
   failure: RegExp[];
   testCommand: RegExp[];
   models: Record<string, ModelStatus>;
@@ -242,6 +246,7 @@ export function compile(settings: Settings): Compiled {
   }
   return {
     upshift: settings.planUpshiftPatterns.map((source) => new RegExp(source, 'i')),
+    hints: settings.hintPatterns.map((source) => new RegExp(source, 'gi')),
     failure: settings.failurePatterns.map((source) => new RegExp(source)),
     testCommand: settings.testCommandPatterns.map((source) => new RegExp(source)),
     models,

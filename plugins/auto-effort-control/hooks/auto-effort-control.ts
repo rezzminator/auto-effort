@@ -400,7 +400,7 @@ async function ensureTool($: EngineInterface, st: State): Promise<void> {
     inputSchema: {
       type: 'object',
       properties: {
-        level: { type: 'string', enum: [...levels, 'auto'], description: 'The reasoning effort from the next request on; it holds across turns until you call it with auto, which hands the effort back to the automatic rules.' },
+        level: { type: 'string', enum: [...levels, 'auto'], description: 'The reasoning effort from the next request on; it holds until this turn ends or you call it with auto, which hands the effort back to the automatic rules.' },
         effort: { type: 'string', enum: [...levels, 'auto'], description: 'The same as level.' },
         reason: { type: 'string', description: 'A few words on why this level fits the work ahead.' },
       },
@@ -1192,6 +1192,7 @@ async function readMergedOptions($: EngineInterface, scope: Scope, registered: R
     'AUTO_EFFORT_CONTROL_FLOOR': attemptEnv($.env.get('AUTO_EFFORT_CONTROL_FLOOR')),
     'AUTO_EFFORT_CONTROL_CEILING': attemptEnv($.env.get('AUTO_EFFORT_CONTROL_CEILING')),
     'AUTO_EFFORT_CONTROL_PLAN_LEVEL': attemptEnv($.env.get('AUTO_EFFORT_CONTROL_PLAN_LEVEL')),
+    'AUTO_EFFORT_CONTROL_HINT_PATTERNS': attemptEnv($.env.get('AUTO_EFFORT_CONTROL_HINT_PATTERNS')),
     'AUTO_EFFORT_CONTROL_PLAN_UPSHIFT_PATTERNS': attemptEnv($.env.get('AUTO_EFFORT_CONTROL_PLAN_UPSHIFT_PATTERNS')),
     'AUTO_EFFORT_CONTROL_PLAN_UPSHIFT_CHARS': attemptEnv($.env.get('AUTO_EFFORT_CONTROL_PLAN_UPSHIFT_CHARS')),
     'AUTO_EFFORT_CONTROL_TURN_REMINDER': attemptEnv($.env.get('AUTO_EFFORT_CONTROL_TURN_REMINDER')),
@@ -1502,6 +1503,19 @@ on('session.end', async ($, e, next) => {
     return next(e);
 
 });
+on('command.run', { command: 'effort' }, async ($, e, next) => {
+    const result = await next(e);
+    try {
+      await ensureStarted($, st);
+      await followSession($, st);
+      record($, st, st.ctl.onEffortCommand(e.args).rows);
+      await saveSession($, st);
+      publish($, st);
+    } catch (error) {
+      note($, st, 'error', 'effort-command-failed', 'hooks/auto-effort-control.ts#command.run', 'reading /effort', error, 'the effort follows the session setting');
+    }
+    return result;
+  });
 on('command.run', { command: PLUGIN }, async ($, e) => {
     try {
       await ensureStarted($, st);

@@ -16,7 +16,7 @@ describe('planFor', () => {
 
   it.each(['think about the cache', 'THINK', 'Please design a retry policy', 'we are thinking of a design', 'rethinking is not a match'])('upshifts %j on a pattern, case-insensitive', (text) => {
     const expected = text.startsWith('rethinking') ? { level: 'high', upshift: null } : { level: 'xhigh', upshift: 'pattern' };
-    expect(plan(text)).toMatchObject(expected);
+    expect(plan(text, { planUpshiftPatterns: ['\\bthink', '\\bdesign'] })).toMatchObject(expected);
   });
 
   it('upshifts a prompt longer than `planUpshiftChars`, not one of exactly that length', () => {
@@ -34,7 +34,27 @@ describe('planFor', () => {
 
   it('says in its reason why the level was chosen', () => {
     expect(plan('plain').reason).toBe('planning turn');
-    expect(plan('think about it').reason).toBe('planning: prompt asks for thought');
+    expect(plan('think about it', { planUpshiftPatterns: ['think'] }).reason).toBe('planning: prompt asks for thought');
     expect(plan('x'.repeat(2000)).reason).toBe('planning: long prompt (2000 chars)');
   });
+});
+
+
+describe('prompt hints', () => {
+  it('hints without moving the default level and excludes casual thought', () => {
+    expect(plan('I think we are thinking about DESIGN')).toMatchObject({ level: 'high', upshift: null, hints: ['design'], hintSources: ['\\bdesign'] });
+  });
+  it('widens, deduplicates and orders the first three words across patterns', () => {
+    expect(plan('Architectural designs DESIGN trade-offs root cause')).toMatchObject({ hints: ['architectural', 'designs', 'design'], hintSources: ['\\bdesign', '\\barchitect', '\\btrade-?offs?\\b', '\\broot[- ]?causes?\\b'] });
+    expect(plan('design DESIGN architect tradeoffs spec').hints).toEqual(['design', 'architect', 'tradeoffs']);
+  });
+  it('widens phrases and clips words to forty characters, ignoring empty matches', () => {
+    expect(plan('root causes; THINK carefully; specification').hints).toEqual(['root causes', 'think carefully', 'specification']);
+    expect(plan('x'.repeat(60), { hintPatterns: ['x', ''] }).hints).toEqual(['x'.repeat(40)]);
+    expect(plan('text', { hintPatterns: [''] })).toMatchObject({ hints: [], hintSources: [] });
+  });
+});
+
+it('keeps the configured hint sources verbatim rather than regex serialization', () => {
+  expect(plan('a/b', { hintPatterns: ['a/b'] }).hintSources).toEqual(['a/b']);
 });

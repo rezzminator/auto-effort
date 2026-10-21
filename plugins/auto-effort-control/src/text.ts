@@ -22,8 +22,8 @@ export function toolDescription(floor: Effort, ceiling: Effort): string {
       return `- ${level}: ${text}.`;
     });
   return [
-    'set_effort: set your reasoning effort for the requests after this call. A level you set holds across turns, over the automatic rules, until you call set_effort with auto.',
-    'auto hands the effort back to the automatic rules: each turn starts at its planned level, and failing test runs raise it.',
+    'set_effort: set your reasoning effort for the requests after this call. A level you set holds until this turn ends, over the automatic rules; the next turn starts at its planned level again.',
+    'auto hands the effort back to the automatic rules for the rest of this turn: its planned level, and failing test runs raise it.',
     'Main chat only: a sub-agent never calls it.',
     'Call it in your first response of a user turn whose work needs another level than the one in effect, alongside your first tool calls.',
     ...lines,
@@ -33,19 +33,18 @@ export function toolDescription(floor: Effort, ceiling: Effort): string {
 }
 
 /** The one line added to each prompt while the automatic rules hold: the level the turn starts at, and the tool. */
-export function reminderLine(level: Effort, tool: string): string {
-  return `Your reasoning effort starts this turn at ${level}, and this first response runs at ${level}. Call ${tool} first, with the level the work ahead needs; a level you set holds across turns until you call it with auto. With no call, the turn stays at ${level}.`;
-}
-
-/** The one line added to each prompt while the main chat's own level holds. */
-export function overrideReminderLine(level: Effort, tool: string): string {
-  return `Your reasoning effort is ${level}, the level you set with ${tool}; it holds across turns. Call it with another level when the work changes, or with auto to hand it back to the automatic rules.`;
+export function reminderLine({ level, tool, upshift, chars, hints, hintLevel }: { level: Effort; tool: string; upshift: 'length' | 'pattern' | null; chars: number; hints: string[]; hintLevel: Effort }): string {
+  const why = upshift === 'length' ? ` because the prompt is long (${chars} characters)` : upshift === 'pattern' ? ' because the prompt matches planUpshiftPatterns' : '';
+  const words = hints.map((word) => JSON.stringify(word));
+  const named = words.length < 2 ? words.join('') : `${words.slice(0, -1).join(', ')} and ${words.at(-1)}`;
+  const hint = hints.length ? ` This prompt names ${named}: the ${tool} guide places that kind of work at ${hintLevel}; whether this turn is that work is your call.` : '';
+  return `Your reasoning effort starts this turn at ${level}${why}, and this first response runs at ${level}. Call ${tool} first, with the level the work ahead needs; a level you set lasts until this turn ends. With no call, the turn stays at ${level}.${hint}`;
 }
 
 /** The answer to a level set with set_effort, with why a clamped level differs from the one asked. */
 export function setText(applied: Effort, requested: Effort, floor: Effort, ceiling: Effort): string {
   const clamped = applied === requested ? '' : ` (${requested} is ${rank(requested) < rank(floor) ? `below the floor ${floor}` : `above the ceiling ${ceiling}`})`;
-  return `Effort set to ${applied} from your next request${clamped}; it holds across turns until you call set_effort with auto.`;
+  return `Effort set to ${applied} from your next request${clamped}; it holds until this turn ends, or until you call set_effort with auto.`;
 }
 
 /**

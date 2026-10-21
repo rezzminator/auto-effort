@@ -4,6 +4,19 @@ All notable changes to this plugin are recorded here. The format follows [Keep a
 
 ## [Unreleased]
 
+## [0.3.0-dev.2] — 2026-10-22
+
+### Added
+
+- Direct observation of `/effort <level>` and `/effort auto`: explicit levels pin even at the carried level, auto releases without mistaking the model default for a new pin, and user pins survive `/clear`.
+- Main-chat `hintPatterns` defaults to design, architect, trade-offs, root causes, specs, deliberate thinking and ultrathink patterns. Matching words are hints in the turn reminder, never level moves; set `hintPatterns` to `[]` to omit them. Decision logs record pattern sources only.
+- Turn reminders explain a long prompt's character count or an explicit `planUpshiftPatterns` match.
+
+### Changed
+
+- Model levels set with `set_effort` last until the turn ends; each next turn starts at its plan. Reloads within the same turn preserve the level. Call `set_effort` again in the next turn to keep a model choice, or pin a user choice with `/effort`.
+- `planUpshiftPatterns` defaults to `[]` instead of `['\\bthink', '\\bdesign']`. Set `planUpshiftPatterns` to those patterns to restore keyword upshifts. Length upshifts and failing-test rules are unchanged.
+
 ## [0.3.0-dev.1] — 2026-10-18
 
 The plugin is now `auto-effort-control`: `auto-effort` (the main chat) and `effort-live-control` (the sub-agents, named `agent-effort` through its 0.1.3) merged into one installation with one option set. Both are retired.

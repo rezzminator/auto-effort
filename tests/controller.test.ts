@@ -44,7 +44,7 @@ describe('planning level (R2)', () => {
   });
 
   it('plans a prompt that asks for thought at xhigh, and leaves a request already at that effort untouched', () => {
-    const r = rig();
+    const r = rig({ planUpshiftPatterns: ['think', 'design'] });
     r.prompt('think about the retry design');
     expect(r.step('t1', 0, { effort: 'high' }).plan).toMatchObject({ send: 'xhigh', level: 'xhigh', source: 'plan', reason: 'planning: prompt asks for thought' });
     r.prompt();
@@ -57,7 +57,7 @@ describe('planning level (R2)', () => {
   });
 
   it('uses each prompt for the turn that follows it only', () => {
-    const r = rig();
+    const r = rig({ planUpshiftPatterns: ['think', 'design'] });
     r.prompt('design the cache');
     expect(r.step('t1', 0).plan.level).toBe('xhigh');
     r.prompt('now rename it');
@@ -138,7 +138,7 @@ describe('set_effort (R3, R6)', () => {
     pinned.step('t1', 0, { effort: 'xhigh' });
     pinned.prompt();
     pinned.step('t2', 0, { effort: 'low' });
-    expect(pinned.set({ level: 'high', reason: 'x' }).text).toMatch(/^Not applied: .*pinned.*\/auto-effort-control on/);
+    expect(pinned.set({ level: 'high', reason: 'x' }).text).toMatch(/^Not applied: .*pinned.*\/effort auto or \/auto-effort-control on resumes/);
     const off = rig();
     off.ctl.setEnabled(false);
     off.prompt();
@@ -168,20 +168,20 @@ describe('set_effort (R3, R6)', () => {
   });
 });
 
-// A: the main chat's own level wins over every automatic rule and holds across turns until it calls set_effort with auto;
+// A: the main chat's own level wins over every automatic rule and holds within a turn until it ends or calls set_effort with auto;
 // the user's /effort pin and /auto-effort-control off still outrank it.
 describe("the main chat's own level (A)", () => {
-  it('holds across turns over the planning level and a plan upshift, and the decision row names it', () => {
+  it('expires at the next turn, whose plan and decision row apply', () => {
     const r = rig();
     r.prompt();
     r.step('t1', 0);
     r.set({ level: 'medium', reason: 'mechanical rename' });
     expect(r.step('t1', 1).plan).toMatchObject({ send: 'medium', level: 'medium', source: 'model' });
-    r.prompt('think about the retry design');
-    expect(r.step('t2', 0).plan).toMatchObject({ send: 'medium', level: 'medium', source: 'model', reason: 'mechanical rename', newTurn: true });
-    expect(r.rows.filter((row) => row.event === 'decision').at(-1)).toMatchObject({ turnId: 't2', level: 'xhigh', source: 'plan', override: 'medium' });
+    r.prompt('x'.repeat(1600));
+    expect(r.step('t2', 0).plan).toMatchObject({ send: undefined, level: 'xhigh', source: 'plan', reason: 'planning: long prompt (1600 chars)', newTurn: true });
+    expect(r.rows.filter((row) => row.event === 'decision').at(-1)).toMatchObject({ turnId: 't2', level: 'xhigh', source: 'plan', override: null });
     r.prompt();
-    expect(r.step('t3', 0).plan).toMatchObject({ send: 'medium', source: 'model' });
+    expect(r.step('t3', 0).plan).toMatchObject({ send: 'high', source: 'plan' });
     expect(r.rows.find((row) => row.event === 'decision' && row.turnId === 't1')).toMatchObject({ override: null });
   });
 
@@ -202,7 +202,7 @@ describe("the main chat's own level (A)", () => {
   });
 
   it('hands back on auto: this turn at its own plan level, the next turn planned, failing tests raising again', () => {
-    const r = rig();
+    const r = rig({ planUpshiftPatterns: ['think', 'design'] });
     r.prompt('think about the design');
     r.step('t1', 0);
     r.set({ level: 'medium', reason: 'rename' });
@@ -228,15 +228,15 @@ describe("the main chat's own level (A)", () => {
     expect(r.step('t1', 1).plan).toMatchObject({ level: 'xhigh', source: 'escalation' });
   });
 
-  it('takes a level before the first request: the first turn runs at it', () => {
+  it('expires a level set before any turn when the first turn begins', () => {
     const r = rig();
     expect(r.set({ level: 'medium', reason: 'lookups' }).text).toBe(setText('medium', 'medium', 'medium', 'xhigh'));
     expect(r.rows.at(-1)).toMatchObject({ event: 'set_effort', turnId: null, requested: 'medium', applied: 'medium', from: null });
     r.prompt();
-    expect(r.step('t1', 0).plan).toMatchObject({ send: 'medium', level: 'medium', source: 'model', reason: 'lookups' });
+    expect(r.step('t1', 0).plan).toMatchObject({ send: 'high', level: 'high', source: 'plan', reason: 'planning turn' });
   });
 
-  it("is outranked by the user's /effort pin, kept behind it, and applies again after /auto-effort-control on", () => {
+  it("is outranked by the user's /effort pin, expires at the boundary, and planning resumes after /auto-effort-control on", () => {
     const r = rig();
     r.prompt();
     r.step('t1', 0, { effort: 'xhigh' });
@@ -245,10 +245,10 @@ describe("the main chat's own level (A)", () => {
     expect(r.step('t2', 0, { effort: 'low' }).plan).toMatchObject({ send: undefined, level: 'low', source: 'pin' });
     expect(r.set({ level: 'xhigh', reason: 'x' }).text).toMatch(/^Not applied: .*pinned at low/);
     expect(r.ctl.stateNow()).toMatchObject({ mode: 'pin', level: 'low' });
-    expect(r.ctl.sessionState()).toEqual({ enabled: true, pin: 'low', override: { level: 'medium', reason: 'rename' } });
+    expect(r.ctl.sessionState()).toEqual({ enabled: true, pin: 'low', override: null });
     r.ctl.setEnabled(true);
     r.prompt();
-    expect(r.step('t3', 0, { effort: 'low' }).plan).toMatchObject({ send: 'medium', level: 'medium', source: 'model', reason: 'rename' });
+    expect(r.step('t3', 0, { effort: 'low' }).plan).toMatchObject({ send: 'high', level: 'high', source: 'plan', reason: 'planning turn' });
   });
 
   it('is outranked by /auto-effort-control off; auto is still taken there and says the off holds', () => {
@@ -263,9 +263,9 @@ describe("the main chat's own level (A)", () => {
     expect(r.ctl.stateNow()).toMatchObject({ mode: 'off', level: null });
     r.ctl.setEnabled(true);
     r.prompt();
-    expect(r.step('t3', 0).plan).toMatchObject({ send: 'medium', source: 'model' });
+    expect(r.step('t3', 0).plan).toMatchObject({ send: 'high', source: 'plan' });
     r.ctl.setEnabled(false);
-    expect(r.set({ level: 'auto' }).text).toBe(handBackText({ held: true, level: null, outranked: 'auto-effort-control is off for this session until /auto-effort-control on' }));
+    expect(r.set({ level: 'auto' }).text).toBe(handBackText({ held: false, level: null, outranked: 'auto-effort-control is off for this session until /auto-effort-control on' }));
     r.ctl.setEnabled(true);
     r.prompt();
     expect(r.step('t4', 0).plan).toMatchObject({ send: 'high', source: 'plan' });
@@ -289,13 +289,7 @@ describe("the main chat's own level (A)", () => {
     expect(r.step('t1', 0).plan).toMatchObject({ send: 'high', source: 'plan' });
   });
 
-  it('gives the turn reminder its own line while it holds', () => {
-    const r = rig();
-    r.set({ level: 'medium', reason: 'rename' });
-    expect(r.prompt().reminder).toBe(`Your reasoning effort is medium, the level you set with ${TOOL}; it holds across turns. Call it with another level when the work changes, or with auto to hand it back to the automatic rules.`);
-    r.set({ level: 'auto' });
-    expect(r.prompt().reminder).toContain('starts this turn at high');
-  });
+
 });
 
 // The state a reader outside the plugin is given: the mode the main chat's effort is in, its level and the reason.
@@ -336,7 +330,7 @@ describe('stateNow', () => {
 // R4: one context line at prompt.submit naming the level and the tool.
 describe('turn reminder (R4)', () => {
   it('names the planning level the turn starts at and the tool, in one line', () => {
-    const r = rig();
+    const r = rig({ planUpshiftPatterns: ['think', 'design'] });
     const { reminder } = r.prompt('rename it');
     expect(reminder).toContain('high');
     expect(reminder).toContain(TOOL);
@@ -361,7 +355,7 @@ describe('turn reminder (R4)', () => {
   });
 
   it('plans the next turn from a prompt typed to wait for the running one, and gives it the reminder', () => {
-    const r = rig();
+    const r = rig({ planUpshiftPatterns: ['think', 'design'] });
     r.prompt('rename it');
     r.step('t1', 0);
     const queued = r.ctl.onPrompt({ text: 'think about the retry design', model: OPUS, midTurn: true, wait: true });
@@ -372,7 +366,7 @@ describe('turn reminder (R4)', () => {
   });
 
   it('keeps the text of a prompt delivered into the running turn for a next turn no prompt announced, with no reminder', () => {
-    const r = rig();
+    const r = rig({ planUpshiftPatterns: ['think', 'design'] });
     r.prompt('rename it');
     r.step('t1', 0);
     expect(r.ctl.onPrompt({ text: 'think about the retry design', model: OPUS, midTurn: true, wait: false }).reminder).toBeUndefined();
@@ -566,7 +560,7 @@ describe('user pin (R7)', () => {
     expect(r.ctl.stateNow()).toMatchObject({ mode: 'auto', level: 'high' });
     const plan = r.step('t3', 0, { effort: 'medium' }).plan;
     expect(plan).toMatchObject({ send: undefined, level: 'medium', source: 'pin', newTurn: true });
-    expect(r.ctl.stateNow()).toEqual({ version: 2, mode: 'pin', level: 'medium', reason: 'you set /effort; /auto-effort-control on resumes' });
+    expect(r.ctl.stateNow()).toEqual({ version: 2, mode: 'pin', level: 'medium', reason: 'you set /effort; /effort auto or /auto-effort-control on resumes' });
     expect(r.step('t3', 1, { effort: 'medium' }).plan).toMatchObject({ send: undefined, source: 'pin' });
     r.prompt();
     expect(r.step('t4', 0, { effort: 'medium' }).plan).toMatchObject({ send: undefined, source: 'pin' });
@@ -606,7 +600,7 @@ describe('user pin (R7)', () => {
     const r = rig();
     for (const turn of ['t1', 't2', 't3']) {
       r.prompt();
-      expect(r.step(turn, 0, { effort: 'xhigh' }).plan.source).toBe(turn === 't1' ? 'plan' : 'model');
+      expect(r.step(turn, 0, { effort: 'xhigh' }).plan.source).toBe('plan');
       r.set({ level: 'medium', reason: 'rename' });
       expect(r.step(turn, 1, { effort: 'xhigh' }).plan.source).toBe('model');
     }
@@ -753,7 +747,7 @@ describe('cache canary (R9)', () => {
 // R10: the decision log has one row per decision, switch and canary result, and no message text.
 describe('decision rows (R10)', () => {
   it('records the decision, the switch, the set_effort call, the escalation, the request and the turn', () => {
-    const r = rig();
+    const r = rig({ planUpshiftPatterns: ['think', 'design'] });
     r.prompt('SECRET-PROMPT-TEXT think');
     r.step('t1', 0, { u: usage(10, 0, 5000) });
     r.set({ level: 'medium', reason: 'mechanical rename' });
@@ -793,7 +787,7 @@ describe('controller upkeep', () => {
     expect(r.rows.filter((row) => row.event === 'canary')).toHaveLength(1);
   });
 
-  it('starts a new session afresh: on, no pin, no turn, nothing to compare with, the notice told again', () => {
+  it('starts a cleared session afresh: on, pin kept, no turn, nothing to compare with, the notice told again', () => {
     const r = rig();
     r.ctl.loadPersisted(markUnsafe(EMPTY_PERSISTED, 'claude-fable-5-1', { at: 'x', ratio: 0.1, prevPrompt: 10, cacheRead: 1, from: 'high', to: 'medium' }));
     r.prompt();
@@ -804,9 +798,9 @@ describe('controller upkeep', () => {
     expect(r.step('t4', 0, { model: 'claude-fable-5-1' }).plan.warning?.msg).toBeUndefined();
     r.ctl.setEnabled(false);
     r.ctl.resetSession();
-    expect(r.ctl.view()).toMatchObject({ enabled: true, pin: null, turn: null, model: undefined });
+    expect(r.ctl.view()).toMatchObject({ enabled: true, pin: { level: 'xhigh' }, turn: null, model: undefined });
     r.prompt();
-    expect(r.step('t5', 0, { effort: 'low' }).plan).toMatchObject({ send: 'high', source: 'plan', newTurn: true });
+    expect(r.step('t5', 0, { effort: 'low' }).plan).toMatchObject({ send: undefined, source: 'pin', newTurn: true });
     expect(r.rows.filter((row) => row.event === 'switch' || row.event === 'pin').map((row) => row.turnId)).toEqual(['t2']);
     expect(r.step('t6', 0, { model: 'claude-fable-5-1' }).plan.warning?.msg).toContain('claude-fable-5-1');
   });
@@ -866,10 +860,11 @@ describe('session state', () => {
     expect(after.ctl.sessionState()).toEqual({ enabled: true, pin: null, override: null });
   });
 
-  it("gives the main chat's own level back to a controller built afresh: it still holds", () => {
+  it("gives the main chat's own level back to a controller built afresh: it holds within the same turn", () => {
     const before = rig();
+    before.step('t1', 0);
     before.set({ level: 'medium', reason: 'rename' });
-    expect(before.ctl.sessionState()).toEqual({ enabled: true, pin: null, override: { level: 'medium', reason: 'rename' } });
+    expect(before.ctl.sessionState()).toEqual({ enabled: true, pin: null, override: { level: 'medium', reason: 'rename', turnId: 't1' } });
     const after = rig();
     after.ctl.restoreSession(before.ctl.sessionState());
     after.prompt();
@@ -879,7 +874,7 @@ describe('session state', () => {
   it('reads what it wrote and nothing else; a value saved before the override existed has none', () => {
     expect(readSessionState({ enabled: false, pin: 'max' })).toEqual({ enabled: false, pin: 'max', override: null });
     expect(readSessionState({ enabled: true, pin: null, override: null })).toEqual({ enabled: true, pin: null, override: null });
-    expect(readSessionState({ enabled: true, pin: null, override: { level: 'high', reason: 'design' } })).toEqual({ enabled: true, pin: null, override: { level: 'high', reason: 'design' } });
+    expect(readSessionState({ enabled: true, pin: null, override: { level: 'high', reason: 'design' } })).toEqual({ enabled: true, pin: null, override: { level: 'high', reason: 'design', turnId: null } });
     for (const bad of [undefined, null, 'off', [], {}, { enabled: 'no', pin: null }, { enabled: true }, { enabled: true, pin: 'ultra' }, { enabled: true, pin: 3 }, { enabled: true, pin: null, override: 'high' }, { enabled: true, pin: null, override: { level: 'ultra', reason: 'x' } }, { enabled: true, pin: null, override: { level: 'high' } }]) {
       expect(readSessionState(bad)).toBeUndefined();
     }
@@ -899,4 +894,80 @@ it('returns warning diagnostics for unsafe and failed-canary decisions', () => {
   const end = active.step('t1', 1, { u: usage(4000, 100, 900) }).end;
   expect(end.warning).toEqual({ event: 'canary-failed', msg: expect.stringContaining(`auto-effort-control stopped changing effort on ${OPUS}`), where: 'src/controller.ts#endStep' });
   expect(end.warning?.msg).toContain('stopped changing effort');
+});
+
+
+describe('hand control', () => {
+  it.each(['low', 'medium', 'high', 'xhigh', 'max'] as const)('pins explicit %s even at the carried level', (level) => {
+    const r = rig();
+    r.step('t1', 0, { effort: level });
+    expect(typeof r.ctl.onEffortCommand).toBe('function');
+    expect(r.ctl.onEffortCommand(`  ${level.toUpperCase()}  `).rows).toEqual([{ event: 'pin', via: 'command', level, previous: level }]);
+    expect(r.ctl.sessionState().pin).toBe(level);
+  });
+  it('releases auto, takes the default as baseline, and still infers later changes', () => {
+    const r = rig();
+    expect(typeof r.ctl.onEffortCommand).toBe('function');
+    expect(r.ctl.onEffortCommand('high').rows[0]).toMatchObject({ previous: null });
+    expect(r.ctl.onEffortCommand('low').rows[0]).toMatchObject({ previous: 'high' });
+    r.step('t1', 0, { effort: 'low' });
+    expect(r.ctl.onEffortCommand(' AUTO ').rows).toEqual([{ event: 'unpin', via: 'command', level: 'low' }]);
+    expect(r.step('t2', 0, { effort: 'xhigh' }).plan.source).toBe('plan');
+    expect(r.step('t3', 0, { effort: 'high' }).plan.rows).toContainEqual(expect.objectContaining({ event: 'pin', via: 'carried', level: 'high' }));
+    expect(r.ctl.onEffortCommand('auto').rows[0]).toMatchObject({ level: 'high' });
+    expect(r.ctl.onEffortCommand('auto').rows[0]).toMatchObject({ level: null });
+  });
+  it.each(['', ' ', '42', 'ultra', 'high extra'])('ignores picker, number or unknown args %j', (args) => {
+    const r = rig();
+    expect(typeof r.ctl.onEffortCommand).toBe('function');
+    r.ctl.onEffortCommand('high');
+    expect(r.ctl.onEffortCommand(args)).toEqual({ rows: [] });
+    expect(r.ctl.sessionState().pin).toBe('high');
+  });
+  it('auto preserves off and the running turn override', () => {
+    const r = rig(); r.step('t1', 0); r.set({ level: 'medium' }); r.ctl.setEnabled(false);
+    expect(typeof r.ctl.onEffortCommand).toBe('function');
+    r.ctl.onEffortCommand('auto');
+    expect(r.ctl.sessionState()).toMatchObject({ enabled: false, override: { level: 'medium' } });
+  });
+  it('disables command pins but auto still resets the baseline without rows', () => {
+    const r = rig({ userEffortPins: false }); r.step('t1', 0, { effort: 'high' });
+    expect(typeof r.ctl.onEffortCommand).toBe('function');
+    expect(r.ctl.onEffortCommand('low')).toEqual({ rows: [] });
+    expect(r.ctl.onEffortCommand('auto')).toEqual({ rows: [] });
+    r.ctl.applySettings(resolveSettings({}).settings);
+    expect(r.step('t2', 0).plan.source).toBe('plan');
+  });
+  it('keeps the user pin through clear', () => {
+    const r = rig(); r.step('t1', 0); r.step('t2', 0, { effort: 'low' }); r.ctl.resetSession();
+    expect(r.ctl.sessionState().pin).toBe('low');
+  });
+  it('ends the model level at the next turn even after held failing tests', () => {
+    const r = rig(); r.step('t1', 0); r.set({ level: 'medium' });
+    r.tool('Bash', 'FAILED'); r.tool('Bash', 'FAILED');
+    expect(r.step('t1', 1).plan).toMatchObject({ level: 'medium', source: 'model' });
+    expect(r.prompt('x'.repeat(1600)).reminder).toContain('starts this turn at xhigh because the prompt is long (1600 characters)');
+    expect(r.step('t2', 0).plan).toMatchObject({ level: 'xhigh', source: 'plan' });
+  });
+  it('restores an override only in its own turn and expires legacy state', () => {
+    const r = rig(); r.step('t1', 0); r.set({ level: 'medium' });
+    expect(r.ctl.sessionState().override).toMatchObject({ turnId: 't1' });
+    const after = rig(); after.ctl.restoreSession(r.ctl.sessionState());
+    expect(after.step('t1', 1).plan).toMatchObject({ level: 'medium', source: 'model' });
+    expect(after.step('t2', 0).plan).toMatchObject({ level: 'high', source: 'plan' });
+    after.ctl.restoreSession(readSessionState({ enabled: true, pin: null, override: { level: 'medium', reason: 'legacy' } })!);
+    expect(after.step('t3', 0).plan).toMatchObject({ level: 'high', source: 'plan' });
+  });
+  it('reminds from the plan, clamps the hint level, and logs only pattern sources', () => {
+    const r = rig({ ceiling: 'high' }); r.step('t1', 0); r.set({ level: 'medium' });
+    expect(r.prompt('DESIGN secret-project').reminder).toContain('starts this turn at high');
+    expect(r.prompt('DESIGN secret-project').reminder).toContain('"design": the mcp__auto-effort-control__set_effort guide places that kind of work at high');
+    expect(r.step('t2', 0).plan.rows).toContainEqual(expect.objectContaining({ event: 'decision', hints: ['\\bdesign'] }));
+    expect(r.step('t3', 0).plan.rows).toContainEqual(expect.objectContaining({ event: 'decision', hints: null }));
+  });
+});
+
+it('records null hints when no plan is made for an inactive turn', () => {
+  const r = rig(); r.ctl.setEnabled(false);
+  expect(r.step('t1', 0).plan.rows).toContainEqual(expect.objectContaining({ event: 'decision', hints: null }));
 });

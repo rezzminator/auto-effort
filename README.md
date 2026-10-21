@@ -5,7 +5,7 @@
 **Reasoning effort for the Claude Code main chat and for the sub-agents it launches: each turn starts at a planned level, the model raises or lowers its own with one tool call, a spawn tag sets a sub-agent's, an opted-in agent's effort follows its own trouble, and a cache check keeps every change safe.**
 
 [![Claude Code plugin](https://img.shields.io/badge/Claude%20Code-plugin-D97757)](https://docs.claude.com/en/docs/claude-code/plugins)
-[![Version](https://img.shields.io/badge/version-0.3.0--dev.1-blue)](./CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.3.0--dev.2-blue)](./CHANGELOG.md)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](./LICENSE)
 
 </div>
@@ -33,8 +33,8 @@ This plugin is the merge of `auto-effort` (the main chat) and `effort-live-contr
 
 With this plugin the main chat's effort follows the work:
 
-- **A turn starts at a planned level** (`high` by default; `xhigh` when the prompt asks for thought or is long).
-- **The model sets the level it needs** with the `set_effort` tool, in its first response and again when the work changes. It is told to call it by the tool's description and by one line added to each prompt. The level it sets holds across turns, over the planned level and the test rules, until it calls `set_effort` with `auto`; your own `/effort` and `/auto-effort-control off` still win over it.
+- **A turn starts at a planned level** (`high` by default; `xhigh` when the prompt is long or matches configured `planUpshiftPatterns`).
+- **The model sets the level it needs** with the `set_effort` tool, in its first response and again when the work changes. It is told to call it by the tool's description and by one line added to each prompt. The level it sets holds until this turn ends, over the planned level and the test rules, or until it calls `set_effort` with `auto`; your own `/effort` and `/auto-effort-control off` still win over it.
 - **Failing tests raise it, passing tests bring it back** while the automatic rules hold: two failing test runs in a row lift the level one step, and the next passing run returns it to where the failures found it. Only a test command counts: the output of `cat`, `grep` or a build that happens to print `FAIL` does not.
 - **A cache check keeps it safe.** Changing effort mid-turn must not break the prompt cache. After every change the plugin compares the cache read of the switched request with the previous request's prompt; if it drops, the plugin stops changing effort on that model and records a warning in its plugin log.
 
@@ -65,7 +65,7 @@ claude plugin marketplace add ~/.local/share/auto-effort-control-dev
 claude plugin install auto-effort-control@auto-effort-control-dev
 ```
 
-Start a chat and run `/auto-effort-control status`. The Agent tool's description now tells the model about the tag, so no prompt change is needed on your side. Live control is off until an agent definition asks for it ([Live control](#live-control)). To remove it:
+Start a chat and run `/auto-effort-control status`. Each turn starts at `high` by default; design and architecture words hint to the model without moving the level. `/effort high` locks your choice; `/effort auto` hands control back. The Agent tool's description now tells the model about the tag, so no prompt change is needed on your side. Live control is off until an agent definition asks for it ([Live control](#live-control)). To remove it:
 
 ```bash
 claude plugin uninstall auto-effort-control@auto-effort-control-dev
@@ -79,20 +79,22 @@ Requires Claude Code with function hooks (tested on 2.1.296).
 | --- | --- |
 | `session.start` | Registers the `set_effort` tool and the `/auto-effort-control` command (always loaded, never behind tool search) and the three button tools; loads the saved model marks; clears a status line an older version pinned. |
 | `tool.describe` | Appends the tag's usage to the Agent tool's description. |
-| `prompt.submit` | Reads the options as `/config` holds them, then adds one context line: the level the turn starts at and a request to call `set_effort` first, or, while the model's own level holds, that level and how to hand it back. |
+| `prompt.submit` | Reads the options as `/config` holds them, then adds one context line: the planned starting level, why a length or pattern upshift applies, any matched hints, and a request to call `set_effort` first. A model-set level lasts only for that turn. |
 | `agent.spawn` | Reads a sub-agent's tag and definition, pins its effort, and starts steering it when its definition opts in ([Sub-agents](#sub-agents)). |
 | `turn.step` | Before each main-chat request, rewrites its `effort` to the level held (only when it differs from the effort the request carries), writes the state file and shows the reason as a notice when the mode, level or reason changed, and afterwards runs the cache check on the answer's token usage. Before each sub-agent request, sets its `effort` to the agent's pin, or to its live level when steered. |
 | `tool.call` | Serves `set_effort` (a level, or `auto`) for the main chat and `effort_up`, `effort_down` and `effort_auto` for sub-agents; reads each main-chat call of `failureTools` whose command matches `testCommandPatterns` as a test run, failing when its result matches `failurePatterns` and passing otherwise, and a steered sub-agent's own test runs, reads and messages the same way. At the threshold of failing runs in a row it adds one line to the result telling the model its level rose, or, while the model's own level holds, that it stays; with `lowerOnPass`, the next passing run adds one line saying the level is back. |
 | `turn.complete` | Writes the main chat's turn summary row to the decision log; when a sub-agent finishes, clears its pin and drops its steering state. |
 | `session.compact` | Notes the compaction, so the cache check does not judge the switch right after it. |
 | `session.end` | Retires the session's state file line (`keeper` 0) ([The state file](#the-state-file)). |
-| `command.run` | Answers `/auto-effort-control`. |
+| `command.run` | Answers `/auto-effort-control`; observes the built-in `/effort` after the host handles it, without changing its event or result. |
 
 A level is always clamped to `floor`..`ceiling`. A model that takes no effort level (no setting, or a number) is left alone, and so is a main chat where you set `/effort` yourself between turns (see `userEffortPins`).
 
 ### The model's own level
 
-`set_effort` with a level sets the main chat's effort from the next request, and the level holds across turns: no planned level, failing test run or passing one moves it. `set_effort` with `auto` hands the effort back: the current turn runs at its planned level again from the next request, and each turn after starts at its own. Your `/effort` (with `userEffortPins`) and `/auto-effort-control off` outrank the model's level: while either applies, the level is kept, and after `/auto-effort-control on` it holds again until the model calls `set_effort` with `auto`. `/clear` drops it. A sub-agent's call is refused.
+`set_effort` with a level sets the main chat's effort from the next request until this turn ends: failing or passing tests do not move it within that turn. The next turn starts at its planned level again. `set_effort` with `auto` hands the running turn back to its plan and the failing-test rules. Your `/effort` pin and `/auto-effort-control off` outrank the model's level. A reload within the same turn keeps it; `/clear` drops it. A sub-agent's call is refused.
+
+`hintPatterns` names work such as design, architecture and root causes in the reminder. These words never raise the level by themselves. The reminder quotes up to three matches and names the guide's xhigh level, clamped to your floor and ceiling; the model decides whether the turn is that work. `planUpshiftPatterns` is empty by default; configured patterns still raise the starting level. Long prompts still raise it and the reminder gives the character count.
 
 ### The model gate
 
@@ -181,6 +183,8 @@ A steered agent starts at its **home** level: its tag, else its definition's `ef
 | `/auto-effort-control set <key> <value>` | Saves one of the main chat's single-valued options through `/config`'s own writer: `floor`, `ceiling`, `planLevel`, `planUpshiftChars`, `turnReminder`, `escalateAfterFailures`, `lowerOnPass`, `userEffortPins`, `unknownModels`, `probationSwitches`, `canaryThreshold`, `cacheTtlSeconds`, `statusLine`, `logFile`, `stateFile`. An environment variable of that option still overrides it. Every other option (the lists, and every sub-agent option) is edited in `/config` or `settings.json`. |
 | `/auto-effort-control clear [model]` | Lifts a cache mark from one model, or from every model. |
 
+`/effort <level>` locks one of the five levels, even when it equals the carried effort. `/effort auto` releases the pin and treats the next request's carried effort as the new baseline; it leaves `/auto-effort-control off` in force. `/auto-effort-control on` also releases a pin. The lock survives `/clear`; a new chat process starts steered. Bare `/effort` opens the host's picker, which offers the five levels and no auto: its choice is inferred from the effort the next turn carries, as a `via: carried` pin. Claude Code 2.1.307 runs the plugin's hook for the built-in `/effort` with its arguments as typed. The host also saves a typed `/effort <level>` as its default for new sessions (the picker's `s` keeps a choice to the session), and `/effort auto` clears that default; the plugin's pin itself ends with the chat process.
+
 ## Migrating from auto-effort and effort-live-control
 
 The two plugins are retired in favour of this one. This repository is the old `auto-effort` repository, still under that name until it is renamed; the `effort-live-control` repository is not archived yet.
@@ -237,7 +241,8 @@ Every former source is reported by its exact old and new key, as `auto-effort-co
 | `floor` | `AUTO_EFFORT_CONTROL_FLOOR` | `medium` | The lowest reasoning effort the plugin sends: low, medium, high, xhigh or max. A lower level the model asks for is raised to this one. Must not be above ceiling. |
 | `ceiling` | `AUTO_EFFORT_CONTROL_CEILING` | `xhigh` | The highest reasoning effort the plugin sends: low, medium, high, xhigh or max. A higher level the model asks for, or an escalation, is lowered to this one. Must not be below floor. |
 | `planLevel` | `AUTO_EFFORT_CONTROL_PLAN_LEVEL` | `high` | The effort the first request of every turn runs at, before the model has said what the work needs: low, medium, high, xhigh or max. |
-| `planUpshiftPatterns` | `AUTO_EFFORT_CONTROL_PLAN_UPSHIFT_PATTERNS` | `\bthink`<br>`\bdesign` | One regular expression per entry, matched case-insensitively against the prompt. A prompt that matches any entry starts its turn at xhigh instead of planLevel. |
+| `planUpshiftPatterns` | `AUTO_EFFORT_CONTROL_PLAN_UPSHIFT_PATTERNS` | *(none)* | Optional regular expressions, matched case-insensitively. A match starts the turn at xhigh instead of planLevel. Empty by default; set patterns to restore keyword upshifts. |
+| `hintPatterns` | `AUTO_EFFORT_CONTROL_HINT_PATTERNS` | `\bdesign`<br>`\barchitect`<br>`\btrade-?offs?\b`<br>`\broot[- ]?causes?\b`<br>`\bspec(s\|ced\|ification)?\b`<br>`\bthink (hard\|harder\|deeply\|carefully\|it through)\b`<br>`\bultrathink\b` | Main chat only. Case-insensitive regular expressions whose matches the reminder names as hints, never level changes. Up to three distinct whole words or phrases, in prompt order, each clipped to 40 characters. |
 | `planUpshiftChars` | `AUTO_EFFORT_CONTROL_PLAN_UPSHIFT_CHARS` | `1500` | A prompt longer than this many characters starts its turn at xhigh instead of planLevel. |
 | `turnReminder` | `AUTO_EFFORT_CONTROL_TURN_REMINDER` | `true` | On: each prompt carries one line naming the effort the turn starts at and asking the model to call set_effort in its first response. Off: only the tool's description asks for the call. |
 | `escalateAfterFailures` | `AUTO_EFFORT_CONTROL_ESCALATE_AFTER_FAILURES` | `2` | After this many failing test runs in a row in one turn the effort rises one step, up to the ceiling, for the requests that follow; the count then starts again. A passing test run sets the count back to 0. |
@@ -245,7 +250,7 @@ Every former source is reported by its exact old and new key, as `auto-effort-co
 | `failurePatterns` | `AUTO_EFFORT_CONTROL_FAILURE_PATTERNS` | `--- FAIL`<br>`FAIL(ED)?`<br>`(?<!\d)[1-9]\d* (failed\|failing)`<br>`AssertionError`<br>`panic:`<br>`Traceback` | One regular expression per entry, matched case-sensitively against the result of a test run (see testCommandPatterns). A test run whose result matches any entry fails; one that matches none passes. |
 | `failureTools` | `AUTO_EFFORT_CONTROL_FAILURE_TOOLS` | `Bash` | One tool name per entry (Bash runs the tests). A call of these tools whose command matches testCommandPatterns is a test run; its result is matched against failurePatterns. |
 | `testCommandPatterns` | `AUTO_EFFORT_CONTROL_TEST_COMMAND_PATTERNS` | `main:\bgo\s+(-C\s+\S+\s+)?test\b`<br>`main:\b(npm\|pnpm\|yarn\|bun)\s+(run\s+)?test\b`<br>`main:\bvitest\b`<br>`main:\bjest\b`<br>`main:\bpytest\b`<br>`main:\bcargo\s+(test\|nextest)\b`<br>`main:\bmake\b[^;&\|\n]*?\b(test\|check\|verify)\b`<br>`main:\bjust\b[^;&\|\n]*?\b(test\|check)\b`<br>`main:\b(mvn\|gradle\|gradlew)\b[^;&\|\n]*?\btest\b`<br>`main:\bdotnet\s+test\b`<br>`main:\bdeno\s+test\b`<br>`main:\bswift\s+test\b`<br>`main:\bmix\s+test\b`<br>`main:\b(rspec\|phpunit\|ctest\|tox\|nox)\b`<br>`main:\bscripts?/test[\w.-]*\.sh\b`<br>`subagent:\bgo\s+(-C\s+\S+\s+)?test\b`<br>`subagent:\b(npm\|pnpm\|yarn\|bun)\s+(run\s+)?test\b`<br>`subagent:\bvitest\b`<br>`subagent:\bjest\b`<br>`subagent:\bpytest\b`<br>`subagent:\bpython(\d(\.\d+)?)?\s+-m\s+unittest\b`<br>`subagent:\bnode\s+(--test\|--test-only)\b`<br>`subagent:\bcargo\s+(test\|nextest)\b`<br>`subagent:\bmake\b[^;&\|\n]*?\b(test\|check\|verify)\b`<br>`subagent:\bjust\b[^;&\|\n]*?\b(test\|check)\b`<br>`subagent:\b(mvn\|gradle\|gradlew)\b[^;&\|\n]*?\btest\b`<br>`subagent:\bdotnet\s+test\b`<br>`subagent:\bdeno\s+test\b`<br>`subagent:\bswift\s+test\b`<br>`subagent:\bmix\s+test\b`<br>`subagent:\b(rspec\|phpunit\|ctest\|tox\|nox)\b`<br>`subagent:\bscripts?/test[\w.-]*\.sh\b` | Regular expressions prefixed main: or subagent: select that scope; unprefixed expressions apply to both. Defaults retain each original scope. |
-| `userEffortPins` | `AUTO_EFFORT_CONTROL_USER_EFFORT_PINS` | `true` | On: when you change the effort yourself with /effort, auto-effort-control stops steering that session until /auto-effort-control on. Off: it keeps steering whatever you set. |
+| `userEffortPins` | `AUTO_EFFORT_CONTROL_USER_EFFORT_PINS` | `true` | On: when you change the effort yourself with /effort, auto-effort-control stops steering that session until /effort auto or /auto-effort-control on. The pin survives /clear. Off: it keeps steering whatever you set. |
 | `models` | `AUTO_EFFORT_CONTROL_MODELS` | `main:claude-opus-5-5=allow`<br>`main:claude-fable-5-1=allow`<br>`main:claude-sonnet-5-5=probation`<br>`main:claude-haiku-5-5=probation`<br>`main:claude-sonnet-5=deny`<br>`subagent:claude-opus-5-5`<br>`subagent:claude-fable-5-1`<br>`subagent:claude-sonnet-5-5` | Scope-tagged entries: main:model=allow\|probation\|deny and subagent:model-prefix. Unqualified entries are rejected. |
 | `unknownModels` | `AUTO_EFFORT_CONTROL_UNKNOWN_MODELS` | `off` | off leaves it untouched; allow, probation and deny act as in models. |
 | `probationSwitches` | `AUTO_EFFORT_CONTROL_PROBATION_SWITCHES` | `5` | How many effort switches in a row of a probation model must keep the cache (see canaryThreshold) before it counts as allow. |
@@ -281,8 +286,8 @@ One JSON line per session at `stateFile` (`state.<session>.json`), rewritten who
 | `mode` | `level` | When |
 | --- | --- | --- |
 | `auto` | The level the turn runs at; `null` before the first request | The automatic rules decide: the planned level, test-failure rises. |
-| `model` | The model's own level | The model set it with `set_effort`; it holds until `set_effort` with `auto`. |
-| `pin` | Your `/effort` level | You set `/effort`; `/auto-effort-control on` resumes. |
+| `model` | The model's own level | The model set it with `set_effort`; it holds until this turn ends or `set_effort` with `auto`. |
+| `pin` | Your `/effort` level | You set `/effort`; `/effort auto` or `/auto-effort-control on` resumes. |
 | `off` | `null` | `/auto-effort-control off`, the model gate leaves the model untouched, or the model takes no effort level. |
 
 `keeper` says whether anything still stands behind the line. While the plugin is loaded it runs a keeper, `/bin/sh -c 'echo $$; while kill -0 "$PPID" 2>/dev/null; do sleep 2; done' auto-effort-control-keeper`: the host kills it when the plugin unloads (disabled, reloaded, or its process ending), and it exits within two seconds of the process that started it. The line names its pid, the first line it prints on stdout; what the shell writes to stderr is no pid. A reader trusts the line only while a live process at that pid has `auto-effort-control-keeper` among its arguments; any other line is stale, a state nothing steers, to show as such and never as the mode it names. `keeper` is `0` when no keeper vouches: the plugin writes the line's last state with `0` at the session's end and on leaving a path (`stateFile` moved or emptied, a new session after `/clear`), and as soon as no keeper runs (a keeper that cannot start is said once until one starts, each keeper that ends once; the next prompt starts another). A retire that cannot be written is tried again at each later write, and said once per path; a publish still running for a session that ended writes nothing.
@@ -297,7 +302,7 @@ The main chat writes `decisions.<session>.jsonl`, a new numbered file every 1000
 
 | `event` | When |
 | --- | --- |
-| `decision` | A turn's first request: the level, what decided it (`plan`, `pin`), and the reason. |
+| `decision` | A turn's first request: the level, what decided it (`plan`, `pin`), and the reason; `hints` holds matching pattern sources or `null`, never the matched prompt words. |
 | `step` | Each main-chat request: the level sent, the token counts, the time it took. |
 | `switch` | An effort change between two requests of one model. |
 | `set_effort` | Each call of the tool: the level asked (or `auto`), the level applied, the reason given. |
@@ -305,7 +310,8 @@ The main chat writes `decisions.<session>.jsonl`, a new numbered file every 1000
 | `deescalation` | A passing test run returning the level to where the failing streak found it (`lowerOnPass`). |
 | `canary` | The cache check of a switch: `ok`, `fail` or `skip` with the reason. |
 | `gate` | A model graduating from probation, or marked unsafe. |
-| `pin` | A `/effort` change the plugin recognised. |
+| `pin` | A recognised `/effort` change: `via: command` for an explicit level, `via: carried` for a changed request effort. |
+| `unpin` | `/effort auto`, with `via: command` and the released pin level (or `null`). |
 | `turn` | A turn's summary: start and end level, steps, switches, calls, tokens. |
 | `option-error` | An option value that was rejected. |
 
@@ -328,9 +334,9 @@ The sub-agents write `decisions.<session>.subagent.jsonl`, the newest 5,000 rows
 ## Limits
 
 - A sub-agent is steered by its tag and by `effortControl` only: the model's `set_effort` level, the automatic rules and the cache check belong to the main chat, and a sub-agent without a tag keeps the effort its first request carries.
-- The session's on/off, a `/effort` pin and the model's own level are kept per session id in the host's plugin state, so a `/reload-plugins` or a settings change (in `/config` or by `/auto-effort-control set`), which reloads the plugin, keeps them. They do not survive closing the chat. `/clear` starts a new session: on, unpinned, with its own log file. The model marks and probation counts are saved and shared by every chat on the machine; a chat's save rewrites only the models it changed, so for one model the last write wins.
+- The session's on/off, a `/effort` pin and the model's own level are kept per session id in the host's plugin state, so a `/reload-plugins` or a settings change (in `/config` or by `/auto-effort-control set`), which reloads the plugin, keeps them. They do not survive closing the chat. `/clear` starts a new session: on, keeping the user pin, with no model override and with its own log file. A saved model override without a turn id expires at the next turn. The model marks and probation counts are saved and shared by every chat on the machine; a chat's save rewrites only the models it changed, so for one model the last write wins.
 - `testCommandPatterns` and `failurePatterns` entries are regular expressions you write, run over every main-loop Bash command and every test run's result. They are checked for syntax only, so a pattern that backtracks without end (such as `(a+)+$`) can stall the plugin's tool-result hook on a long result; the host treats a hook that overruns as absent and the result goes through unchanged. Keep patterns plain.
-- The only effort control the plugin has is the request's `effort` field, set per request. It does not read the session's setting; it recognises a pin by the request's effort changing between turns on the same model.
+- The only effort control the plugin has is the request's `effort` field, set per request. It observes explicit `/effort` arguments through `command.run`. The picker path is inferred from a change in carried effort between turns on the same model, so choosing the same level cannot be inferred.
 - A test run is recognised by its command alone: a test runner no `testCommandPatterns` entry names counts nothing, and a command that merely mentions one (`grep pytest notes.md`) counts. Add your own runner or script as an entry.
 - A test run's verdict is text in its result: one that prints none of the `failurePatterns` counts as passing, even when it failed some other way (a compile error, a crash before the first test).
 

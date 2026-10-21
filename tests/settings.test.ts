@@ -21,7 +21,7 @@ describe('resolveSettings', () => {
       canaryThreshold: 0.9,
       statusLine: true,
     });
-    expect(DEFAULTS.planUpshiftPatterns).toEqual(['\\bthink', '\\bdesign']);
+    expect(DEFAULTS.planUpshiftPatterns).toEqual([]);
     expect(DEFAULTS.failurePatterns).toEqual(['--- FAIL', 'FAIL(ED)?', '(?<!\\d)[1-9]\\d* (failed|failing)', 'AssertionError', 'panic:', 'Traceback']);
     expect(DEFAULTS.testCommandPatterns).toHaveLength(15);
     expect(DEFAULTS.models).toEqual([
@@ -118,6 +118,7 @@ describe('resolveSettings with environment variables', () => {
     floor: 'AUTO_EFFORT_CONTROL_FLOOR',
     ceiling: 'AUTO_EFFORT_CONTROL_CEILING',
     planLevel: 'AUTO_EFFORT_CONTROL_PLAN_LEVEL',
+    hintPatterns: 'AUTO_EFFORT_CONTROL_HINT_PATTERNS',
     planUpshiftPatterns: 'AUTO_EFFORT_CONTROL_PLAN_UPSHIFT_PATTERNS',
     planUpshiftChars: 'AUTO_EFFORT_CONTROL_PLAN_UPSHIFT_CHARS',
     turnReminder: 'AUTO_EFFORT_CONTROL_TURN_REMINDER',
@@ -247,7 +248,8 @@ describe('compile', () => {
       'claude-haiku-5-5': 'probation',
       'claude-sonnet-5': 'deny',
     });
-    expect(compiled.upshift.some((re) => re.test('Please THINK about it'))).toBe(true);
+    expect(compiled.upshift.some((re) => re.test('Please THINK about it'))).toBe(false);
+    expect(compiled.hints.some((re) => re.test('DESIGN'))).toBe(true);
     expect(compiled.failure.some((re) => re.test('--- FAIL: TestX (0.00s)'))).toBe(true);
     expect(compiled.failure.some((re) => re.test('3 failed, 2 passed'))).toBe(true);
     expect(compiled.failure.some((re) => re.test('all tests passed, 0 failures'))).toBe(false);
@@ -305,4 +307,14 @@ describe('compile', () => {
     expect(hits(digits)).toBe(false);
     expect(performance.now() - started).toBeLessThan(500);
   });
+});
+
+it('parses hintPatterns and reports a bad regex by option or environment name', () => {
+  expect(resolveSettings({ hintPatterns: ['design'] }).settings.hintPatterns).toEqual(['design']);
+  expect(resolveSettings({}, { hintPatterns: '["architect"]' }).settings.hintPatterns).toEqual(['architect']);
+  for (const result of [resolveSettings({ hintPatterns: ['['] }), resolveSettings({}, { hintPatterns: '["["]' })]) {
+    expect(result.errors.join()).toContain('hintPatterns');
+    expect(result.settings.hintPatterns).toEqual(DEFAULTS.hintPatterns);
+  }
+  expect(resolveSettings({}, { hintPatterns: '["["]' }).errors.join()).toContain('AUTO_EFFORT_CONTROL_HINT_PATTERNS');
 });

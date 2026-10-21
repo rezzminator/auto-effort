@@ -12,7 +12,7 @@ describe('stateOf', () => {
     ['no request yet', { turn: null }, { version: 2, mode: 'auto', level: null, reason: 'the next turn starts at its planned level' }],
     ['the main chat set a level', { override: { level: 'high', reason: 'a refactor across files' }, turn: { level: 'high', reason: 'a refactor across files' } }, { version: 2, mode: 'model', level: 'high', reason: 'a refactor across files' }],
     ['the main chat set a level before any request', { override: { level: 'xhigh', reason: 'hard proof' }, turn: null }, { version: 2, mode: 'model', level: 'xhigh', reason: 'hard proof' }],
-    ['the user pinned /effort over the main chat', { pin: 'low', override: { level: 'high', reason: 'x' } }, { version: 2, mode: 'pin', level: 'low', reason: 'you set /effort; /auto-effort-control on resumes' }],
+    ['the user pinned /effort over the main chat', { pin: 'low', override: { level: 'high', reason: 'x' } }, { version: 2, mode: 'pin', level: 'low', reason: 'you set /effort; /effort auto or /auto-effort-control on resumes' }],
     ['the user turned it off over a pin and a level', { enabled: false, pin: 'low', override: { level: 'high', reason: 'x' } }, { version: 2, mode: 'off', level: null, reason: 'auto-effort-control is off; /auto-effort-control on resumes' }],
     ['the model gate keeps the model unsteered', { steered: false, override: { level: 'high', reason: 'x' } }, { version: 2, mode: 'off', level: null, reason: 'this model is not steered' }],
   ];

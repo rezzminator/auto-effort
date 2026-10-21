@@ -58,3 +58,12 @@ describe('retired artifacts stay read-only', () => {
     }
   });
 });
+
+it('projects hintPatterns only into main and reads its environment override', () => {
+  const raw = { hintPatterns: ['design'] };
+  const snapshot = { ok: true as const, value: {} };
+  expect(resolveOptions('main', raw, snapshot, {}).options.hintPatterns).toEqual(['design']);
+  expect(resolveOptions('subagent', raw, snapshot, {}).options.hintPatterns).toBeUndefined();
+  const result = resolveOptions('main', raw, snapshot, { AUTO_EFFORT_CONTROL_HINT_PATTERNS: { ok: true, value: '["architect"]' } });
+  expect(mainSettings(result.options, result.env).settings.hintPatterns).toEqual(['architect']);
+});

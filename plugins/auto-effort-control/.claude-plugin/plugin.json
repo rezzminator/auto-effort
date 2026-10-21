@@ -1,6 +1,6 @@
 {
   "name": "auto-effort-control",
-  "version": "0.3.0-dev.1",
+  "version": "0.3.0-dev.2",
   "description": "Automatic reasoning effort for main chats and sub-agents, with planning, cache checks, spawn tags, tripwires and control tools.",
   "license": "MIT",
   "types": "./contract.d.ts",
@@ -42,10 +42,7 @@
       "type": "string",
       "title": "planUpshiftPatterns: prompts that start a turn at xhigh (regular expressions)",
       "description": "One regular expression per entry, matched case-insensitively against the prompt. A prompt that matches any entry starts its turn at xhigh instead of planLevel.",
-      "default": [
-        "\\bthink",
-        "\\bdesign"
-      ],
+      "default": [],
       "multiple": true
     },
     "planUpshiftChars": {
@@ -371,6 +368,21 @@
       "title": "logPackets: put the judge's snapshot and answer in the log",
       "description": "On: judge rows carry the snapshot sent to the judge and its answer, which holds the agent's opening brief and last words. Off: they do not.",
       "default": false
+    },
+    "hintPatterns": {
+      "type": "string",
+      "title": "hintPatterns: prompt words to name in the turn reminder",
+      "description": "Main chat only. Regular expressions matched case-insensitively against the prompt. The reminder names up to three matching words as hints to the model; they never change the planned level.",
+      "default": [
+        "\\bdesign",
+        "\\barchitect",
+        "\\btrade-?offs?\\b",
+        "\\broot[- ]?causes?\\b",
+        "\\bspec(s|ced|ification)?\\b",
+        "\\bthink (hard|harder|deeply|carefully|it through)\\b",
+        "\\bultrathink\\b"
+      ],
+      "multiple": true
     }
   }
 }

@@ -31,7 +31,7 @@ export type StateInput = {
   /** False when the model gate keeps the last model seen unsteered; true when it steers or no model is seen yet. */
   steered: boolean;
   pin: Effort | null;
-  /** The main chat's own level, held across turns until it calls `set_effort` with `auto`. */
+  /** The main chat's own level, held until this turn ends or it calls `set_effort` with `auto`. */
   override: { level: Effort; reason: string } | null;
   /** The level the current turn's requests go at, and why; null before the first request. */
   turn: { level: Effort; reason: string } | null;
@@ -41,7 +41,7 @@ export type StateInput = {
 export function stateOf(input: StateInput): EffortState {
   if (!input.enabled) return { version: STATE_VERSION, mode: 'off', level: null, reason: 'auto-effort-control is off; /auto-effort-control on resumes' };
   if (!input.steered) return { version: STATE_VERSION, mode: 'off', level: null, reason: 'this model is not steered' };
-  if (input.pin !== null) return { version: STATE_VERSION, mode: 'pin', level: input.pin, reason: 'you set /effort; /auto-effort-control on resumes' };
+  if (input.pin !== null) return { version: STATE_VERSION, mode: 'pin', level: input.pin, reason: 'you set /effort; /effort auto or /auto-effort-control on resumes' };
   if (input.override !== null) return { version: STATE_VERSION, mode: 'model', level: input.override.level, reason: shortReason(input.override.reason) };
   if (input.turn === null) return { version: STATE_VERSION, mode: 'auto', level: null, reason: 'the next turn starts at its planned level' };
   return { version: STATE_VERSION, mode: 'auto', level: input.turn.level, reason: shortReason(input.turn.reason) };
