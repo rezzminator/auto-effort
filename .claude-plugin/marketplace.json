@@ -1,16 +1,16 @@
 {
-  "name": "auto-effort",
-  "description": "Automatic reasoning effort for Claude Code.",
+  "name": "auto-effort-control",
+  "description": "Automatic reasoning effort for main chats and sub-agents.",
   "owner": {
     "name": "Reza",
     "url": "https://github.com/rezzminator"
   },
   "plugins": [
     {
-      "name": "auto-effort",
-      "source": "./plugins/auto-effort",
-      "description": "Automatic reasoning effort for the Claude Code main chat: the plugin plans each turn, the model raises or lowers it with set_effort, and a cache check keeps it safe.",
-      "version": "0.2.3",
+      "name": "auto-effort-control",
+      "source": "./plugins/auto-effort-control",
+      "description": "Steer main-chat and sub-agent effort with planning, cache checks, spawn tags, tripwires and four control tools.",
+      "version": "1.0.0",
       "license": "MIT",
       "keywords": [
         "claude-code",
@@ -24,7 +24,7 @@
         "prompt-cache"
       ],
       "author": {
-        "name": "Reza · Professor",
+        "name": "Reza \u00b7 Professor",
         "url": "https://github.com/rezzminator/professor"
       }
     }

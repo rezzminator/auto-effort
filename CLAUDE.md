@@ -1,38 +1,42 @@
-# auto-effort
+# auto-effort-control
 
-A Claude Code function-hooks plugin: automatic reasoning effort for the main chat. Each turn starts at a planned level, the model raises or lowers it with the `set_effort` tool, failing tests raise it, and a cache check switches a model off when changing effort breaks its prompt cache. `README.md` is the behavioural spec.
+A Claude Code function-hooks plugin: automatic reasoning effort for the main chat and the sub-agents it launches. Each main-chat turn starts at a planned level, the model raises or lowers it with the `set_effort` tool, failing tests raise it, and a cache check switches a model off when changing effort breaks its prompt cache. A tag at the start of an Agent prompt sets that sub-agent's effort; an agent whose definition carries `effortControl` is raised at each tripwire, brought home once the trouble resolves, and moves its own effort with `effort_up`, `effort_down` and `effort_auto`. `README.md` is the behavioural spec.
 
 ## Layout
 
-- `plugins/auto-effort/`: everything that installs, and nothing else — the directory scans only this folder, so dev files never go in it.
-- `plugins/auto-effort/hooks/auto-effort.ts`: the adapter, the only file that touches `$`. It feeds the hook events to the controller and does what it returns.
-- `plugins/auto-effort/contract.d.ts`: the plugin state the host keeps per session (on/off and the pin), declared for `$.state`; `plugin.json` names it in `types`.
-- `plugins/auto-effort/src/`: every decision, pure and unit-tested. `controller.ts` holds the turn state; `settings.ts` the options, their defaults and their environment variables `AUTO_EFFORT_{OPTION}` (upper snake), each read by a string-literal `$.env.get` in the adapter's `readEnv`; `gate.ts` the model gate and the saved marks; `canary.ts` the cache check; `plan.ts` the planning level; `text.ts` every sentence the model or the user reads; `command.ts` `/auto-effort`; `log.ts` the decision log paths.
-- `tests/`: one vitest file per concern; `adapter.test.ts` drives the hooks module over a stand-in engine.
+- `plugins/auto-effort-control/`: everything that installs, and nothing else — the directory scans only this folder, so dev files never go in it.
+- `plugins/auto-effort-control/hooks/`: the adapter, the only file that touches `$`. It feeds the hook events to the controllers and does what they return.
+- `plugins/auto-effort-control/contract.d.ts`: the plugin state the host keeps per session (on/off and the pin), declared for `$.state`; `plugin.json` names it in `types`.
+- `plugins/auto-effort-control/src/`: every decision, pure and unit-tested — the main chat's at its top level, the sub-agents' under `src/subagent/`. `options.ts` declares the one option set (`OPTION_DEFAULTS`, with `models` and `testCommandPatterns` scope-tagged) and resolves each scope's values from every source, legacy ones included (`resolveOptions`); `settings.ts` and `subagent/settings.ts` parse those values for their scope; `state.ts` the per-session state file; `text.ts` and `subagent/text.ts` every sentence the model or the user reads.
+- `tests/`: one vitest file per concern, the sub-agents' under `tests/subagent/`; `options.test.ts` covers the option set, its scope projection and the legacy sources; each `adapter.test.ts` drives the hooks module over a stand-in engine.
 - `types/claude-code.d.ts`: the plugin API (from `/plugin-types`), the truth for every hook's shape; grep it before using an event.
-- `plugins/auto-effort/.claude-plugin/`: `plugin.json` (the manifest and the 17 `userConfig` options) and `icon.svg`; the root `.claude-plugin/marketplace.json` makes the repo its own marketplace.
-- `scripts/dev-marketplace.sh`: builds the local `auto-effort-dev` directory marketplace from a checkout; `scripts/release-check.sh`: the version places.
+- `plugins/auto-effort-control/.claude-plugin/`: `plugin.json` (the manifest and its `userConfig` options) and `icon.svg`; the root `.claude-plugin/marketplace.json` makes the repo its own marketplace.
+- `scripts/dev-marketplace.sh`: builds the local `auto-effort-control-dev` directory marketplace from a checkout; `scripts/release-check.sh`: the version places.
 
 ## Commands
 
-`npm test`, `npm run typecheck`, `npm run validate:plugin` and `npm run release:check` all pass before a commit. `validate:plugin` runs `claude plugin validate --strict`; run it with `CLAUDE_CONFIG_DIR` pointing at a scratch directory so the check reads no live config.
+`npm test`, `npm run typecheck`, `npm run validate:plugin` and `npm run release:check` all pass before a commit. `validate:plugin` runs `claude plugin validate --strict`; run it with `CLAUDE_CONFIG_DIR` pointing at a scratch directory so the check reads no live config. `make release-check` runs every check the release workflow runs on a `develop → main` pull request, the same make targets (`check`, `release`) under Node 22.
 
-A live check loads the checkout with `--plugin-dir plugins/auto-effort` and `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1`, with any installed copy disabled for that run. `/auto-effort status` shows the level, the gate and the settings in effect; the decision log (`logFile`) shows every request.
+A live check loads the checkout with `--plugin-dir plugins/auto-effort-control` and `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1`, with any installed copy disabled for that run. `/auto-effort-control status` shows the level, the gate and the settings in effect; the decision log (`logFile`) shows every request.
 
 ## Testing
 
-- A new behaviour lands in `plugins/auto-effort/src/` as a pure function with a test watched failing first; the adapter only wires it.
+- A new behaviour lands in `plugins/auto-effort-control/src/` as a pure function with a test watched failing first; the adapter only wires it.
 - Each decision is tested once, in the test file of the module that makes it; `adapter.test.ts` proves only the wiring (what each hook passes in and does with the answer).
-- The three places that hold an option's default — `src/settings.ts`, `plugin.json`'s `userConfig`, the README options table — must agree; `tests/defaults.test.ts` fails when they do not.
-- Precedence: variable > option (`/config`, plugin options) > default; unset, empty or blank is absent; booleans `1|0|true|false`, lists a JSON array of strings; a bad variable is reported by its name and the option's default applies.
-- A new option adds its `readEnv` line, its README row with the variable column (`tests/defaults.test.ts` fails without it) and a row in `tests/settings.test.ts`'s environment tables.
+- The three places that hold an option's default — `src/options.ts`'s `OPTION_DEFAULTS`, `plugin.json`'s `userConfig`, the options tables of `README.md` and `plugins/auto-effort-control/README.md` — must agree; `tests/defaults.test.ts` and `tests/subagent/defaults.test.ts` fail when they do not.
+- Precedence per scope, with every legacy source and its diagnostic, is `README.md` § Precedence, implemented once in `resolveOptions`; unset, empty or blank is absent; booleans `1|0|true|false`, lists a JSON array of strings; a bad value is reported by its key or variable name and its scope's default applies.
+- A new option adds its default to `OPTION_DEFAULTS`, its string-literal `$.env.get` line in the adapter, its row with the variable column in both READMEs, and a case in its scope's `settings.test.ts`.
 - A test that asserts nothing a broken build would change is not a test: a negative assertion comes with a positive control.
 
 ## Rules
 
-- An error never holds a request: log it with context (`auto-effort: {what} failed: {why}; {what happens instead}`) and send the request at the effort it already had.
-- Only the main loop is steered; a sub-agent's request, tool call and turn pass through untouched.
-- The decision log never holds prompt or tool-result text.
+- An error never holds a request or a spawn: log it with context (`auto-effort-control: {what} failed: {why}; {what happens instead}`) and let it through at the effort it already had.
+- The main loop follows the main-chat rules, a sub-agent only the tag and `effortControl` rules; neither scope's request reaches the other's controller.
+- A malformed tag refuses the spawn with a message naming the valid levels; it is never silently dropped.
+- A setting under a retired name — a `pluginConfigs` entry of `auto-effort@…` or `effort-live-control@…`, an `AUTO_EFFORT_*` or `EFFORT_LIVE_CONTROL_*` variable — is honoured under its auto-effort-control name or reported naming the old and the new key, never dropped.
+- The state file (`~/.local/state/auto-effort-control/state.json` by default) is a published interface: `version` 2 with `mode`, `level`, `reason`, `keeper`, `updatedAt`, a failing-test raise's reason `{N} failing test runs`, the keeper's last argument `auto-effort-control-keeper`; a change to any of them bumps `STATE_VERSION`.
+- The retired plugins' state and logs under `~/.local/state/{auto-effort,effort-live-control}/` are never moved, rewritten or deleted.
+- The decision log never holds prompt or tool-result text, except the judge packets the opt-in `logPackets` option writes (off by default; README § Options says what they hold).
 - Standalone: the plugin runs on a machine with nothing but Claude Code. No path, agent, policy or wording of any other tool appears in code or in a file the plugin writes; credit is in the README and the manifest only.
 - A version bump moves `plugin.json`, `marketplace.json`, `package.json`, `package-lock.json`, `src/version.ts` and the README badge together; `npm run release:check` proves it.
 - No machine-absolute paths, personal data or private project names in a tracked file.
@@ -41,13 +45,13 @@ A live check loads the checkout with `--plugin-dir plugins/auto-effort` and `CLA
 
 ## Branches and releases
 
-- `develop` is the default branch: every change lands there, by a commit or a pull request, and CI (`.github/workflows/ci.yml`) runs the gates on it.
-- `main` is release-only. It moves only by merging the `develop → main` pull request, with a merge commit and never a squash, so both branches share one history. The marketplace installs the plugin from `main` (`git-subdir`, `ref: main`), so users only ever get a released version.
+- `develop` is the default branch: every change lands there, by a commit or a pull request, and no CI runs on a push. `.github/workflows/release.yml` runs on the `develop → main` pull request only. `develop` is protected by the ruleset `develop keeps its history`: never force-push or delete it.
+- `main` is release-only (ruleset `main is release-only`). It moves only by merging the `develop → main` pull request, with a merge commit and never a squash, so both branches share one history, and only after `check` and `release` pass: never a direct push, never an admin override. The marketplace installs the plugin from `main` (`git-subdir`, `ref: main`), so users only ever get a released version.
 - A release, in order:
-  1. On `develop`: bump the version in every place `npm run release:check` checks, and move `## [Unreleased]` in `CHANGELOG.md` to `## [X.Y.Z] — date`. `npm run release:check` passes.
-  2. Open the `develop → main` pull request. Its `release` check requires the version to have moved past `main`'s.
-  3. Merge once CI is green.
-  4. On `main`: `claude plugin tag --push plugins/auto-effort` creates and pushes `auto-effort--vX.Y.Z`. `release.yml` then publishes the GitHub release from the CHANGELOG section.
+  1. On `develop`: bump the version in every place `npm run release:check` checks, and move `## [Unreleased]` in `CHANGELOG.md` to `## [X.Y.Z] — date`. Every merge into `main` publishes, so a pre-release suffix (`-dev.N`, `-alpha`) becomes the real release version here.
+  2. `make release-check` passes, after `git fetch origin main`.
+  3. Open the `develop → main` pull request. Its `check` and `release` checks run the same make targets; `release` requires the version to have moved past `main`'s and the CHANGELOG section to yield notes.
+  4. Merge once both are green. The merge is the release: `release.yml`'s `publish` job tags the merge commit `auto-effort-control--vX.Y.Z` and publishes the GitHub release from the CHANGELOG section. No tag is pushed by hand.
 - Semantic versioning: a fix is a patch; a new option or behaviour is a minor; a renamed or removed option is a major, and its CHANGELOG entry says how to migrate.
 - Publishing: README and marketing changes on `develop` are pushed as soon as they are committed. Code is pushed, and a release is cut, only when the owner asks.
 - Git writes go through this repo's gitter, `.claude/agents/gitter.md`.

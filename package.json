@@ -1,8 +1,8 @@
 {
-  "name": "auto-effort",
-  "version": "0.2.3",
+  "name": "auto-effort-control",
+  "version": "1.0.0",
   "private": true,
-  "description": "Sets the main chat's reasoning effort for the work at hand: a planning level at each turn's start, a set_effort tool the model calls, escalation on repeated test failures, and a cache canary.",
+  "description": "Automatic reasoning effort for main chats and sub-agents, with planning, cache checks, spawn tags, tripwires and control tools.",
   "type": "module",
   "license": "MIT",
   "engines": {
@@ -11,7 +11,7 @@
   "scripts": {
     "test": "vitest run --dir tests",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.hooks.json",
-    "validate:plugin": "claude plugin validate --strict . && claude plugin validate --strict plugins/auto-effort",
+    "validate:plugin": "claude plugin validate --strict . && claude plugin validate --strict plugins/auto-effort-control",
     "release:check": "scripts/release-check.sh"
   },
   "devDependencies": {

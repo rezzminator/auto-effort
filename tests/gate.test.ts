@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { clearUnsafe, cleanSwitch, EMPTY_PERSISTED, gateOf, markUnsafe, mergeModels, normalizeModel, readPersisted } from '../plugins/auto-effort/src/gate.ts';
-import { compile, DEFAULTS, resolveSettings } from '../plugins/auto-effort/src/settings.ts';
+import { clearUnsafe, cleanSwitch, EMPTY_PERSISTED, gateOf, markUnsafe, mergeModels, normalizeModel, readPersisted } from '../plugins/auto-effort-control/src/gate.ts';
+import { compile, DEFAULTS, resolveSettings } from '../plugins/auto-effort-control/src/settings.ts';
 
 const compiled = compile(DEFAULTS);
 const gate = (model: string, persisted = EMPTY_PERSISTED, settings = DEFAULTS) => gateOf(model, settings, compile(settings), persisted);

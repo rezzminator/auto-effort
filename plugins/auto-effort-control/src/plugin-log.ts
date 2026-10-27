@@ -7,6 +7,11 @@ export type PluginLogRun = (argv: string[]) => Promise<{ exitCode: number; stdou
 export type FlushResult = { written: number; dropped: number };
 const FILES = { error: 'errors.jsonl', warning: 'warnings.jsonl', info: 'info.jsonl' } as const;
 
+/** Errors show immediately; other diagnostics show only when their log could not keep them. */
+export function diagnosticOnScreen(level: PluginLogLevel, logged: boolean): boolean {
+  return level === 'error' || !logged;
+}
+
 function bytes(text: string): number {
   let n = 0;
   for (const c of text) { const p = c.codePointAt(0)!; n += p <= 0x7f ? 1 : p <= 0x7ff ? 2 : p <= 0xffff ? 3 : 4; }
@@ -42,6 +47,49 @@ export function pluginLogDir(env: string | undefined, home: string | undefined, 
   return env ? `${root.replace(/\/+$/, '')}/${plugin}` : `${root}/${plugin}/logs`;
 }
 
+// Both hook scopes share one cooperative cross-process critical section. Refuse
+// pre-existing symlinks; a hostile process replacing paths concurrently is not a
+// sandbox boundary (the standalone SDK exposes no no-follow filesystem handles).
+export const APPEND_GUARD = `
+refuse_guard() { printf 'plugin log %s: %s\\n' "$1" "$2" >&2; exit 1; }
+check_dir() {
+  parent=$dir
+  while :; do
+    [ ! -L "$parent" ] || refuse_guard "$parent" 'symlink destination refused'
+    case "$parent" in /|.|'') break ;; esac
+    case "$parent" in */*) parent=\${parent%/*}; [ -n "$parent" ] || parent=/ ;; *) parent=. ;; esac
+  done
+}
+check_dir
+mkdir -p "$dir" || refuse_guard "$dir" 'mkdir failed'
+check_dir
+lock=$dir/.append-lock
+tries=0
+until mkdir "$lock" 2>/dev/null; do
+  [ ! -L "$lock" ] || refuse_guard "$lock" 'symlink lock refused'
+  # A holder keeps the lock for milliseconds; one untouched for over a minute was
+  # left by a killed holder (SIGKILL skips the EXIT trap), so break it and retry.
+  # Checked once per append: a lock cannot turn a minute old within this wait.
+  if [ "$tries" -eq 0 ] && [ -d "$lock" ] && [ -n "$(find "$lock" -maxdepth 0 -type d -mmin +1 2>/dev/null)" ]; then
+    rmdir "$lock" 2>/dev/null || :
+    tries=1
+    continue
+  fi
+  tries=$((tries + 1))
+  [ "$tries" -lt 100 ] || refuse_guard "$lock" 'append lock busy; rows not written'
+  sleep 0.01
+done
+trap 'rmdir "$lock"' 0
+trap 'exit 1' 1 2 15
+check_dir
+for leaf in errors.jsonl warnings.jsonl info.jsonl; do
+  for path in "$dir/$leaf" "$dir/$leaf.1"; do
+    [ ! -L "$path" ] || refuse_guard "$path" 'symlink destination refused'
+    [ ! -e "$path" ] || [ -f "$path" ] || refuse_guard "$path" 'not a regular file'
+  done
+done
+`;
+
 // Cap notices reuse the canonical row's encoded timestamp/session as printf data, never shell source.
 export const APPEND_SCRIPT = `set -eu
 umask 077
@@ -62,7 +110,7 @@ cap_notice() {
   printf '{"ts":%s,"plugin":"%s","level":"warning","event":"log-capped","msg":"level file exceeded the cap; moved to .1","where":"src/plugin-log.ts#append"%s,"detail":{"file":"%s","cap_bytes":${PLUGIN_LOG_CAP_BYTES}}}\\n' "$ts" "$plugin" "$session" "$notice_file" >> "$dir/warnings.jsonl" || refuse "$dir/warnings.jsonl" 'cap notice failed'
 }
 case "$plugin" in ''|*[!a-zA-Z0-9_-]*) printf 'invalid plugin slug: %s\\n' "$plugin" >&2; exit 2;; esac
-mkdir -p "$dir" || refuse "$dir" 'mkdir failed'
+${APPEND_GUARD}
 while [ "$#" -gt 0 ]; do
   file=$1
   row=$2

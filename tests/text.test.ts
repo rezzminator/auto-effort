@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { deescalationLine, escalationLine, reminderLine, shortReason, statusLine, toolDescription } from '../plugins/auto-effort/src/text.ts';
+import { deescalationLine, escalationLine, handBackText, heldLine, reminderLine, setText, shortReason, toolDescription } from '../plugins/auto-effort-control/src/text.ts';
 
 // R3: the description is the model's only guide; it lists the levels the clamp lets through.
 describe('toolDescription', () => {
   it('guides the model across the default range and mentions no level below the floor', () => {
     const text = toolDescription('medium', 'xhigh');
-    expect(text).toContain('Call it in your first response of every user turn, alongside your first tool calls.');
+    expect(text).toContain('Call it in your first response of a user turn whose work needs another level than the one in effect, alongside your first tool calls.');
     for (const level of ['xhigh:', 'high:', 'medium:']) expect(text).toContain(`- ${level}`);
     expect(text).not.toContain('- low:');
     expect(text).not.toContain('- max:');
@@ -17,6 +17,13 @@ describe('toolDescription', () => {
     expect(toolDescription('medium', 'xhigh')).toContain('Main chat only: a sub-agent never calls it.');
   });
 
+  // The main chat's own level wins over the automatic rules until it hands it back.
+  it('says a level holds until the turn ends over automatic rules, and auto hands it back', () => {
+    const text = toolDescription('medium', 'xhigh');
+    expect(text.split('\n')[0]).toBe('set_effort: set your reasoning effort for the requests after this call. A level you set holds until this turn ends, over the automatic rules; the next turn starts at its planned level again.');
+    expect(text).toContain('auto hands the effort back to the automatic rules for the rest of this turn: its planned level, and failing test runs raise it.');
+  });
+
   it('follows the floor and the ceiling', () => {
     expect(toolDescription('low', 'xhigh')).toContain('- low:');
     expect(toolDescription('medium', 'high')).not.toContain('- xhigh:');
@@ -25,19 +32,47 @@ describe('toolDescription', () => {
 });
 
 describe('reminderLine', () => {
-  it('names the level and the tool', () => {
-    const line = reminderLine('xhigh', 'mcp__auto-effort__set_effort');
-    expect(line).toContain('xhigh');
-    expect(line).toContain('mcp__auto-effort__set_effort');
-    expect(line.split('\n')).toHaveLength(1);
+  for (const upshift of [null, 'length', 'pattern'] as const) {
+    for (const hints of [[], ['design'], ['design', 'architecture'], ['design', 'architecture', 'spec']]) {
+      it(`explains ${upshift} with ${hints.length} hints in one line`, () => {
+        const why = upshift === 'length' ? ' because the prompt is long (1600 characters)' : upshift === 'pattern' ? ' because the prompt matches planUpshiftPatterns' : '';
+        const words = hints.length === 1 ? '"design"' : hints.length === 2 ? '"design" and "architecture"' : '"design", "architecture" and "spec"';
+        const hint = hints.length ? ` This prompt names ${words}: the set_effort guide places that kind of work at xhigh; whether this turn is that work is your call.` : '';
+        const line = reminderLine({ level: 'high', tool: 'set_effort', upshift, chars: 1600, hints, hintLevel: 'xhigh' });
+        expect(line).toBe(`Your reasoning effort starts this turn at high${why}, and this first response runs at high. Call set_effort first, with the level the work ahead needs; a level you set lasts until this turn ends. With no call, the turn stays at high.${hint}`);
+        expect(line.split('\n')).toHaveLength(1);
+      });
+    }
+  }
+});
+
+describe('heldLine', () => {
+  it('says the failing runs leave the level the main chat set, and how to raise it, in one line', () => {
+    expect(heldLine(2, 'medium', 'mcp__auto-effort-control__set_effort')).toBe(
+      'auto-effort-control: 2 failing test runs this turn; your reasoning effort stays at medium, the level you set. Call mcp__auto-effort-control__set_effort with a higher level if the work needs more, or with auto to let failing tests raise it.',
+    );
+  });
+});
+
+describe('setText', () => {
+  it('names the level applied and that it holds until the turn ends or auto', () => {
+    expect(setText('medium', 'medium', 'medium', 'xhigh')).toBe('Effort set to medium from your next request; it holds until this turn ends, or until you call set_effort with auto.');
   });
 
-  // Pilot (first round): every turn's first request runs at the planning level before the call can apply, so the reminder says so.
-  it('says the first response still runs at the starting level and asks for the call first', () => {
-    const line = reminderLine('high', 'mcp__auto-effort__set_effort');
-    expect(line).toContain('this first response runs at high');
-    expect(line).toContain('Call mcp__auto-effort__set_effort first');
-    expect(line).toContain('With no call, the turn stays at high.');
+  it('says why a clamped level differs from the one asked', () => {
+    expect(setText('medium', 'low', 'medium', 'xhigh')).toBe('Effort set to medium from your next request (low is below the floor medium); it holds until this turn ends, or until you call set_effort with auto.');
+    expect(setText('xhigh', 'max', 'medium', 'xhigh')).toBe('Effort set to xhigh from your next request (max is above the ceiling xhigh); it holds until this turn ends, or until you call set_effort with auto.');
+  });
+});
+
+describe('handBackText', () => {
+  it.each([
+    [{ held: true, level: 'xhigh' }, 'Effort handed back to the automatic rules: this turn runs at xhigh again from your next request, and each turn starts at its planned level.'],
+    [{ held: true, level: null }, 'Effort handed back to the automatic rules: each turn starts at its planned level.'],
+    [{ held: false, level: 'high' }, 'Nothing to hand back: your reasoning effort already follows the automatic rules.'],
+    [{ held: true, level: null, outranked: 'your /effort pin at low still applies until /auto-effort-control on' }, 'Effort handed back to the automatic rules; your /effort pin at low still applies until /auto-effort-control on.'],
+  ] as const)('answers %j', (input, text) => {
+    expect(handBackText(input)).toBe(text);
   });
 });
 
@@ -57,13 +92,6 @@ describe('deescalationLine', () => {
     expect(line).toMatch(/tests pass again/);
     expect(line).toMatch(/back to medium from xhigh/);
     expect(line.split('\n')).toHaveLength(1);
-  });
-});
-
-// R10: `effort auto: {level} · {short reason} ({source})`.
-describe('statusLine', () => {
-  it('formats the line of the requirements', () => {
-    expect(statusLine('medium', 'mechanical rename', 'model')).toBe('effort auto: medium · mechanical rename (model)');
   });
 });
 
