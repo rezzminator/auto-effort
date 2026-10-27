@@ -2,6 +2,10 @@
 
 All notable changes to this plugin are recorded here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the plugin follows [semantic versioning](https://semver.org/).
 
+## [Unreleased]
+
+- Installs as `auto-effort-control@professor` from the professor marketplace; the repo's own marketplace file and `scripts/dev-marketplace.sh` are gone.
+
 ## [1.0.0] — 2026-10-27
 
 The plugin is now `auto-effort-control`: `auto-effort` (the main chat) and `effort-live-control` (the sub-agents, named `agent-effort` through its 0.1.3) merged into one installation with one option set. Both are retired. A major release: every tool prefix, the command, every option variable and the state and log paths are renamed; § Migration says how to move.
