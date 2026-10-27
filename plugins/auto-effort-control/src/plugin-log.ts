@@ -67,6 +67,14 @@ lock=$dir/.append-lock
 tries=0
 until mkdir "$lock" 2>/dev/null; do
   [ ! -L "$lock" ] || refuse_guard "$lock" 'symlink lock refused'
+  # A holder keeps the lock for milliseconds; one untouched for over a minute was
+  # left by a killed holder (SIGKILL skips the EXIT trap), so break it and retry.
+  # Checked once per append: a lock cannot turn a minute old within this wait.
+  if [ "$tries" -eq 0 ] && [ -d "$lock" ] && [ -n "$(find "$lock" -maxdepth 0 -type d -mmin +1 2>/dev/null)" ]; then
+    rmdir "$lock" 2>/dev/null || :
+    tries=1
+    continue
+  fi
   tries=$((tries + 1))
   [ "$tries" -lt 100 ] || refuse_guard "$lock" 'append lock busy; rows not written'
   sleep 0.01

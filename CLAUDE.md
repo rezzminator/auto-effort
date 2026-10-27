@@ -36,7 +36,7 @@ A live check loads the checkout with `--plugin-dir plugins/auto-effort-control` 
 - A setting under a retired name — a `pluginConfigs` entry of `auto-effort@…` or `effort-live-control@…`, an `AUTO_EFFORT_*` or `EFFORT_LIVE_CONTROL_*` variable — is honoured under its auto-effort-control name or reported naming the old and the new key, never dropped.
 - The state file (`~/.local/state/auto-effort-control/state.json` by default) is a published interface: `version` 2 with `mode`, `level`, `reason`, `keeper`, `updatedAt`, a failing-test raise's reason `{N} failing test runs`, the keeper's last argument `auto-effort-control-keeper`; a change to any of them bumps `STATE_VERSION`.
 - The retired plugins' state and logs under `~/.local/state/{auto-effort,effort-live-control}/` are never moved, rewritten or deleted.
-- The decision log never holds prompt or tool-result text.
+- The decision log never holds prompt or tool-result text, except the judge packets the opt-in `logPackets` option writes (off by default; README § Options says what they hold).
 - Standalone: the plugin runs on a machine with nothing but Claude Code. No path, agent, policy or wording of any other tool appears in code or in a file the plugin writes; credit is in the README and the manifest only.
 - A version bump moves `plugin.json`, `marketplace.json`, `package.json`, `package-lock.json`, `src/version.ts` and the README badge together; `npm run release:check` proves it.
 - No machine-absolute paths, personal data or private project names in a tracked file.

@@ -2,6 +2,8 @@
 # the same way here first. CI's runner has Node 22 already; locally mise gives it.
 RUN := $(if $(CI),,mise exec node@22 --)
 MANIFEST := plugins/auto-effort-control/.claude-plugin/plugin.json
+# The manifest path before the rename to auto-effort-control: the base when main still has only it.
+OLD_MANIFEST := plugins/auto-effort/.claude-plugin/plugin.json
 
 .PHONY: release-check check release
 
@@ -18,7 +20,9 @@ check:
 # Run `git fetch origin main` first: the version must move past main's.
 release:
 	@git rev-parse --verify -q origin/main >/dev/null || { echo "origin/main is missing from the checkout"; exit 1; }
-	base=$$(if git cat-file -e "origin/main:$(MANIFEST)" 2>/dev/null; then git show "origin/main:$(MANIFEST)" | $(RUN) node -p 'JSON.parse(require("fs").readFileSync(0, "utf8")).version'; else echo "main has no $(MANIFEST): treating this as the first release" >&2; echo 0.0.0; fi) && \
+	@v=$$($(RUN) node -p 'require("./$(MANIFEST)").version'); \
+	case "$$v" in *-*) echo "FAIL $$v is a pre-release: every merge into main publishes, so the release version carries no -suffix"; exit 1 ;; esac
+	base=$$(for m in "$(MANIFEST)" "$(OLD_MANIFEST)"; do if git cat-file -e "origin/main:$$m" 2>/dev/null; then git show "origin/main:$$m" | $(RUN) node -p 'JSON.parse(require("fs").readFileSync(0, "utf8")).version'; exit; fi; done; echo "main has neither $(MANIFEST) nor $(OLD_MANIFEST): treating this as the first release" >&2; echo 0.0.0) && \
 	$(RUN) scripts/release-check.sh "$$base"
 	v=$$($(RUN) node -p 'require("./$(MANIFEST)").version'); \
 	v_re=$$(printf '%s' "$$v" | sed 's/[.]/[.]/g'); \

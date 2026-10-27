@@ -87,6 +87,18 @@ describe('set_effort (R3, R6)', () => {
     expect(r.step('t1', 2).plan).toMatchObject({ send: 'medium', source: 'model' });
   });
 
+  it('stops naming the model level once its turn ends', () => {
+    const r = rig();
+    r.prompt();
+    r.step('t1', 0);
+    r.set({ level: 'medium', reason: 'mechanical rename' });
+    r.step('t1', 1);
+    expect(r.ctl.stateNow()).toMatchObject({ mode: 'model', level: 'medium' });
+    r.ctl.completeTurn({ turnId: 't1', durationMs: 1000, usage: undefined });
+    expect(r.ctl.stateNow().mode).not.toBe('model');
+    expect(r.ctl.sessionState().override).toBeNull();
+  });
+
   it('takes `effort` as the key too', () => {
     const r = rig();
     r.prompt();

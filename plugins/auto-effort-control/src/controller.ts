@@ -527,6 +527,8 @@ export class Controller {
   completeTurn(input: { turnId: string; durationMs: number; usage: Usage | undefined }): Row[] {
     const turn = this.turn;
     if (turn === null || turn.id !== input.turnId) return [];
+    // The model's set_effort level lasts until its turn ends: drop it here so the state file stops naming it.
+    if (this.override?.turnId === turn.id) this.override = null;
     return [
       {
         event: 'turn',

@@ -1,6 +1,6 @@
 /// <reference types="vite/client" />
 import { execFile } from 'node:child_process';
-import { chmod, mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, rm, stat, symlink, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -124,6 +124,21 @@ it.skipIf(process.getuid?.() === 0)('skip-because:superuser — unwritable direc
     await expect(run(appendArgv(dir, 'auto-effort-control', [levelRow(fields, now)])[0])).rejects.toMatchObject({ stderr: expect.stringContaining(dir) });
     expect((await stat(dir)).mode & 0o777).toBe(0o500);
   } finally { await chmod(dir, 0o700); }
+});
+
+it('a lock left by a dead holder over a minute ago is broken; a fresh lock still refuses', async () => {
+  const { levelRow, appendArgv } = writer();
+  const dir = await temp();
+  const lock = join(dir, '.append-lock');
+  await mkdir(lock);
+  const old = new Date(Date.now() - 120_000);
+  await utimes(lock, old, old);
+  await run(appendArgv(dir, 'auto-effort-control', [levelRow(fields, now)])[0]);
+  expect(rows(await readFile(join(dir, 'errors.jsonl'), 'utf8'))).toHaveLength(1);
+  await expect(stat(lock)).rejects.toMatchObject({ code: 'ENOENT' });
+  await mkdir(lock);
+  await expect(run(appendArgv(dir, 'auto-effort-control', [levelRow(fields, now)])[0])).rejects.toMatchObject({ stderr: expect.stringContaining('append lock busy') });
+  expect(rows(await readFile(join(dir, 'errors.jsonl'), 'utf8'))).toHaveLength(1);
 });
 
 it('batches at 64 pairs and two concurrent appenders lose/interleave no rows', async () => {

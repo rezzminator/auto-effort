@@ -54,6 +54,7 @@ jobs:
         id: tag
         run: |
           v="$(node -p 'require("./plugins/auto-effort-control/.claude-plugin/plugin.json").version')"
+          case "$v" in *-*) echo "::error::$v is a pre-release; a merge into main publishes only a release version"; exit 1 ;; esac
           tag="auto-effort-control--v$v"
           rc=0
           git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null || rc=$?

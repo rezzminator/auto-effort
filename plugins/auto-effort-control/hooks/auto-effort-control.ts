@@ -779,7 +779,7 @@ type SubRuntime = {
   optionsSettled?: Promise<void>;
   pluginSetup?: Promise<string | undefined>;
   pluginDir?: string;
-  pluginSession?: Promise<string | undefined>;
+  pluginSessionFailed?: boolean;
   pluginQueue?: SubPluginLogQueue;
   pluginWriting: Promise<void>;
   pluginFlushing: Promise<void>;
@@ -792,7 +792,7 @@ type SubRuntime = {
   defs?: SubDefinitions;
   /** The decision log's path pattern with `~` expanded; empty: no log. */
   logFile: string;
-  logPath?: Promise<string | undefined>;
+  logPathFailed?: boolean;
   pending: string[];
   writing: Promise<void>;
   steered: Map<string, SubController>;
@@ -842,11 +842,14 @@ async function SubFlushPlugin(rt: SubRuntime, $: EngineInterface): Promise<void>
 function SubPlog(rt: SubRuntime, $: EngineInterface, level: SubLevel, event: string, msg: string, where: string, detail?: SubFields): void {
   rt.pluginWriting = rt.pluginWriting.then(async () => {
     await SubSetupPlugin(rt, $);
-    rt.pluginSession ??= $.session.id().catch((error) => {
-      SubNotice(rt, $, 'warning', 'session-id-unreadable', `auto-effort-control: reading the session id for plugin logs failed: ${SubMessage(error)}; rows omit the session`, 'plog');
+    // Read at each row, never cached: after /clear the process goes on under a new session id.
+    const session = await $.session.id().catch((error) => {
+      if (!rt.pluginSessionFailed) {
+        rt.pluginSessionFailed = true;
+        SubNotice(rt, $, 'warning', 'session-id-unreadable', `auto-effort-control: reading the session id for plugin logs failed: ${SubMessage(error)}; rows omit the session`, 'plog');
+      }
       return undefined;
     });
-    const session = await rt.pluginSession;
     const now = await $.clock.now();
     rt.pluginQueue!.add(SubLevelRow({ plugin: 'auto-effort-control', level, event, msg, where, session, detail }, now));
   }).catch((error) => {
@@ -868,16 +871,19 @@ function SubRecord(rt: SubRuntime, $: EngineInterface, agent: string, type: stri
   if (!file) return;
   const { event, ...rest } = row;
   rt.pending.push(JSON.stringify({ ts: new Date().toISOString(), event, agent, type, ...rest }));
-  rt.logPath ??= $.session.id().then(
-    (id) => SubSessionLogPath(file, id),
-    (error) => {
-      SubNotice(rt, $, 'error', 'session-id-unreadable', `auto-effort-control: reading the session id failed: ${SubMessage(error)}; the decision log is off for this session`, 'record');
-      return undefined;
-    },
-  );
   rt.writing = rt.writing
     .then(async () => {
-      const path = await rt.logPath;
+      // The session's file is named at each write, never cached: after /clear the process goes on under a new session id.
+      const path = await $.session.id().then(
+        (id) => SubSessionLogPath(file, id),
+        (error) => {
+          if (!rt.logPathFailed) {
+            rt.logPathFailed = true;
+            SubNotice(rt, $, 'error', 'session-id-unreadable', `auto-effort-control: reading the session id failed: ${SubMessage(error)}; these decision rows are not written, and the next write tries again`, 'record');
+          }
+          return undefined;
+        },
+      );
       const rows = rt.pending.splice(0);
       if (!path || rows.length === 0) return;
       const existing = (await $.fs.exists(path)) ? await $.fs.read(path) : '';
@@ -1478,6 +1484,8 @@ on('turn.complete', async ($, e, next) => {if (e.agentId !== undefined) {
     if (e.agentId !== undefined) return result;
     try {
       record($, st, st.ctl.completeTurn({ turnId: e.turnId, durationMs: e.durationMs, usage: toUsage(e.usage) ?? undefined }));
+      publish($, st);
+      void saveSession($, st);
     } catch (error) {
       note($, st, 'error', 'turn-record-failed', 'hooks/auto-effort-control.ts#turn.complete', 'recording the turn', error, 'the turn ended as it would have');
     }

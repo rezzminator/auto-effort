@@ -340,6 +340,22 @@ suite('definition effort over the tag', () => {
     expect(await x.rows()).toContainEqual(expect.objectContaining({ event: 'tag-ignored', agent: 'a1', type: 'builder', tag: 'low', effort: 'high' }));
   });
 
+  it('after /clear the next rows go to the new session\'s file, never the old one', async () => {
+    const x = engine(new Map(), { files, options: { parentTag: 'ignore' } });
+    await x.spawned('[effort: low]\nMap X.', 'a1', { subagentType: 'builder' });
+    await x.step('a1', 'medium');
+    expect(await x.rows()).toContainEqual(expect.objectContaining({ event: 'tag-ignored', agent: 'a1' }));
+    x.$.session.id = async () => 'sess2';
+    await x.spawned('[effort: low]\nMap Y.', 'a2', { subagentType: 'builder' });
+    await x.step('a2', 'medium');
+    await x.tick();
+    await x.tick();
+    const old = x.files.get('/fixture-home/t/.local/state/auto-effort-control/decisions.sess1.subagent.jsonl') ?? '';
+    const next = x.files.get('/fixture-home/t/.local/state/auto-effort-control/decisions.sess2.subagent.jsonl') ?? '';
+    expect(old).not.toContain('"a2"');
+    expect(next).toContain('"a2"');
+  });
+
   it('R-1: the same tag is honoured on a type without a definition effort (positive control)', async () => {
     const x = engine(new Map(), { files: { ...files, ...agentFile('plain', 'description: no effort here') } });
     const s = await x.spawned('[effort: low]\nMap X.', 'a1', { subagentType: 'plain' });

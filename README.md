@@ -5,7 +5,7 @@
 **Reasoning effort for the Claude Code main chat and for the sub-agents it launches: each turn starts at a planned level, the model raises or lowers its own with one tool call, a spawn tag sets a sub-agent's, an opted-in agent's effort follows its own trouble, and a cache check keeps every change safe.**
 
 [![Claude Code plugin](https://img.shields.io/badge/Claude%20Code-plugin-D97757)](https://docs.claude.com/en/docs/claude-code/plugins)
-[![Version](https://img.shields.io/badge/version-0.3.0--dev.2-blue)](./CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-1.0.0-blue)](./CHANGELOG.md)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](./LICENSE)
 
 </div>
@@ -191,12 +191,12 @@ The two plugins are retired in favour of this one. This repository is the old `a
 
 - **Old state and logs stay where they are.** Nothing in `~/.local/state/auto-effort/` or `~/.local/state/effort-live-control/` (state files, decision logs, the `logs/` folders, a casebook) is read, deleted, moved or rewritten; this plugin writes under `~/.local/state/auto-effort-control/` instead. Delete the old folders yourself when you no longer need them.
 - **Old settings are honoured or named, never dropped.** An option under `pluginConfigs["auto-effort@…"]` or `pluginConfigs["effort-live-control@…"]` and a variable `AUTO_EFFORT_*` or `EFFORT_LIVE_CONTROL_*` keeps the scope of the plugin it came from and is reported by old and new key; [Precedence](#precedence) lists the order, the CHANGELOG the keys.
-- **Uninstall the old ones.** Run `claude plugin uninstall` for `auto-effort` and `effort-live-control`; `pfm doctor` flags a retired copy still enabled.
+- **Uninstall the old ones.** Run `claude plugin uninstall` for `auto-effort` and `effort-live-control`.
 - **Agent definitions and prompts keep working.** The tools keep their names (`set_effort`, `effort_up`, `effort_down`, `effort_auto`) under the server prefix `mcp__auto-effort-control__`; an agent that listed `mcp__effort-live-control__…` in `tools:` names the new prefix. `/auto-effort` is now `/auto-effort-control`, and no alias of the old tools or command remains.
 
 ## Options
 
-Every option is a plugin option (`userConfig`), 35 in all: edit it in `/config` or in `settings.json` under `pluginConfigs["auto-effort-control@<marketplace>"].options`; `/auto-effort-control set` also saves the main chat's single-valued ones ([`/auto-effort-control`](#auto-effort-control)). Each option can also be set in the environment of Claude Code, as `AUTO_EFFORT_CONTROL_` and the option name in upper snake case (`planLevel` is `AUTO_EFFORT_CONTROL_PLAN_LEVEL`). The main chat reads its options again at each prompt, so a change applies from the next turn without restarting the chat. The sub-agent options are resolved once when the plugin loads (at session start, and again when a settings change reloads the plugin): after a change, `/reload-plugins` or a new session applies it to sub-agents. A value that does not fit is reported (on the screen, in the plugin log and in `/auto-effort-control status`) and the default of its scope applies.
+Every option is a plugin option (`userConfig`), 36 in all: edit it in `/config` or in `settings.json` under `pluginConfigs["auto-effort-control@<marketplace>"].options`; `/auto-effort-control set` also saves the main chat's single-valued ones ([`/auto-effort-control`](#auto-effort-control)). Each option can also be set in the environment of Claude Code, as `AUTO_EFFORT_CONTROL_` and the option name in upper snake case (`planLevel` is `AUTO_EFFORT_CONTROL_PLAN_LEVEL`). The main chat reads its options again at each prompt, so a change applies from the next turn without restarting the chat. The sub-agent options are resolved once when the plugin loads (at session start, and again when a settings change reloads the plugin): after a change, `/reload-plugins` or a new session applies it to sub-agents. A value that does not fit is reported (on the screen, in the plugin log and in `/auto-effort-control status`) and the default of its scope applies.
 
 An option is shared by both scopes (the main chat and the sub-agents) unless its description says otherwise: `floor`, `ceiling`, `failurePatterns` and the others apply to both, and an option only one of the two former plugins had (`planLevel`, `judge`, `buttons`, ...) keeps its meaning in its own scope.
 
@@ -296,7 +296,7 @@ One JSON line per session at `stateFile` (`state.<session>.json`), rewritten who
 
 ## The decision log
 
-`logFile` names the log's directory and name; each scope writes its own file there, so two writers never share one and each keeps its own cap. The session id is inserted before the extension. Never the prompt text.
+`logFile` names the log's directory and name; each scope writes its own file there, so two writers never share one and each keeps its own cap. The session id is inserted before the extension. Never the prompt text, except the judge packets `logPackets` writes when you turn it on.
 
 The main chat writes `decisions.<session>.jsonl`, a new numbered file every 1000 rows (`decisions.<session>.2.jsonl`, ...):
 
