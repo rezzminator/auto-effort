@@ -778,9 +778,12 @@ function SubSetupPlugin(rt: SubRuntime, $: EngineInterface): Promise<string | un
     rt.pluginQueue = new PluginLogQueue(rt.pluginDir, PLUGIN);
     if (rt.pluginDir !== undefined) {
       // The decision log's $.fs.write would create the directory with the host's modes; the plugin log directory is 0700.
-      // A failure here is reported by the first append, which creates the directory itself and says why it could not.
-      try { await $.process.run(['/bin/sh', '-c', 'umask 077 && mkdir -p -- "$1"', 'plugin-log-dir', rt.pluginDir], { timeoutMs: PLUGIN_LOG_TIMEOUT_MS }); }
-      catch (error) { void error; }
+      let why: string | undefined;
+      try {
+        const made = await $.process.run(['/bin/sh', '-c', 'umask 077 && mkdir -p -- "$1"', 'plugin-log-dir', rt.pluginDir], { timeoutMs: PLUGIN_LOG_TIMEOUT_MS });
+        if (made.exitCode !== 0) why = `mkdir exited ${String(made.exitCode)}: ${made.stderr.trim()}`;
+      } catch (error) { why = SubMessage(error); }
+      if (why !== undefined) SubNotice(rt, $, 'warning', 'plugin-log-dir-failed', `auto-effort-control: creating the plugin log directory ${rt.pluginDir} failed: ${why}; the decision log may create it with the host's modes`, 'start');
     }
     if (homeError !== undefined) SubNotice(rt, $, 'error', 'home-missing', `auto-effort-control: reading HOME failed: ${SubMessage(homeError.cause)}; skipping ~/.claude/agents, and the logs need PLUGIN_LOG_DIR`, 'start');
     if (dirError !== undefined) SubNotice(rt, $, 'warning', 'plugin-log-dir-unreadable', `auto-effort-control: reading PLUGIN_LOG_DIR failed: ${SubMessage(dirError.cause)}; using the HOME fallback when available`, 'start');

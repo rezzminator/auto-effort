@@ -122,7 +122,6 @@ const parsePercent = (raw: unknown): Parsed<number> => {
 
 const parseParentTag = (raw: unknown): Parsed<ParentTag> => (isParentTag(raw) ? good(raw) : bad('not honor or ignore'));
 
-
 function parseTripwireList(raw: unknown): Parsed<string> {
   if (typeof raw !== 'string') return bad('not text');
   const found = parseTripwires(raw);
