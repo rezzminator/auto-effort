@@ -34,9 +34,9 @@ describe('resolveSettings', () => {
   });
 
   it('takes valid values, a number or a boolean given as text included', () => {
-    const { settings, errors } = resolveSettings({ floor: 'low', ceiling: 'max', planLevel: 'medium', planUpshiftChars: '2000', turnReminder: 'false', canaryThreshold: '0.95', logFile: '' });
+    const { settings, errors } = resolveSettings({ floor: 'low', ceiling: 'max', planLevel: 'medium', planUpshiftChars: '2000', turnReminder: 'false', canaryThreshold: '0.95' });
     expect(errors).toEqual([]);
-    expect(settings).toMatchObject({ floor: 'low', ceiling: 'max', planLevel: 'medium', planUpshiftChars: 2000, turnReminder: false, canaryThreshold: 0.95, logFile: '' });
+    expect(settings).toMatchObject({ floor: 'low', ceiling: 'max', planLevel: 'medium', planUpshiftChars: 2000, turnReminder: false, canaryThreshold: 0.95 });
   });
 
   it.each([
@@ -132,7 +132,6 @@ describe('resolveSettings with environment variables', () => {
     canaryThreshold: 'AUTO_EFFORT_CONTROL_CANARY_THRESHOLD',
     cacheTtlSeconds: 'AUTO_EFFORT_CONTROL_CACHE_TTL_SECONDS',
     statusLine: 'AUTO_EFFORT_CONTROL_STATUS_LINE',
-    logFile: 'AUTO_EFFORT_CONTROL_LOG_FILE',
     stateFile: 'AUTO_EFFORT_CONTROL_STATE_FILE',
     lowerOnPass: 'AUTO_EFFORT_CONTROL_LOWER_ON_PASS',
     testCommandPatterns: 'AUTO_EFFORT_CONTROL_TEST_COMMAND_PATTERNS',
@@ -162,7 +161,6 @@ describe('resolveSettings with environment variables', () => {
     ['probationSwitches', '8', 2, 8],
     ['canaryThreshold', '0.5', 0.8, 0.5],
     ['cacheTtlSeconds', '3600', 60, 3600],
-    ['logFile', '/var/log/effort.jsonl', '/other.jsonl', '/var/log/effort.jsonl'],
     ['stateFile', '/run/effort.json', '/other.json', '/run/effort.json'],
     ['lowerOnPass', ' False ', true, false],
     ['lowerOnPass', '1', false, true],
@@ -209,9 +207,9 @@ describe('resolveSettings with environment variables', () => {
 
   it('treats an unset, empty or blank variable as absent, so the option or the default decides', () => {
     for (const blank of [undefined, '', '   ', '\n\t']) {
-      const withOption = resolveSettings({ floor: 'high', failureTools: ['Edit'] }, { floor: blank, failureTools: blank, logFile: blank });
+      const withOption = resolveSettings({ floor: 'high', failureTools: ['Edit'] }, { floor: blank, failureTools: blank, stateFile: blank });
       expect(withOption.errors).toEqual([]);
-      expect(withOption.settings).toMatchObject({ floor: 'high', failureTools: ['Edit'], logFile: DEFAULTS.logFile });
+      expect(withOption.settings).toMatchObject({ floor: 'high', failureTools: ['Edit'], stateFile: DEFAULTS.stateFile });
     }
     expect(resolveSettings({}, {}).settings).toEqual(DEFAULTS);
   });
@@ -226,7 +224,7 @@ describe('resolveSettings with environment variables', () => {
   });
 
   it('lists the options whose variable applies: not a bad one, not a floor or ceiling the conflict reset', () => {
-    expect(resolveSettings({}, { floor: 'low', planUpshiftChars: '9', turnReminder: 'maybe', logFile: '  ' }).fromEnv).toEqual(['floor', 'planUpshiftChars']);
+    expect(resolveSettings({}, { floor: 'low', planUpshiftChars: '9', turnReminder: 'maybe', stateFile: '  ' }).fromEnv).toEqual(['floor', 'planUpshiftChars']);
     expect(resolveSettings({ ceiling: 'low' }, { floor: 'high', planUpshiftChars: '9' }).fromEnv).toEqual(['planUpshiftChars']);
     expect(resolveSettings({}, {}).fromEnv).toEqual([]);
   });

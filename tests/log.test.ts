@@ -14,8 +14,8 @@ suite('sessionLogPath', () => {
     ['decisions.jsonl', 'sess1', 2, 'decisions.sess1.2.jsonl'],
     ['/logs/.decisions', 'sess1', 2, '/logs/.decisions.sess1.2'],
     ['/logs/decisions.jsonl', 'a/b.c', 2, '/logs/decisions.a_b_c.2.jsonl'],
-  ])('names %s for session %s, file %s', (logFile, session, segment, expected) => {
-    expect(sessionLogPath(logFile as string, session as string, segment as number | undefined)).toBe(expected);
+  ])('names %s for session %s, file %s', (base, session, segment, expected) => {
+    expect(sessionLogPath(base as string, session as string, segment as number | undefined)).toBe(expected);
   });
 });
 
