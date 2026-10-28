@@ -1298,7 +1298,6 @@ suite('manifest', () => {
   it('keeps the version in every place and the hooks module listed', () => {
     const plugin = json('plugins/auto-effort-control/.claude-plugin/plugin.json');
     expect(json('package.json').version).toBe(plugin.version);
-    expect(json('.claude-plugin/marketplace.json').plugins[0].version).toBe(plugin.version);
     expect(json('plugins/auto-effort-control/hooks/hooks.json')).toEqual({ modules: ['./auto-effort-control.ts'] });
   });
 });

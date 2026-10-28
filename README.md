@@ -51,24 +51,16 @@ export CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1
 Install from GitHub, inside Claude Code:
 
 ```text
-/plugin marketplace add rezzminator/auto-effort
-/plugin install auto-effort-control@auto-effort-control
+/plugin marketplace add rezzminator/professor
+/plugin install auto-effort-control@professor
 ```
 
-The GitHub repository is still named `rezzminator/auto-effort` until it is renamed: the one place the old name is the live address. The marketplace and the plugin in it are `auto-effort-control`.
-
-Or from a clone of this repository, through a local directory marketplace:
-
-```bash
-scripts/dev-marketplace.sh                        # builds ~/.local/share/auto-effort-control-dev from this checkout
-claude plugin marketplace add ~/.local/share/auto-effort-control-dev
-claude plugin install auto-effort-control@auto-effort-control-dev
-```
+The plugin installs from Professor's marketplace; this repository holds its source. Local development goes through Professor's alpha `pfm install`, which installs `auto-effort-control@professor` from a local copy.
 
 Start a chat and run `/auto-effort-control status`. Each turn starts at `high` by default; design and architecture words hint to the model without moving the level. `/effort high` locks your choice; `/effort auto` hands control back. The Agent tool's description now tells the model about the tag, so no prompt change is needed on your side. Live control is off until an agent definition asks for it ([Live control](#live-control)). To remove it:
 
 ```bash
-claude plugin uninstall auto-effort-control@auto-effort-control-dev
+claude plugin uninstall auto-effort-control@professor
 ```
 
 Requires Claude Code with function hooks (tested on 2.1.296).
@@ -196,7 +188,7 @@ The two plugins are retired in favour of this one. This repository is the old `a
 
 ## Options
 
-Every option is a plugin option (`userConfig`), 36 in all: edit it in `/config` or in `settings.json` under `pluginConfigs["auto-effort-control@<marketplace>"].options`; `/auto-effort-control set` also saves the main chat's single-valued ones ([`/auto-effort-control`](#auto-effort-control)). Each option can also be set in the environment of Claude Code, as `AUTO_EFFORT_CONTROL_` and the option name in upper snake case (`planLevel` is `AUTO_EFFORT_CONTROL_PLAN_LEVEL`). The main chat reads its options again at each prompt, so a change applies from the next turn without restarting the chat. The sub-agent options are resolved once when the plugin loads (at session start, and again when a settings change reloads the plugin): after a change, `/reload-plugins` or a new session applies it to sub-agents. A value that does not fit is reported (on the screen, in the plugin log and in `/auto-effort-control status`) and the default of its scope applies.
+Every option is a plugin option (`userConfig`), 36 in all: edit it in `/config` or in `settings.json` under `pluginConfigs["auto-effort-control@professor"].options`; `/auto-effort-control set` also saves the main chat's single-valued ones ([`/auto-effort-control`](#auto-effort-control)). Each option can also be set in the environment of Claude Code, as `AUTO_EFFORT_CONTROL_` and the option name in upper snake case (`planLevel` is `AUTO_EFFORT_CONTROL_PLAN_LEVEL`). The main chat reads its options again at each prompt, so a change applies from the next turn without restarting the chat. The sub-agent options are resolved once when the plugin loads (at session start, and again when a settings change reloads the plugin): after a change, `/reload-plugins` or a new session applies it to sub-agents. A value that does not fit is reported (on the screen, in the plugin log and in `/auto-effort-control status`) and the default of its scope applies.
 
 An option is shared by both scopes (the main chat and the sub-agents) unless its description says otherwise: `floor`, `ceiling`, `failurePatterns` and the others apply to both, and an option only one of the two former plugins had (`planLevel`, `judge`, `buttons`, ...) keeps its meaning in its own scope.
 

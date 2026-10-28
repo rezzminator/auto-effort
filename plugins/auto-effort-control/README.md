@@ -6,7 +6,7 @@ Reasoning effort for the Claude Code main chat and for the sub-agents it launche
 
 **Sub-agents.** Make `[effort: low|medium|high|xhigh|max]` the first non-blank text of the Agent prompt, on one line. The tag is removed before the sub-agent reads its prompt, and its own model requests run at that level. An agent definition with `effortControl: on` is steered: its effort rises at a failing test run or a red sub-task and returns once the trouble resolves, and it can press `effort_up`, `effort_down` and `effort_auto` itself.
 
-It requires function hooks enabled (`CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1`) and is tested on Claude Code 2.1.296. Install it with `/plugin marketplace add rezzminator/auto-effort` and `/plugin install auto-effort-control@auto-effort-control` (the GitHub repository keeps its old name, `auto-effort`, until it is renamed). Remove it with `claude plugin uninstall auto-effort-control@auto-effort-control`. It replaces the `auto-effort` and `effort-live-control` plugins and honours or reports their settings; the full documentation, the precedence of every source and the migration notes live in the repository: <https://github.com/rezzminator/auto-effort>
+It requires function hooks enabled (`CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1`) and is tested on Claude Code 2.1.296. Install it with `/plugin marketplace add rezzminator/professor` and `/plugin install auto-effort-control@professor`. Remove it with `claude plugin uninstall auto-effort-control@professor`. It replaces the `auto-effort` and `effort-live-control` plugins and honours or reports their settings; the full documentation, the precedence of every source and the migration notes live in the repository: <https://github.com/rezzminator/auto-effort>
 
 ## Options
 
