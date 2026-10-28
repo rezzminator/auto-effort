@@ -17,7 +17,7 @@ A Claude Code function-hooks plugin: automatic reasoning effort for the main cha
 
 `npm test`, `npm run typecheck`, `npm run validate:plugin` and `npm run release:check` all pass before a commit. `validate:plugin` runs `claude plugin validate --strict`; run it with `CLAUDE_CONFIG_DIR` pointing at a scratch directory so the check reads no live config. `make release-check` runs every check the release workflow runs on a `develop → main` pull request, the same make targets (`check`, `release`) under Node 22.
 
-A live check loads the checkout with `--plugin-dir plugins/auto-effort-control` and `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1`, with any installed copy disabled for that run. `/auto-effort-control status` shows the level, the gate and the settings in effect; the decision log (`logFile`) shows every request.
+A live check loads the checkout with `--plugin-dir plugins/auto-effort-control` and `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1`, with any installed copy disabled for that run. `/auto-effort-control status` shows the level, the gate and the settings in effect; the decision logs (`decisions.{session}.jsonl`, the sub-agents' `decisions.{session}.subagent.jsonl`, in the plugin log directory) show every request.
 
 ## Testing
 
