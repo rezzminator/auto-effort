@@ -12,9 +12,9 @@ const readmes = ['README.md', 'plugins/auto-effort-control/README.md'].map((path
 describe('plugin options', () => {
   it('declares exactly the settings, each with its default', () => {
     expect(SETTING_KEYS).toEqual(
-      expect.arrayContaining(['floor', 'ceiling', 'planLevel', 'hintPatterns', 'planUpshiftPatterns', 'planUpshiftChars', 'turnReminder', 'escalateAfterFailures', 'lowerOnPass', 'failurePatterns', 'failureTools', 'testCommandPatterns', 'userEffortPins', 'models', 'unknownModels', 'probationSwitches', 'canaryThreshold', 'statusLine', 'logFile', 'stateFile']),
+      expect.arrayContaining(['floor', 'ceiling', 'planLevel', 'hintPatterns', 'planUpshiftPatterns', 'planUpshiftChars', 'turnReminder', 'escalateAfterFailures', 'lowerOnPass', 'failurePatterns', 'failureTools', 'testCommandPatterns', 'userEffortPins', 'models', 'unknownModels', 'probationSwitches', 'canaryThreshold', 'statusLine', 'stateFile']),
     );
-    expect(SETTING_KEYS).toHaveLength(36);
+    expect(SETTING_KEYS).toHaveLength(35);
     expect(Object.keys(manifest.userConfig).sort()).toEqual([...SETTING_KEYS].sort());
     for (const key of SETTING_KEYS) {
       const field = manifest.userConfig[key];

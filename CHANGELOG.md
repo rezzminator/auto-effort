@@ -4,7 +4,15 @@ All notable changes to this plugin are recorded here. The format follows [Keep a
 
 ## [Unreleased]
 
+### Changed
+
 - Installs as `auto-effort-control@professor` from the professor marketplace; the repo's own marketplace file and `scripts/dev-marketplace.sh` are gone.
+- The plugin logs go through the shared plugin-log library, vendored as `src/plugin-log.ts`; the sub-agents' own copy (`src/subagent/plugin-log.ts`) is gone, and both scopes write through one queue. A level file past 20 MiB now keeps up to five rotated generations (`.1` to `.5`); a failed write keeps its rows for the next one instead of dropping them.
+- Warnings and info never reach the screen, even when their log cannot be written. The screen shows only errors and one line per failing streak of the log itself.
+
+### Removed
+
+- **Migration:** the `logFile` option and the `AUTO_EFFORT_CONTROL_LOG_FILE`, `AUTO_EFFORT_LOG_FILE` and `EFFORT_LIVE_CONTROL_LOG_FILE` variables are gone; the decision log now lives at `$PLUGIN_LOG_DIR/auto-effort-control/decisions.jsonl`, else `~/.local/state/auto-effort-control/logs/decisions.jsonl` (each session's `decisions.<session>.jsonl` and `decisions.<session>.subagent.jsonl` beside it). A `logFile` still set is reported as an unknown option; the empty value no longer turns the decision log off. Logs written before stay where they are.
 
 ## [1.0.0] — 2026-10-27
 

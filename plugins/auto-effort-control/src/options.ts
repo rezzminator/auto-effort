@@ -139,7 +139,7 @@ export function resolveOptions(scope: Scope, registered: Values, snapshot: ReadV
   }
   // Historical state/log trees are read-only even when an old setting still names them.
   const effective = validate(options, env).settings;
-  for (const key of ['logFile', ...(scope === 'main' ? ['stateFile'] : [])]) {
+  for (const key of scope === 'main' ? ['stateFile'] : []) {
     const value = effective[key as keyof typeof effective];
     if (typeof value !== 'string') continue;
     const parts: string[] = [];

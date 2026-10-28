@@ -38,10 +38,10 @@ describe('migration source shapes', () => {
 
 
 describe('retired artifacts stay read-only', () => {
-  it.each(['main', 'subagent'] as const)('%s rejects retired path destinations from every supported source', (scope) => {
-    const defaults = scope === 'main' ? mainSettings({}).settings : subagentSettings({}).settings;
-    for (const key of scope === 'main' ? ['stateFile', 'logFile'] : ['logFile']) {
-      const suffix = key === 'stateFile' ? 'STATE_FILE' : 'LOG_FILE';
+  it.each(['main'] as const)('%s rejects retired path destinations from every supported source', (scope) => {
+    const defaults = mainSettings({}).settings;
+    for (const key of ['stateFile']) {
+      const suffix = 'STATE_FILE';
       for (const retired of ['auto-effort', 'effort-live-control']) {
         const path = `~/.local/state/safe/../${retired}/original.json`;
         for (const source of ['canonical-env', 'legacy-env', 'canonical-option', 'legacy-option']) {
@@ -49,7 +49,7 @@ describe('retired artifacts stay read-only', () => {
           const prefix = source === 'legacy-env' ? (scope === 'main' ? 'AUTO_EFFORT_' : 'EFFORT_LIVE_CONTROL_') : 'AUTO_EFFORT_CONTROL_';
           const snapshot = { ok: true as const, value: { pluginConfigs: { [`${identity}@old`]: { options: source.endsWith('option') ? { [key]: path } : {} } } } };
           const merged = resolveOptions(scope, OPTION_DEFAULTS, snapshot, source.endsWith('env') ? { [`${prefix}${suffix}`]: { ok: true, value: path } } : {});
-          const result = scope === 'main' ? mainSettings(merged.options, merged.env) : subagentSettings(merged.options, merged.env);
+          const result = mainSettings(merged.options, merged.env);
           expect(result.settings[key as keyof typeof result.settings], `${scope} ${key} ${source} ${retired}`).toBe(defaults[key as keyof typeof defaults]);
           expect(merged.errors.join('\n')).toContain(path);
           expect(merged.errors.join('\n')).toContain('retired artifacts are read-only');

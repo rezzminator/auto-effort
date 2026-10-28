@@ -1,5 +1,5 @@
 // The decision log: JSONL, one file per session, a new numbered file after every SEGMENT_ROWS rows. Chats share the
-// configured `logFile`, so each session writes its own files beside it; a resumed session appends to its newest file.
+// plugin log directory, so each session writes its own files there; a resumed session appends to its newest file.
 
 /** `~/` expanded to the home directory; a path that does not start with it is returned as it is. */
 export function expandHome(path: string, home: string | undefined): string {
@@ -11,16 +11,17 @@ export function expandHome(path: string, home: string | undefined): string {
 }
 
 /**
- * File `segment` (1, 2, ...) of the session's own log: the session id goes before the extension of `logFile`, and from
- * the second file on a number follows it (`decisions.<session>.2.jsonl`).
+ * File `segment` (1, 2, ...) of the session's own log: the session id goes before the extension of `base`
+ * (`decisions.jsonl` in the plugin log directory), and from the second file on a number follows it
+ * (`decisions.<session>.2.jsonl`).
  */
-export function sessionLogPath(logFile: string, sessionId: string, segment = 1): string {
+export function sessionLogPath(base: string, sessionId: string, segment = 1): string {
   if (sessionId === '') throw new Error('auto-effort-control: empty session id; cannot name the log file');
   const safe = sessionId.replace(/[^A-Za-z0-9_-]/g, '_');
   const part = segment > 1 ? `${safe}.${segment}` : safe;
-  const slash = logFile.lastIndexOf('/');
-  const dir = logFile.slice(0, slash + 1);
-  const name = logFile.slice(slash + 1);
+  const slash = base.lastIndexOf('/');
+  const dir = base.slice(0, slash + 1);
+  const name = base.slice(slash + 1);
   const dot = name.lastIndexOf('.');
   if (dot <= 0) return `${dir}${name}.${part}`;
   return `${dir}${name.slice(0, dot)}.${part}${name.slice(dot)}`;

@@ -10,13 +10,15 @@ import { normalizeModel } from '../src/model.ts';
 import { envName, PLUGIN, resolveSettings, SETTING_KEYS, type EnvValues } from '../src/settings.ts';
 import { KEEPER_ARGV, stateText, type EffortState } from '../src/state.ts';
 import { quote, toolDescription } from '../src/text.ts';
-import { diagnosticOnScreen, levelRow, pluginLogDir, PluginLogQueue, type PluginLogLevel } from '../src/plugin-log.ts';
+import { levelRow, onScreen, pluginLogDir, PluginLogQueue, type PluginLogLevel } from '../src/plugin-log.ts';
 import { VERSION } from '../src/version.ts';
 
 // Thin adapter: every decision lives in src/controller.ts. A failure is logged with its context and the request,
 // the prompt or the tool result goes through as it was.
 
 const TOOL_NAME = 'set_effort';
+/** One append's bound: past the library's lock wait (LOCK_WAIT_SECONDS), so a write waiting on a busy lock is not killed. */
+const PLUGIN_LOG_TIMEOUT_MS = 15_000;
 const STORE_KEY = 'state';
 /** `<plugin>.<field>`, or `<plugin>@<marketplace>.<field>` where the marketplace name may hold dots. */
 const ROW_KEY = new RegExp(`^${PLUGIN}(?:@.+)?\\.(\\w+)$`);
@@ -55,9 +57,8 @@ type State = {
   /** Each session log's newest file and its text, so a flush rewrites at most SEGMENT_ROWS rows and reads nothing. */
   segments: Map<string, { segment: number; text: string }>;
   writing: Promise<void>;
-  pluginLog?: PluginLogQueue;
-  pluginWriting: Promise<void>;
-  pluginFailure: boolean;
+  /** The sub-agents' runtime: the plugin log and the decision log's directory are shared with it. */
+  rt: SubRuntime;
   /** The mode, level and reason last seen, so the reason shows as a notice only when one of them changes. */
   shown: string;
   /** The state file's path, state and keeper last written, so an unchanged line is not written again. */
@@ -81,52 +82,11 @@ type State = {
   stateWriting: Promise<void>;
 };
 
-function pluginFallback($: EngineInterface, notice: string): void {
-  $.ui.log(`auto-effort-control: ${notice}`);
-}
-
-function runPluginLog($: EngineInterface, argv: string[]) {
-  return $.process.run(argv, { timeoutMs: 5000 });
-}
-
 function plog($: EngineInterface, st: State, level: PluginLogLevel, event: string, msg: string, where: string, detail?: Record<string, unknown>): void {
-  const session = st.sessionId;
-  const shown = diagnosticOnScreen(level, true);
-  if (shown) {
-    try { $.ui.log(msg); }
-    catch (screenError) { // A broken screen must not prevent the log write or the request.
-      void screenError;
-    }
+  try { levelLog(st.rt, $, level, event, msg, where, detail, st.sessionId); }
+  catch (screenError) { // The row is queued before the screen call; a broken screen must not fail the request.
+    void screenError;
   }
-  st.pluginWriting = st.pluginWriting.then(async () => {
-    let logged = false;
-    try {
-      if (st.pluginLog === undefined) {
-        const env = await $.env.get('PLUGIN_LOG_DIR');
-        const home = await $.env.get('HOME');
-        st.pluginLog = new PluginLogQueue(pluginLogDir(env, home, PLUGIN), PLUGIN, (notice) => pluginFallback($, notice));
-      }
-      const row = levelRow({ plugin: PLUGIN, level, event, msg, where, session, detail }, await $.clock.now());
-      st.pluginLog.add(row);
-      const result = await st.pluginLog.flush((argv) => runPluginLog($, argv));
-      logged = result.dropped === 0;
-      st.pluginFailure = false;
-    } catch (error) {
-      if (!st.pluginFailure) {
-        st.pluginFailure = true;
-        try { pluginFallback($, `plugin log initialization failed: ${message(error)}; 1 rows dropped`); }
-        catch (screenError) { // With both outputs gone, contain the failure so the request still goes through.
-          void screenError;
-        }
-      }
-    }
-    if (!shown && diagnosticOnScreen(level, logged)) {
-      try { $.ui.log(msg); }
-      catch (screenError) { // Both outputs are gone; the request must still go through.
-        void screenError;
-      }
-    }
-  });
 }
 
 function note($: EngineInterface, st: State, level: PluginLogLevel, event: string, where: string, what: string, error: unknown, then: string): void {
@@ -148,13 +108,13 @@ function toUsage(raw: unknown): Usage | null {
 }
 
 // The session log's newest file, found once per session: the highest segment that exists, with its rows.
-async function newestSegment($: EngineInterface, st: State, logFile: string, id: string): Promise<{ segment: number; text: string }> {
-  const key = sessionLogPath(logFile, id);
+async function newestSegment($: EngineInterface, st: State, base: string, id: string): Promise<{ segment: number; text: string }> {
+  const key = sessionLogPath(base, id);
   const known = st.segments.get(key);
   if (known !== undefined) return known;
   let segment = 1;
-  while (await $.fs.exists(sessionLogPath(logFile, id, segment + 1))) segment += 1;
-  const file = sessionLogPath(logFile, id, segment);
+  while (await $.fs.exists(sessionLogPath(base, id, segment + 1))) segment += 1;
+  const file = sessionLogPath(base, id, segment);
   const found = { segment, text: (await $.fs.exists(file)) ? await $.fs.read(file) : '' };
   st.segments.set(key, found);
   return found;
@@ -169,22 +129,20 @@ async function flush($: EngineInterface, st: State): Promise<void> {
   for (const [session, lines] of bySession) {
     let left = lines.length;
     try {
-      const file = st.ctl.settings.logFile;
-      if (file === '') return;
+      const base = await decisionLog(st.rt, $);
+      if (base === undefined) return;
       const id = session ?? (st.sessionId ??= await $.session.id());
-      const home = await $.env.get('HOME');
-      const logFile = expandHome(file, home);
-      const newest = await newestSegment($, st, logFile, id);
+      const newest = await newestSegment($, st, base, id);
       const opened = newest.segment;
       let skipped = 0;
       for (const part of fillSegments(newest.text, newest.segment, lines, SEGMENT_ROWS)) {
         let segment = part.segment + skipped;
         // A new file the probe did not reach (past a missing one) is never written over: the next free number is taken.
-        while (segment > opened && (await $.fs.exists(sessionLogPath(logFile, id, segment)))) {
+        while (segment > opened && (await $.fs.exists(sessionLogPath(base, id, segment)))) {
           segment += 1;
           skipped += 1;
         }
-        await $.fs.write(sessionLogPath(logFile, id, segment), part.text);
+        await $.fs.write(sessionLogPath(base, id, segment), part.text);
         left -= part.added;
         newest.segment = segment;
         newest.text = part.text;
@@ -196,7 +154,7 @@ async function flush($: EngineInterface, st: State): Promise<void> {
 }
 
 function record($: EngineInterface, st: State, rows: readonly Row[]): void {
-  if (rows.length === 0 || st.ctl.settings.logFile === '') return;
+  if (rows.length === 0) return;
   const ts = new Date().toISOString();
   st.pending.push(...rows.map((row) => ({ session: st.sessionId, line: JSON.stringify({ ts, ...row }) })));
   st.writing = st.writing.then(() => flush($, st));
@@ -670,7 +628,6 @@ import { describe as SubDescribe, denyText as SubDenyText, EMPTY_TEXT as SubEMPT
 import { JUDGE_SYSTEM as SubJUDGE_SYSTEM, parseTripwires as SubParseTripwires, TRIPWIRES as SubTRIPWIRES } from '../src/subagent/judge.ts';
 import { isLevel as SubIsLevel } from '../src/subagent/ladder.ts';
 import { appendRows as SubAppendRows, sessionLogPath as SubSessionLogPath } from '../src/subagent/log.ts';
-import { diagnosticVisible as SubDiagnosticVisible, levelRow as SubLevelRow, pluginLogDir as SubPluginLogDir, PluginLogQueue as SubPluginLogQueue, type Level as SubLevel } from '../src/subagent/plugin-log.ts';
 import { compile as SubCompile, envName as SubEnvName, resolveSettings as SubResolveSettings, SETTING_KEYS as SubSETTING_KEYS, type Compiled as SubCompiled, type OptionEnv as SubOptionEnv, type Settings as SubSettings } from '../src/subagent/settings.ts';
 import { isRead as SubIsRead, isTestRun as SubIsTestRun, testOutcome as SubTestOutcome } from '../src/subagent/signals.ts';
 import { startOf as SubStartOf } from '../src/subagent/start.ts';
@@ -780,7 +737,9 @@ type SubRuntime = {
   pluginSetup?: Promise<string | undefined>;
   pluginDir?: string;
   pluginSessionFailed?: boolean;
-  pluginQueue?: SubPluginLogQueue;
+  /** A row could not be prepared and that was said: the next failure says nothing until a row is prepared again. */
+  pluginPrepareFailed?: boolean;
+  pluginQueue?: PluginLogQueue;
   pluginWriting: Promise<void>;
   pluginFlushing: Promise<void>;
   modelFallback?: string;
@@ -790,8 +749,6 @@ type SubRuntime = {
   optionErrors: string[];
   started?: Promise<void>;
   defs?: SubDefinitions;
-  /** The decision log's path pattern with `~` expanded; empty: no log. */
-  logFile: string;
   logPathFailed?: boolean;
   pending: string[];
   writing: Promise<void>;
@@ -808,6 +765,7 @@ function SubLogFallback($: EngineInterface, line: string): void {
   try { $.ui.log(line); } catch { /* The screen door itself is unavailable; no other sink exists. */ }
 }
 
+// The plugin log of both scopes: one queue, so one failing streak shows one line. Its directory holds the decision logs too.
 function SubSetupPlugin(rt: SubRuntime, $: EngineInterface): Promise<string | undefined> {
   rt.pluginSetup ??= (async () => {
     let home: string | undefined;
@@ -816,34 +774,45 @@ function SubSetupPlugin(rt: SubRuntime, $: EngineInterface): Promise<string | un
     let dirError: { cause: unknown } | undefined;
     try { home = await $.env.get('HOME'); } catch (error) { homeError = { cause: error }; }
     try { configured = await $.env.get('PLUGIN_LOG_DIR'); } catch (error) { dirError = { cause: error }; }
-    rt.pluginDir = SubPluginLogDir(configured, home, 'auto-effort-control');
-    rt.pluginQueue = new SubPluginLogQueue(rt.pluginDir, 'auto-effort-control');
-    if (homeError !== undefined) SubNotice(rt, $, 'error', 'home-missing', `auto-effort-control: reading HOME failed: ${SubMessage(homeError.cause)}; skipping ~/.claude/agents and ~ in logFile`, 'start');
+    rt.pluginDir = pluginLogDir(configured, home, PLUGIN);
+    rt.pluginQueue = new PluginLogQueue(rt.pluginDir, PLUGIN);
+    if (rt.pluginDir !== undefined) {
+      // The decision log's $.fs.write would create the directory with the host's modes; the plugin log directory is 0700.
+      // A failure here is reported by the first append, which creates the directory itself and says why it could not.
+      try { await $.process.run(['/bin/sh', '-c', 'umask 077 && mkdir -p -- "$1"', 'plugin-log-dir', rt.pluginDir], { timeoutMs: PLUGIN_LOG_TIMEOUT_MS }); }
+      catch (error) { void error; }
+    }
+    if (homeError !== undefined) SubNotice(rt, $, 'error', 'home-missing', `auto-effort-control: reading HOME failed: ${SubMessage(homeError.cause)}; skipping ~/.claude/agents, and the logs need PLUGIN_LOG_DIR`, 'start');
     if (dirError !== undefined) SubNotice(rt, $, 'warning', 'plugin-log-dir-unreadable', `auto-effort-control: reading PLUGIN_LOG_DIR failed: ${SubMessage(dirError.cause)}; using the HOME fallback when available`, 'start');
+    if (rt.pluginDir === undefined && homeError === undefined && dirError === undefined) SubNotice(rt, $, 'error', 'decision-log-off', 'auto-effort-control: no PLUGIN_LOG_DIR and no HOME; the decision log is off', 'start');
     return home;
   })();
   return rt.pluginSetup;
 }
 
-async function SubFlushPlugin(rt: SubRuntime, $: EngineInterface): Promise<void> {
-  const out = await rt.pluginQueue!.flush(async (argv, init) => {
-    try { return await $.process.run(argv, init); }
-    catch (error) { throw new Error(`$.process.run failed: ${SubMessage(error)}`); }
-  });
-  for (const line of out.fallback ?? []) SubLogFallback($, line);
-  if (out.error !== undefined) {
-    SubLogFallback($, `auto-effort-control: ${out.error}`);
-    SubRecord(rt, $, 'main', 'plugin', { event: 'plugin-log-failed', error: out.error });
-  }
+/** The decision log's base name in the plugin log directory; each scope and session writes its own file beside it. */
+async function decisionLog(rt: SubRuntime, $: EngineInterface): Promise<string | undefined> {
+  await SubSetupPlugin(rt, $);
+  return rt.pluginDir === undefined ? undefined : `${rt.pluginDir}/decisions.jsonl`;
 }
 
-// Only the metadata preparation is queued here; subprocesses have their own
-// serial chain, so ordinary hooks never wait for the write.
-function SubPlog(rt: SubRuntime, $: EngineInterface, level: SubLevel, event: string, msg: string, where: string, detail?: SubFields): void {
+async function SubFlushPlugin(rt: SubRuntime, $: EngineInterface): Promise<void> {
+  const out = await rt.pluginQueue!.flush(async (argv) => {
+    try { return await $.process.run(argv, { timeoutMs: PLUGIN_LOG_TIMEOUT_MS }); }
+    catch (error) { throw new Error(`$.process.run failed: ${SubMessage(error)}`); }
+  });
+  // The library's one line per failing streak; no unwritten row of any level is echoed to the screen.
+  if (out.screen !== undefined) SubLogFallback($, out.screen);
+  if (out.error !== undefined) SubRecord(rt, $, 'main', 'plugin', { event: 'plugin-log-failed', error: out.error });
+}
+
+// Only the row preparation is queued here; the appends have their own serial chain, so ordinary hooks never wait for
+// the write. The screen shows an error row's own line and nothing else.
+function levelLog(rt: SubRuntime, $: EngineInterface, level: PluginLogLevel, event: string, msg: string, where: string, detail?: SubFields, known?: string): void {
   rt.pluginWriting = rt.pluginWriting.then(async () => {
     await SubSetupPlugin(rt, $);
     // Read at each row, never cached: after /clear the process goes on under a new session id.
-    const session = await $.session.id().catch((error) => {
+    const session = known ?? await $.session.id().catch((error) => {
       if (!rt.pluginSessionFailed) {
         rt.pluginSessionFailed = true;
         SubNotice(rt, $, 'warning', 'session-id-unreadable', `auto-effort-control: reading the session id for plugin logs failed: ${SubMessage(error)}; rows omit the session`, 'plog');
@@ -851,28 +820,33 @@ function SubPlog(rt: SubRuntime, $: EngineInterface, level: SubLevel, event: str
       return undefined;
     });
     const now = await $.clock.now();
-    rt.pluginQueue!.add(SubLevelRow({ plugin: 'auto-effort-control', level, event, msg, where, session, detail }, now));
+    rt.pluginQueue!.add(levelRow({ plugin: PLUGIN, level, event, msg, where, session, detail }, now));
+    rt.pluginPrepareFailed = false;
   }).catch((error) => {
-    if (!SubDiagnosticVisible(level, true)) SubLogFallback($, msg);
+    if (rt.pluginPrepareFailed) return;
+    rt.pluginPrepareFailed = true;
     SubLogFallback($, `auto-effort-control: plugin log ${rt.pluginDir ?? 'off'}: preparing ${event} failed: ${SubMessage(error)}`);
   });
   rt.pluginFlushing = rt.pluginWriting.then(() => SubFlushPlugin(rt, $)).catch((error) => SubLogFallback($, `auto-effort-control: plugin log ${rt.pluginDir ?? 'off'}: flushing failed: ${SubMessage(error)}`));
-  if (SubDiagnosticVisible(level, true)) $.ui.log(msg);
+  if (onScreen(level)) $.ui.log(msg);
 }
 
-function SubNotice(rt: SubRuntime, $: EngineInterface, level: SubLevel, event: string, text: string, component: string): void {
-  SubPlog(rt, $, level, event, text, `hooks/auto-effort-control.ts#${component}`);
+function SubNotice(rt: SubRuntime, $: EngineInterface, level: PluginLogLevel, event: string, text: string, component: string): void {
+  levelLog(rt, $, level, event, text, `hooks/auto-effort-control.ts#${component}`);
 }
 
 // Rows queue in memory; each flush reads the session's file and appends them,
 // so a resumed session keeps its earlier rows and no other chat shares the file.
 function SubRecord(rt: SubRuntime, $: EngineInterface, agent: string, type: string, row: SubFields): void {
-  const file = rt.logFile;
-  if (!file) return;
   const { event, ...rest } = row;
   rt.pending.push(JSON.stringify({ ts: new Date().toISOString(), event, agent, type, ...rest }));
   rt.writing = rt.writing
     .then(async () => {
+      const file = await decisionLog(rt, $);
+      if (file === undefined) {
+        rt.pending.length = 0;
+        return;
+      }
       // The session's file is named at each write, never cached: after /clear the process goes on under a new session id.
       const path = await $.session.id().then(
         (id) => SubSessionLogPath(file, id),
@@ -889,7 +863,7 @@ function SubRecord(rt: SubRuntime, $: EngineInterface, agent: string, type: stri
       const existing = (await $.fs.exists(path)) ? await $.fs.read(path) : '';
       await $.fs.write(path, SubAppendRows(existing, rows, SubLOG_CAP));
     })
-    .catch((error) => SubNotice(rt, $, 'error', 'decision-log-write-failed', `auto-effort-control: writing the decision log for ${file} failed: ${SubMessage(error)}`, 'record'));
+    .catch((error) => SubNotice(rt, $, 'error', 'decision-log-write-failed', `auto-effort-control: writing the sub-agents' decision log failed: ${SubMessage(error)}`, 'record'));
 }
 
 // The option was validated when the settings resolved, so a list that fails here is a bug: arm all four rather than none.
@@ -926,9 +900,6 @@ function SubStart(rt: SubRuntime, $: EngineInterface): Promise<void> {
     } catch (error) {
       SubNotice(rt, $, 'error', 'config-dir-missing', `auto-effort-control: reading CLAUDE_CONFIG_DIR failed: ${SubMessage(error)}; skipping its agents directory`, 'start');
     }
-    const file = rt.config.logFile;
-    if (file.startsWith('~') && !home) SubNotice(rt, $, 'error', 'log-file-needs-home', `auto-effort-control: logFile ${file} needs HOME, which is unset; the decision log is off`, 'start');
-    else rt.logFile = file.startsWith('~') ? `${home}${file.slice(1)}` : file;
     for (const line of rt.optionErrors) {
       SubNotice(rt, $, 'error', 'option-error', line, 'start');
       SubRecord(rt, $, 'main', 'option-error', { event: 'option-error', line });
@@ -991,8 +962,8 @@ function SubPerform(rt: SubRuntime, $: EngineInterface, controller: SubControlle
   for (const action of actions) {
     if (action.kind === 'log') {
       const { event, ...rest } = action.row;
-      if (event === 'judge-failed' && rest.reason !== 'model-unavailable') SubPlog(rt, $, 'error', 'judge-failed', `auto-effort-control: judge failed for ${controller.id}: ${String(rest.reason)}; effort ${String(rest.from)} -> ${String(rest.to)}`, 'src/subagent/control.ts#failed', { agent: controller.id, error: String(rest.reason) });
-      if (rest.from !== undefined && rest.to !== undefined && rest.from !== rest.to) SubPlog(rt, $, 'info', 'effort-steered', `auto-effort-control: ${controller.id}'s effort changed from ${String(rest.from)} to ${String(rest.to)}`, 'hooks/auto-effort-control.ts#perform', { agent: controller.id, from: rest.from, to: rest.to });
+      if (event === 'judge-failed' && rest.reason !== 'model-unavailable') levelLog(rt, $, 'error', 'judge-failed', `auto-effort-control: judge failed for ${controller.id}: ${String(rest.reason)}; effort ${String(rest.from)} -> ${String(rest.to)}`, 'src/subagent/control.ts#failed', { agent: controller.id, error: String(rest.reason) });
+      if (rest.from !== undefined && rest.to !== undefined && rest.from !== rest.to) levelLog(rt, $, 'info', 'effort-steered', `auto-effort-control: ${controller.id}'s effort changed from ${String(rest.from)} to ${String(rest.to)}`, 'hooks/auto-effort-control.ts#perform', { agent: controller.id, from: rest.from, to: rest.to });
       SubRecord(rt, $, controller.id, controller.type, { event, ...rest, ...(rt.config.logPackets ? action.detail : {}) });
     } else {
       SubRunJudge(rt, $, controller, action);
@@ -1014,7 +985,7 @@ async function SubCompleteModel(rt: SubRuntime, $: EngineInterface, request: Mod
     const current = rt.modelFallback ?? await $.session.model();
     if (rt.modelFallback === undefined) {
       rt.modelFallback = current;
-      SubPlog(rt, $, 'warning', 'model-fallback', `auto-effort-control: default haiku refused (api-error 403 oauth_org_not_allowed); using current main model ${current} for the default judge`, 'hooks/auto-effort-control.ts#completeModel', { model: current });
+      levelLog(rt, $, 'warning', 'model-fallback', `auto-effort-control: default haiku refused (api-error 403 oauth_org_not_allowed); using current main model ${current} for the default judge`, 'hooks/auto-effort-control.ts#completeModel', { model: current });
     }
     if (rt.modelFallback !== request.model) reply = await $.model.complete({ ...request, model: rt.modelFallback });
   }
@@ -1214,7 +1185,6 @@ async function readMergedOptions($: EngineInterface, scope: Scope, registered: R
     'AUTO_EFFORT_CONTROL_CANARY_THRESHOLD': attemptEnv($.env.get('AUTO_EFFORT_CONTROL_CANARY_THRESHOLD')),
     'AUTO_EFFORT_CONTROL_CACHE_TTL_SECONDS': attemptEnv($.env.get('AUTO_EFFORT_CONTROL_CACHE_TTL_SECONDS')),
     'AUTO_EFFORT_CONTROL_STATUS_LINE': attemptEnv($.env.get('AUTO_EFFORT_CONTROL_STATUS_LINE')),
-    'AUTO_EFFORT_CONTROL_LOG_FILE': attemptEnv($.env.get('AUTO_EFFORT_CONTROL_LOG_FILE')),
     'AUTO_EFFORT_CONTROL_STATE_FILE': attemptEnv($.env.get('AUTO_EFFORT_CONTROL_STATE_FILE')),
     'AUTO_EFFORT_CONTROL_PARENT_TAG': attemptEnv($.env.get('AUTO_EFFORT_CONTROL_PARENT_TAG')),
     'AUTO_EFFORT_CONTROL_JUDGE': attemptEnv($.env.get('AUTO_EFFORT_CONTROL_JUDGE')),
@@ -1247,7 +1217,6 @@ async function readMergedOptions($: EngineInterface, scope: Scope, registered: R
     'AUTO_EFFORT_CANARY_THRESHOLD': attemptEnv($.env.get('AUTO_EFFORT_CANARY_THRESHOLD')),
     'AUTO_EFFORT_CACHE_TTL_SECONDS': attemptEnv($.env.get('AUTO_EFFORT_CACHE_TTL_SECONDS')),
     'AUTO_EFFORT_STATUS_LINE': attemptEnv($.env.get('AUTO_EFFORT_STATUS_LINE')),
-    'AUTO_EFFORT_LOG_FILE': attemptEnv($.env.get('AUTO_EFFORT_LOG_FILE')),
     'AUTO_EFFORT_STATE_FILE': attemptEnv($.env.get('AUTO_EFFORT_STATE_FILE')),
     'AUTO_EFFORT_LOWER_ON_PASS': attemptEnv($.env.get('AUTO_EFFORT_LOWER_ON_PASS')),
     'AUTO_EFFORT_TEST_COMMAND_PATTERNS': attemptEnv($.env.get('AUTO_EFFORT_TEST_COMMAND_PATTERNS')),
@@ -1270,7 +1239,6 @@ async function readMergedOptions($: EngineInterface, scope: Scope, registered: R
     'EFFORT_LIVE_CONTROL_RED_WORDS': attemptEnv($.env.get('EFFORT_LIVE_CONTROL_RED_WORDS')),
     'EFFORT_LIVE_CONTROL_GREEN_WORDS': attemptEnv($.env.get('EFFORT_LIVE_CONTROL_GREEN_WORDS')),
     'EFFORT_LIVE_CONTROL_AGENT_DIRS': attemptEnv($.env.get('EFFORT_LIVE_CONTROL_AGENT_DIRS')),
-    'EFFORT_LIVE_CONTROL_LOG_FILE': attemptEnv($.env.get('EFFORT_LIVE_CONTROL_LOG_FILE')),
     'EFFORT_LIVE_CONTROL_LOG_PACKETS': attemptEnv($.env.get('EFFORT_LIVE_CONTROL_LOG_PACKETS')),
   };
   const values = await Promise.all(Object.values(asked));
@@ -1280,6 +1248,23 @@ async function readMergedOptions($: EngineInterface, scope: Scope, registered: R
 const attemptEnv = (read: Promise<string | undefined>): Promise<ReadValue> => read.then(value => ({ ok: true, value }), error => ({ ok: false, error: message(error) }));
 
 export const register: Register = (on, options) => {
+const spawns = SubNewSpawns();
+const rawOptions = options as Record<string, unknown>;
+const { settings: subSettings, errors: subErrors } = SubResolveSettings(projectOptions(rawOptions, 'subagent').options);
+const rt: SubRuntime = {
+    rawOptions,
+    pluginWriting: Promise.resolve(),
+    pluginFlushing: Promise.resolve(),
+    config: subSettings,
+    compiled: SubCompile(subSettings),
+    optionErrors: subErrors,
+    pending: [],
+    writing: Promise.resolve(),
+    steered: new Map(),
+    awaiting: new Map(),
+    childOf: new Map(),
+    buttons: new Map(),
+  };
 const initial = projectOptions(options, 'main');
 const { settings, errors } = resolveSettings(initial.options);
 const st: State = {
@@ -1301,8 +1286,7 @@ const st: State = {
     unsaved: new Set(),
     segments: new Map(),
     writing: Promise.resolve(),
-    pluginWriting: Promise.resolve(),
-    pluginFailure: false,
+    rt,
     shown: '',
     stateWritten: '',
     statePath: '',
@@ -1315,24 +1299,6 @@ const st: State = {
     stateUnretired: new Map(),
     stateFailed: '',
     stateWriting: Promise.resolve(),
-  };
-const spawns = SubNewSpawns();
-const rawOptions = options as Record<string, unknown>;
-const { settings: subSettings, errors: subErrors } = SubResolveSettings(projectOptions(rawOptions, 'subagent').options);
-const rt: SubRuntime = {
-    rawOptions,
-    pluginWriting: Promise.resolve(),
-    pluginFlushing: Promise.resolve(),
-    config: subSettings,
-    compiled: SubCompile(subSettings),
-    optionErrors: subErrors,
-    logFile: '',
-    pending: [],
-    writing: Promise.resolve(),
-    steered: new Map(),
-    awaiting: new Map(),
-    childOf: new Map(),
-    buttons: new Map(),
   };
 on('session.start', async ($, e, next) => {
     await ensureStarted($, st);
@@ -1501,7 +1467,6 @@ on('session.end', async ($, e, next) => {
     st.stateRetired = st.sessionId;
     st.stateWriting = st.stateWriting.then(() => retireState($, st));
     await st.stateWriting;
-    await st.pluginWriting;
 
     await rt.pluginWriting;
     await rt.pluginFlushing;

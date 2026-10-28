@@ -166,7 +166,7 @@ function engine(state = new Map<string, unknown>(), opts: Opts = {}) {
   const rows = async () => {
     await tick();
     await tick();
-    const text = files.get('/fixture-home/t/.local/state/auto-effort-control/decisions.sess1.subagent.jsonl') ?? '';
+    const text = files.get('/fixture-home/t/.local/state/auto-effort-control/logs/decisions.sess1.subagent.jsonl') ?? '';
     return text.split('\n').filter((line) => line !== '').map((line) => JSON.parse(line) as Record<string, any>);
   };
   const sessionEnd = async (next = async () => ({})) => { if (hooks.has('session.end')) await hooks.get('session.end')!($, {}, next); };
@@ -350,8 +350,8 @@ suite('definition effort over the tag', () => {
     await x.step('a2', 'medium');
     await x.tick();
     await x.tick();
-    const old = x.files.get('/fixture-home/t/.local/state/auto-effort-control/decisions.sess1.subagent.jsonl') ?? '';
-    const next = x.files.get('/fixture-home/t/.local/state/auto-effort-control/decisions.sess2.subagent.jsonl') ?? '';
+    const old = x.files.get('/fixture-home/t/.local/state/auto-effort-control/logs/decisions.sess1.subagent.jsonl') ?? '';
+    const next = x.files.get('/fixture-home/t/.local/state/auto-effort-control/logs/decisions.sess2.subagent.jsonl') ?? '';
     expect(old).not.toContain('"a2"');
     expect(next).toContain('"a2"');
   });
@@ -1312,18 +1312,19 @@ suite('the decision log', () => {
     }
   });
 
-  it('R-16: an empty logFile turns the log off; a path with ~ is expanded from HOME', async () => {
-    const off = engine(new Map(), { files: LEAD, options: { logFile: '' } });
-    await off.spawned('Go.', 'L1', { subagentType: 'lead' });
-    await off.step('L1', 'low', undefined, OPUS);
-    await off.tick();
-    expect([...off.files.keys()].filter((path) => path.endsWith('.jsonl'))).toEqual([]);
-    const custom = engine(new Map(), { files: LEAD, options: { logFile: '~/logs/elc.jsonl' } });
-    await custom.spawned('Go.', 'L1', { subagentType: 'lead' });
-    await custom.step('L1', 'low', undefined, OPUS);
-    await custom.tick();
-    await custom.tick();
-    expect(custom.files.has('/fixture-home/t/logs/elc.sess1.subagent.jsonl')).toBe(true);
+  it('R-16: the decision log lives in the plugin log directory, and no option or variable moves it', async () => {
+    const env = { AUTO_EFFORT_CONTROL_LOG_FILE: '/elsewhere/env.jsonl', EFFORT_LIVE_CONTROL_LOG_FILE: '/elsewhere/old.jsonl' };
+    const set = engine(new Map(), { files: LEAD, env: { ...env, PLUGIN_LOG_DIR: '/plog' }, options: { logFile: '/elsewhere/option.jsonl' } });
+    const unset = engine(new Map(), { files: LEAD, env, options: { logFile: '/elsewhere/option.jsonl' } });
+    for (const x of [set, unset]) {
+      await x.spawned('Go.', 'L1', { subagentType: 'lead' });
+      await x.step('L1', 'low', undefined, OPUS);
+      await x.tick();
+      await x.tick();
+    }
+    const decisions = (x: ReturnType<typeof engine>) => [...x.files.keys()].filter((path) => path.endsWith('.subagent.jsonl'));
+    expect(decisions(set)).toEqual(['/plog/auto-effort-control/decisions.sess1.subagent.jsonl']);
+    expect(decisions(unset)).toEqual(['/fixture-home/t/.local/state/auto-effort-control/logs/decisions.sess1.subagent.jsonl']);
   });
 
   it('option errors are reported once at the first hook, and the defaults apply', async () => {
@@ -1442,27 +1443,27 @@ suite('plugin log adapter', () => {
 
   it('screen policy: a recoverable warning stays off screen with an active log', async () => {
     const dir = await fresh();
-    const x = engine(new Map(), { env: { PLUGIN_LOG_DIR: dir }, run: realRun, options: { logFile: '' }, toolList: async () => { throw new Error('list denied'); } });
+    const x = engine(new Map(), { env: { PLUGIN_LOG_DIR: dir }, run: realRun, options: {}, toolList: async () => { throw new Error('list denied'); } });
     await x.sessionStart(); await x.tool(undefined, 'mcp__auto-effort-control__effort_up', {}); await x.sessionEnd();
     expect(await readRows(join(dir, 'auto-effort-control'), 'warnings.jsonl')).toContainEqual(expect.objectContaining({ event: 'tool-list-failed' }));
     expect(x.logs).toEqual([]);
   });
 
-  it.each(['no destination', 'failed write'])('screen policy: a warning reaches the screen with %s', async (mode) => {
-    const { x, calls, script, fail } = await withJudge({ logFile: '' }, {
+  it.each(['no destination', 'failed write'])('screen policy: a warning never reaches the screen, even with %s; the log failure shows one line', async (mode) => {
+    const { x, calls, script, fail } = await withJudge({}, {
       env: mode === 'no destination' ? { HOME: undefined, PLUGIN_LOG_DIR: undefined } : { PLUGIN_LOG_DIR: await fresh() },
       run: async () => ({ exitCode: 1, stdout: '', stderr: 'append denied' }),
     });
     script.next = () => calls.at(-1).model === 'haiku' ? REFUSAL_403 : say('90 - stuck');
     await fail(); await x.sessionEnd();
-    expect(x.logs).toContainEqual(expect.stringContaining('default haiku refused'));
+    expect(x.logs.filter((line) => line.includes('default haiku refused'))).toEqual([]);
     expect(x.logs.filter((line) => line.includes('plugin log'))).toHaveLength(1);
     expect(await x.step('L1', 'low', undefined, OPUS)).toBe('high');
   });
 
   it('screen policy: a tool registration error always shows and is logged as an error', async () => {
     const dir = await fresh();
-    const x = engine(undefined, { env: { PLUGIN_LOG_DIR: dir }, run: realRun, options: { logFile: '' } });
+    const x = engine(undefined, { env: { PLUGIN_LOG_DIR: dir }, run: realRun, options: {} });
     x.$.tool.register = async () => { throw new Error('registration denied'); };
     await x.sessionStart(); await x.sessionEnd();
     expect(x.logs.filter((line) => line.includes('registration denied'))).toHaveLength(4);
@@ -1476,7 +1477,7 @@ suite('plugin log adapter', () => {
 
   it.each(['PLUGIN_LOG_DIR', 'fallback'])('writes forced error and warning through %s without changing answers', async (source) => {
     const dir = await fresh();
-    const x = engine(undefined, { env: { HOME: dir, PLUGIN_LOG_DIR: source === 'PLUGIN_LOG_DIR' ? join(dir, 'levels') : undefined }, run: realRun, options: { logFile: '' }, files: LEAD, toolList: async () => { throw new Error('list denied'); } });
+    const x = engine(undefined, { env: { HOME: dir, PLUGIN_LOG_DIR: source === 'PLUGIN_LOG_DIR' ? join(dir, 'levels') : undefined }, run: realRun, options: {}, files: LEAD, toolList: async () => { throw new Error('list denied'); } });
     await x.sessionStart(); await x.sessionStart();
     await x.spawned('Build X.', 'L1', { subagentType: 'lead' });
     expect(await x.mainStep('medium')).toBe('medium');
@@ -1497,7 +1498,7 @@ suite('plugin log adapter', () => {
     { level: 'error', file: 'errors.jsonl', event: 'pin-unreadable', component: 'readPin', cause: 'pin store offline' },
   ])('queues $event before a throwing screen call', async ({ level, file, event, component, cause }) => {
     const dir = await fresh();
-    const x = engine(undefined, { env: { PLUGIN_LOG_DIR: dir }, run: realRun, options: { logFile: '' }, files: LEAD });
+    const x = engine(undefined, { env: { PLUGIN_LOG_DIR: dir }, run: realRun, options: {}, files: LEAD });
     await x.sessionStart(); await x.spawned('Build X.', 'L1', { subagentType: 'lead' });
     x.$.ui.log = () => { throw new Error('screen offline'); };
     if (event === 'answer-tool-failed') vi.spyOn(Controller.prototype, 'onButton').mockImplementation(() => { throw new Error(cause); });
@@ -1512,7 +1513,7 @@ suite('plugin log adapter', () => {
   it('reports one process rejection per failing streak, then rearms after a successful real write', async () => {
     const dir = await fresh();
     let broken = true;
-    const x = engine(undefined, { env: { PLUGIN_LOG_DIR: dir }, options: { logFile: '' }, files: LEAD, run: async (argv, init) => { if (broken) throw new Error('spawn denied'); return realRun(argv, init); } });
+    const x = engine(undefined, { env: { PLUGIN_LOG_DIR: dir }, options: {}, files: LEAD, run: async (argv, init) => { if (broken) throw new Error('spawn denied'); return realRun(argv, init); } });
     await x.sessionStart(); await x.sessionEnd();
     vi.spyOn(Controller.prototype, 'onButton').mockImplementation(() => { throw new Error('unknown level'); });
     await x.spawned('Build X.', 'L1', { subagentType: 'lead' });
@@ -1521,7 +1522,8 @@ suite('plugin log adapter', () => {
     expect(notices()).toHaveLength(1); expect(notices()[0]).toContain(join(dir, 'auto-effort-control')); expect(notices()[0]).toContain('spawn denied');
     broken = false;
     await x.tool('L1', 'mcp__auto-effort-control__effort_up', {}); await x.sessionEnd();
-    expect(await readRows(join(dir, 'auto-effort-control'), 'errors.jsonl')).toHaveLength(1);
+    // The row the outage held is written with the next one: a failed write loses nothing.
+    expect(await readRows(join(dir, 'auto-effort-control'), 'errors.jsonl')).toHaveLength(2);
     broken = true;
     await x.tool('L1', 'mcp__auto-effort-control__effort_up', {}); await x.sessionEnd();
     expect(notices()).toHaveLength(2);
@@ -1529,19 +1531,20 @@ suite('plugin log adapter', () => {
 
   it('a failing plugin-log write also reaches the decision log, once per failing streak', async () => {
     // The invalid floor's option-error is an error: the requested setting cannot apply.
-    const x = engine(undefined, { slowWrite: true, env: { PLUGIN_LOG_DIR: '/fixture-logs' }, options: { floor: 'invalid', logFile: '/fixture-home/t/elc.jsonl' }, run: async () => ({ exitCode: 1, stdout: '', stderr: 'chmod: --: No such file or directory' }) });
+    const x = engine(undefined, { slowWrite: true, env: { PLUGIN_LOG_DIR: '/fixture-logs' }, options: { floor: 'invalid' }, run: async () => ({ exitCode: 1, stdout: '', stderr: 'chmod: --: No such file or directory' }) });
     await x.sessionStart(); await x.sessionEnd();
     // No tick after session.end: the row the final flush queues is on disk when the session ends.
-    const text = x.files.get('/fixture-home/t/elc.sess1.subagent.jsonl') ?? '';
+    const text = x.files.get('/fixture-logs/auto-effort-control/decisions.sess1.subagent.jsonl') ?? '';
     const failed = text.split('\n').filter(Boolean).map((line) => JSON.parse(line)).filter((row) => row.event === 'plugin-log-failed');
     expect(failed).toHaveLength(1);
     expect(failed[0].error).toContain('chmod: --: No such file or directory');
-    expect(x.logs.filter((line) => line.includes('plugin log'))).toHaveLength(2);
+    // Both scopes write through one queue: one failing streak, one line.
+    expect(x.logs.filter((line) => line.includes('plugin log'))).toHaveLength(1);
   });
 
   it('session.end still ends when the decision-log write fails and the screen door throws', async () => {
-    const path = '/fixture-home/t/elc.sess1.subagent.jsonl';
-    const x = engine(undefined, { uiThrows: true, broken: [path], files: { [path]: '' }, env: { PLUGIN_LOG_DIR: '/fixture-logs' }, options: { logFile: '/fixture-home/t/elc.jsonl' } });
+    const path = '/fixture-logs/auto-effort-control/decisions.sess1.subagent.jsonl';
+    const x = engine(undefined, { uiThrows: true, broken: [path], files: { [path]: '' }, env: { PLUGIN_LOG_DIR: '/fixture-logs' } });
     await x.sessionStart();
     let ended = false;
     await x.sessionEnd(async () => { ended = true; return {}; });
@@ -1550,10 +1553,11 @@ suite('plugin log adapter', () => {
 
   it.each(['no-process', 'no-home'])('keeps work unchanged and gives visible logger fallback for %s', async (mode) => {
     const dir = await fresh();
-    const x = engine(undefined, { env: mode === 'no-home' ? { HOME: undefined, PLUGIN_LOG_DIR: undefined } : { PLUGIN_LOG_DIR: dir }, noProcess: mode === 'no-process', options: { floor: 'invalid', logFile: '' } });
+    const x = engine(undefined, { env: mode === 'no-home' ? { HOME: undefined, PLUGIN_LOG_DIR: undefined } : { PLUGIN_LOG_DIR: dir }, noProcess: mode === 'no-process', options: { floor: 'invalid' } });
     await x.sessionStart(); expect(await x.mainStep('medium')).toBe('medium'); await x.sessionEnd();
     const notice = x.logs.filter((line) => line.includes('plugin log'));
-    expect(notice).toHaveLength(2);
+    // Both scopes write through one queue: one failing streak, one line.
+    expect(notice).toHaveLength(1);
     expect(notice[0]).toContain(mode === 'no-home' ? 'plugin log off: no PLUGIN_LOG_DIR and no HOME' : join(dir, 'auto-effort-control'));
     if (mode === 'no-process') expect(notice.some((line) => line.includes('process'))).toBe(true);
   });
@@ -1561,7 +1565,7 @@ suite('plugin log adapter', () => {
   it.each(['HOME', 'PLUGIN_LOG_DIR'])('does not render a rejected %s read as ordinary absence', async (name) => {
     const dir = await fresh();
     const env: Record<string, string | undefined> = { HOME: dir, PLUGIN_LOG_DIR: join(dir, 'levels') };
-    const x = engine(undefined, { env, run: realRun, options: { logFile: '' } });
+    const x = engine(undefined, { env, run: realRun, options: {} });
     x.$.env.get = async (key) => { if (key === name) throw undefined; return env[key]; };
     await x.sessionStart(); await x.sessionEnd();
     const target = name === 'HOME' ? join(dir, 'levels/auto-effort-control') : join(dir, '.local/state/auto-effort-control/logs');
@@ -1570,7 +1574,7 @@ suite('plugin log adapter', () => {
 
   it('logs unreadable pins, judge fallback and actual effort changes without decision packets', async () => {
     const dir = await fresh();
-    const x = engine(undefined, { env: { PLUGIN_LOG_DIR: dir }, run: realRun, options: { judge: true, logFile: '', logPackets: true }, files: LEAD });
+    const x = engine(undefined, { env: { PLUGIN_LOG_DIR: dir }, run: realRun, options: { judge: true, logPackets: true }, files: LEAD });
     await x.sessionStart();
     await x.spawned('Build X.', 'L1', { subagentType: 'lead' });
     expect(await x.step('L1', 'medium', undefined, OPUS)).toBe('medium');
@@ -1621,14 +1625,6 @@ suite('environment variables', () => {
     await x.sessionStart();
     expect(x.logs.filter((line) => line.includes(`environment variable ${name} is ${JSON.stringify(bad)}`))).toHaveLength(name === 'AUTO_EFFORT_CONTROL_MODELS' ? 2 : 1);
     expect(x.logs.filter((line) => line.includes('option "')).every((line) => line.includes(name))).toBe(true);
-  });
-
-  it('AUTO_EFFORT_CONTROL_LOG_FILE overrides the logFile option', async () => {
-    const x = engine(new Map(), { env: { AUTO_EFFORT_CONTROL_LOG_FILE: '~/logs/env.jsonl' }, options: { logFile: '' } });
-    await x.sessionStart();
-    await x.tick();
-    await x.tick();
-    expect(x.files.has('/fixture-home/t/logs/env.sess1.subagent.jsonl')).toBe(true);
   });
 
   it('AUTO_EFFORT_CONTROL_BUTTONS decides whether the three tools register, over the buttons option', async () => {
