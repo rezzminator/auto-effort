@@ -14,6 +14,10 @@ All notable changes to this plugin are recorded here. The format follows [Keep a
 
 - **Migration:** the `logFile` option and the `AUTO_EFFORT_CONTROL_LOG_FILE`, `AUTO_EFFORT_LOG_FILE` and `EFFORT_LIVE_CONTROL_LOG_FILE` variables are gone; the decision log now lives at `$PLUGIN_LOG_DIR/auto-effort-control/decisions.jsonl`, else `~/.local/state/auto-effort-control/logs/decisions.jsonl` (each session's `decisions.<session>.jsonl` and `decisions.<session>.subagent.jsonl` beside it). A `logFile` still set is reported as an unknown option; the empty value no longer turns the decision log off. Logs written before stay where they are.
 
+### Fixed
+
+- **A cancelled log write no longer shows on screen.** When Claude Code abandons a hook mid-write, the shared plugin-log library keeps the rows for the next write, and nothing is lost; it used to print a "plugin log … failed" line. A real write failure is still said once per failing streak.
+
 ## [1.0.0] — 2026-10-27
 
 The plugin is now `auto-effort-control`: `auto-effort` (the main chat) and `effort-live-control` (the sub-agents, named `agent-effort` through its 0.1.3) merged into one installation with one option set. Both are retired. A major release: every tool prefix, the command, every option variable and the state and log paths are renamed; § Migration says how to move.
