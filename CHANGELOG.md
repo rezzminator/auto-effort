@@ -2,11 +2,13 @@
 
 All notable changes to this plugin are recorded here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the plugin follows [semantic versioning](https://semver.org/).
 
-## [Unreleased]
+## [2.0.0] — 2026-10-30
+
+A major release: the plugin installs as `auto-effort-control@professor` only, and the `logFile` option is removed. § Changed and § Removed say how to move.
 
 ### Changed
 
-- Installs as `auto-effort-control@professor` from the professor marketplace; the repo's own marketplace file and `scripts/dev-marketplace.sh` are gone.
+- Installs as `auto-effort-control@professor` from the professor marketplace; the repo's own marketplace file and `scripts/dev-marketplace.sh` are gone. **Migration:** an `auto-effort-control@auto-effort-control` install gets no further updates: uninstall it, then `claude plugin marketplace add rezzminator/professor` and `claude plugin install auto-effort-control@professor`. Options saved in `settings.json` move with the id: copy `pluginConfigs["auto-effort-control@auto-effort-control"]` to `pluginConfigs["auto-effort-control@professor"]`.
 - The plugin logs go through the shared plugin-log library, vendored as `src/plugin-log.ts`; the sub-agents' own copy (`src/subagent/plugin-log.ts`) is gone, and both scopes write through one queue. A level file past 20 MiB now keeps up to five rotated generations (`.1` to `.5`); a failed write keeps its rows for the next one instead of dropping them.
 - Warnings and info never reach the screen, even when their log cannot be written. The screen shows only errors and one line per failing streak of the log itself.
 
@@ -17,6 +19,7 @@ All notable changes to this plugin are recorded here. The format follows [Keep a
 ### Fixed
 
 - **A cancelled log write no longer shows on screen.** When Claude Code abandons a hook mid-write, the shared plugin-log library keeps the rows for the next write, and nothing is lost; it used to print a "plugin log … failed" line. A real write failure is still said once per failing streak.
+- A plugin log directory that cannot be created is named in a `plugin-log-dir-failed` warning instead of passing silently.
 
 ## [1.0.0] — 2026-10-27
 

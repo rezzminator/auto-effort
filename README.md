@@ -5,7 +5,7 @@
 **Reasoning effort for the Claude Code main chat and for the sub-agents it launches: each turn starts at a planned level, the model raises or lowers its own with one tool call, a spawn tag sets a sub-agent's, an opted-in agent's effort follows its own trouble, and a cache check keeps every change safe.**
 
 [![Claude Code plugin](https://img.shields.io/badge/Claude%20Code-plugin-D97757)](https://docs.claude.com/en/docs/claude-code/plugins)
-[![Version](https://img.shields.io/badge/version-1.0.0-blue)](./CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-2.0.0-blue)](./CHANGELOG.md)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](./LICENSE)
 
 </div>

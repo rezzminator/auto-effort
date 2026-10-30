@@ -1,6 +1,6 @@
 {
   "name": "auto-effort-control",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "description": "Automatic reasoning effort for main chats and sub-agents, with planning, cache checks, spawn tags, tripwires and control tools.",
   "license": "MIT",
   "types": "./contract.d.ts",
