@@ -1,6 +1,6 @@
 {
   "name": "auto-effort-control",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "description": "Automatic reasoning effort for main chats and sub-agents, with planning, cache checks, spawn tags, tripwires and control tools.",
   "license": "MIT",
   "types": "./contract.d.ts",
@@ -189,12 +189,6 @@
       "title": "statusLine: show why the effort changed, as a notice",
       "description": "On: when the effort's mode, level or reason changes, a short notice shows the reason alone. The mode and level themselves are in stateFile, for a status line to show. Off: no such notice.",
       "default": true
-    },
-    "logFile": {
-      "type": "string",
-      "title": "logFile: the decision log (JSONL)",
-      "description": "One JSON row per decision. Main-chat rows use decisions.<session>.jsonl, then .2.jsonl, .3.jsonl after every 1000 rows. Sub-agent rows use decisions.<session>.subagent.jsonl and retain the newest 5000 rows, so the two writers never overwrite each other. The configured basename and extension are kept. Main rows never hold prompt text; sub-agent judge packets are included only with logPackets on. A leading ~ is your home directory. Empty: no log.",
-      "default": "~/.local/state/auto-effort-control/decisions.jsonl"
     },
     "stateFile": {
       "type": "string",

@@ -16,6 +16,8 @@ const TOOL = 'mcp__auto-effort-control__set_effort';
 const OPUS = 'claude-opus-5-5';
 // The state file at the default `stateFile` for session sess1: what a status line outside the plugin reads.
 const STATE = '/fake-home/u/.local/state/auto-effort-control/state.sess1.json';
+// PLUGIN_LOG_DIR=/logs: the decision log goes to /logs/auto-effort-control/decisions.<session>.jsonl.
+const LOGS = { env: { HOME: '/fake-home/u', PLUGIN_LOG_DIR: '/logs' } };
 const usage = (input: number, cacheRead: number, cacheWrite: number, output = 100) => ({ input_tokens: input, output_tokens: output, cache_read_input_tokens: cacheRead, cache_creation_input_tokens: cacheWrite, model: OPUS });
 
 function engine(options: Record<string, unknown> = {}, o: { configRows?: unknown[]; storeGet?: () => Promise<unknown>; storeValue?: unknown; env?: Record<string, string | undefined>; keeper?: 'fails' | 'silent' | 'noisy' } = {}) {
@@ -549,18 +551,18 @@ suite('prompt.submit', () => {
   });
 
   it('starts a new session after /clear: its rows go to its own file and `/auto-effort-control off` of the last one ends', async () => {
-    const e = engine({ logFile: '/logs/decisions.jsonl' });
+    const e = engine({}, LOGS);
     await e.start();
     await e.command('off');
     await e.prompt();
     expect(await e.step({})).toMatchObject({ effort: 'xhigh' });
-    await vi.waitFor(() => expect(e.files.has('/logs/decisions.sess1.jsonl')).toBe(true));
+    await vi.waitFor(() => expect(e.files.has('/logs/auto-effort-control/decisions.sess1.jsonl')).toBe(true));
     e.sess.id = 'sess2';
     await e.prompt();
     expect(await e.step({ turnId: 't2' })).toMatchObject({ effort: 'high' });
-    await vi.waitFor(() => expect(e.files.has('/logs/decisions.sess2.jsonl')).toBe(true));
+    await vi.waitFor(() => expect(e.files.has('/logs/auto-effort-control/decisions.sess2.jsonl')).toBe(true));
     expect(e.logRows().filter((row) => row.turnId === 't2').length).toBeGreaterThan(0);
-    expect(e.files.get('/logs/decisions.sess1.jsonl')).not.toContain('"t2"');
+    expect(e.files.get('/logs/auto-effort-control/decisions.sess1.jsonl')).not.toContain('"t2"');
   });
 
   it('passes the prompt through when the settings cannot be read', async () => {
@@ -610,7 +612,6 @@ suite('environment options', () => {
     AUTO_EFFORT_CONTROL_CANARY_THRESHOLD: '0.5',
     AUTO_EFFORT_CONTROL_CACHE_TTL_SECONDS: '3600',
     AUTO_EFFORT_CONTROL_STATUS_LINE: '0',
-    AUTO_EFFORT_CONTROL_LOG_FILE: '/var/log/effort.jsonl',
     AUTO_EFFORT_CONTROL_STATE_FILE: '/run/effort.json',
     AUTO_EFFORT_CONTROL_LOWER_ON_PASS: 'false',
     AUTO_EFFORT_CONTROL_TEST_COMMAND_PATTERNS: '["\\\\bmytest\\\\b"]',
@@ -622,7 +623,7 @@ suite('environment options', () => {
     await e.prompt();
     const text = (await e.command('status')).text;
     expect(text).toContain('settings (plugin options; environment overrides: AUTO_EFFORT_CONTROL_FLOOR, AUTO_EFFORT_CONTROL_CEILING');
-    for (const shown of ['floor=low', 'ceiling=max', 'planLevel=medium', 'planUpshiftPatterns=[\\bplan]', 'planUpshiftChars=2000', 'turnReminder=false', 'escalateAfterFailures=3', 'failurePatterns=[boom]', 'failureTools=[PowerShell]', 'userEffortPins=false', 'models=[claude-x=deny]', 'unknownModels=allow', 'probationSwitches=8', 'canaryThreshold=0.5', 'cacheTtlSeconds=3600', 'statusLine=false', 'logFile=/var/log/effort.jsonl', 'stateFile=/run/effort.json', 'lowerOnPass=false', 'testCommandPatterns=[\\bmytest\\b]']) {
+    for (const shown of ['floor=low', 'ceiling=max', 'planLevel=medium', 'planUpshiftPatterns=[\\bplan]', 'planUpshiftChars=2000', 'turnReminder=false', 'escalateAfterFailures=3', 'failurePatterns=[boom]', 'failureTools=[PowerShell]', 'userEffortPins=false', 'models=[claude-x=deny]', 'unknownModels=allow', 'probationSwitches=8', 'canaryThreshold=0.5', 'cacheTtlSeconds=3600', 'statusLine=false', 'stateFile=/run/effort.json', 'lowerOnPass=false', 'testCommandPatterns=[\\bmytest\\b]']) {
       expect(text, shown).toContain(shown);
     }
     expect(e.logs.filter((line) => line.includes('option'))).toEqual([]);
@@ -722,7 +723,7 @@ suite('environment options', () => {
       return read(name);
     };
     await e.prompt();
-    expect(seen).toEqual({ calls: 36, inFlight: 0, peak: 36 });
+    expect(seen).toEqual({ calls: 35, inFlight: 0, peak: 35 });
   });
 
   it('answers `set` as a success when the environment cannot be read', async () => {
@@ -850,10 +851,25 @@ suite('set_effort and escalation', () => {
   });
 });
 
+suite('plugin log screen', () => {
+  it('never shows a warning or info row, even when its write fails; the failing streak shows one line', async () => {
+    const e = engine();
+    e.$.process.run = async () => ({ exitCode: 1, stdout: '', stderr: 'append denied' });
+    await e.start();
+    await e.prompt();
+    await e.step({});
+    await e.step({ index: 1 });
+    await vi.waitFor(() => expect(e.logs.some((line) => line.includes('append denied'))).toBe(true));
+    await e.end();
+    expect(e.logs.filter((line) => line.includes('effort applied'))).toEqual([]);
+    expect(e.logs.filter((line) => line.includes('plugin log'))).toHaveLength(1);
+  });
+});
+
 // R10: the JSONL decision log.
 suite('decision log', () => {
-  it('appends one file per session beside `logFile`, with rows for the decision, the request and the turn', async () => {
-    const e = engine({ logFile: '/logs/decisions.jsonl' });
+  it('appends one file per session in the plugin log directory, with rows for the decision, the request and the turn', async () => {
+    const e = engine({}, LOGS);
     await e.start();
     await e.prompt('SECRET-PROMPT-TEXT');
     await e.step({});
@@ -861,7 +877,7 @@ suite('decision log', () => {
     await e.complete({ agentId: 'agent-7' });
     await e.settle();
     await vi.waitFor(() => expect(e.logRows().map((row) => row.event)).toContain('turn'));
-    expect(e.logFiles()).toEqual(['/logs/decisions.sess1.jsonl']);
+    expect(e.logFiles()).toEqual(['/logs/auto-effort-control/decisions.sess1.jsonl']);
     const rows = e.logRows();
     expect(rows.map((row) => row.event)).toEqual(expect.arrayContaining(['decision', 'step', 'turn']));
     expect(rows.filter((row) => row.event === 'turn')).toHaveLength(1);
@@ -869,19 +885,23 @@ suite('decision log', () => {
     expect(JSON.stringify(rows)).not.toContain('SECRET-PROMPT-TEXT');
   });
 
-  it('expands ~ in the default path and writes nothing for an empty `logFile`', async () => {
-    const off = engine({ logFile: '' });
-    await off.start();
-    await off.prompt();
-    await off.step({});
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    expect(off.logFiles()).toEqual([]);
-    const home = engine();
-    await home.start();
-    await home.prompt();
-    await home.step({});
-    await home.settle();
-    expect(home.logFiles()).toEqual(['/fake-home/u/.local/state/auto-effort-control/decisions.sess1.jsonl']);
+  it('lives in the plugin log directory, $PLUGIN_LOG_DIR/auto-effort-control else ~/.local/state/auto-effort-control/logs, and no option or variable moves it', async () => {
+    const moved = { logFile: '/elsewhere/option.jsonl' };
+    const env = { HOME: '/fake-home/u', AUTO_EFFORT_CONTROL_LOG_FILE: '/elsewhere/env.jsonl', AUTO_EFFORT_LOG_FILE: '/elsewhere/old.jsonl' };
+    const set = engine(moved, { env: { ...env, PLUGIN_LOG_DIR: '/plog/' } });
+    const unset = engine(moved, { env });
+    for (const e of [set, unset]) {
+      await e.start();
+      await e.prompt();
+      await e.step({});
+      await e.settle();
+    }
+    // The sub-agents' file beside it holds the reported option error.
+    const main = (e: ReturnType<typeof engine>) => e.logFiles().filter((path) => !path.endsWith('.subagent.jsonl'));
+    expect(main(set)).toEqual(['/plog/auto-effort-control/decisions.sess1.jsonl']);
+    expect(main(unset)).toEqual(['/fake-home/u/.local/state/auto-effort-control/logs/decisions.sess1.jsonl']);
+    // A removed option still set is reported, never silently dropped.
+    expect(set.logs.some((line) => line.includes('logFile') && line.includes('unknown option'))).toBe(true);
   });
 
   // F5: `$.fs` has no append, so every write rewrites a whole file; a file holds at most 1000 rows, then the next starts.
@@ -894,47 +914,47 @@ suite('decision log', () => {
   };
 
   it('starts `<session>.2` when a file is full, drops no row and never writes more than 1000 rows at once', async () => {
-    const e = engine({ logFile: '/logs/decisions.jsonl' });
-    e.files.set('/logs/decisions.sess1.jsonl', seeded(998));
+    const e = engine({}, LOGS);
+    e.files.set('/logs/auto-effort-control/decisions.sess1.jsonl', seeded(998));
     await drive(e, 6);
     await vi.waitFor(() => expect(e.logRows().filter((row) => row.event !== 'seed').length).toBeGreaterThanOrEqual(5));
-    await vi.waitFor(() => expect(e.files.has('/logs/decisions.sess1.2.jsonl')).toBe(true));
-    expect(rowsIn(e, '/logs/decisions.sess1.jsonl')).toBe(1000);
+    await vi.waitFor(() => expect(e.files.has('/logs/auto-effort-control/decisions.sess1.2.jsonl')).toBe(true));
+    expect(rowsIn(e, '/logs/auto-effort-control/decisions.sess1.jsonl')).toBe(1000);
     expect(e.logRows().filter((row) => row.event === 'seed')).toHaveLength(998);
     const fresh = e.logRows().filter((row) => row.event !== 'seed').length;
-    expect(rowsIn(e, '/logs/decisions.sess1.2.jsonl')).toBe(fresh - 2);
+    expect(rowsIn(e, '/logs/auto-effort-control/decisions.sess1.2.jsonl')).toBe(fresh - 2);
     expect(Math.max(...e.writes.map((write) => write.rows))).toBeLessThanOrEqual(1000);
   });
 
   it('resumes in the newest file of the session and leaves the full ones as they are', async () => {
-    const e = engine({ logFile: '/logs/decisions.jsonl' });
+    const e = engine({}, LOGS);
     const full = seeded(1000);
-    e.files.set('/logs/decisions.sess1.jsonl', full);
-    e.files.set('/logs/decisions.sess1.2.jsonl', full);
-    e.files.set('/logs/decisions.sess1.3.jsonl', seeded(5));
+    e.files.set('/logs/auto-effort-control/decisions.sess1.jsonl', full);
+    e.files.set('/logs/auto-effort-control/decisions.sess1.2.jsonl', full);
+    e.files.set('/logs/auto-effort-control/decisions.sess1.3.jsonl', seeded(5));
     await drive(e, 2);
-    await vi.waitFor(() => expect(rowsIn(e, '/logs/decisions.sess1.3.jsonl')).toBeGreaterThan(5));
-    expect(e.files.get('/logs/decisions.sess1.jsonl')).toBe(full);
-    expect(e.files.get('/logs/decisions.sess1.2.jsonl')).toBe(full);
-    expect(e.writes.filter((write) => write.path.endsWith('.jsonl')).every((write) => write.path === '/logs/decisions.sess1.3.jsonl')).toBe(true);
+    await vi.waitFor(() => expect(rowsIn(e, '/logs/auto-effort-control/decisions.sess1.3.jsonl')).toBeGreaterThan(5));
+    expect(e.files.get('/logs/auto-effort-control/decisions.sess1.jsonl')).toBe(full);
+    expect(e.files.get('/logs/auto-effort-control/decisions.sess1.2.jsonl')).toBe(full);
+    expect(e.writes.filter((write) => write.path.endsWith('.jsonl')).every((write) => write.path === '/logs/auto-effort-control/decisions.sess1.3.jsonl')).toBe(true);
     expect(e.logFiles()).toHaveLength(3);
   });
 
   it('never writes over a later file of the session when an earlier one is missing', async () => {
-    const e = engine({ logFile: '/logs/decisions.jsonl' });
-    e.files.set('/logs/decisions.sess1.jsonl', seeded(999));
+    const e = engine({}, LOGS);
+    e.files.set('/logs/auto-effort-control/decisions.sess1.jsonl', seeded(999));
     const later = seeded(5);
-    e.files.set('/logs/decisions.sess1.3.jsonl', later);
+    e.files.set('/logs/auto-effort-control/decisions.sess1.3.jsonl', later);
     await drive(e, 1100);
-    await vi.waitFor(() => expect(rowsIn(e, '/logs/decisions.sess1.2.jsonl')).toBe(1000));
-    await vi.waitFor(() => expect(e.files.has('/logs/decisions.sess1.4.jsonl')).toBe(true));
-    expect(e.files.get('/logs/decisions.sess1.3.jsonl')).toBe(later);
+    await vi.waitFor(() => expect(rowsIn(e, '/logs/auto-effort-control/decisions.sess1.2.jsonl')).toBe(1000));
+    await vi.waitFor(() => expect(e.files.has('/logs/auto-effort-control/decisions.sess1.4.jsonl')).toBe(true));
+    expect(e.files.get('/logs/auto-effort-control/decisions.sess1.3.jsonl')).toBe(later);
   });
 
   it('counts only the rows it could not write when a later file of the batch fails', async () => {
     // Three option errors are one batch: two fill the first file, the third goes to `.2`, whose write fails.
-    const e = engine({ logFile: '/logs/decisions.jsonl', floor: 'lowest', ceiling: 'nope', planLevel: 'bogus' });
-    e.files.set('/logs/decisions.sess1.jsonl', seeded(998));
+    const e = engine({ floor: 'lowest', ceiling: 'nope', planLevel: 'bogus' }, LOGS);
+    e.files.set('/logs/auto-effort-control/decisions.sess1.jsonl', seeded(998));
     const write = e.$.fs.write;
     e.$.fs.write = async (path: string, text: string) => {
       if (path.endsWith('.2.jsonl')) throw new Error('disk full');
@@ -1226,7 +1246,7 @@ suite('state file and notice', () => {
 
 suite('session.compact', () => {
   it('lets the compaction through and keeps the canary from judging a switch across it', async () => {
-    const e = engine({ logFile: '/logs/decisions.jsonl', statusLine: false });
+    const e = engine({ statusLine: false }, LOGS);
     await e.start();
     await e.prompt();
     await e.step({}, { usage: usage(10, 0, 5000) });
@@ -1298,7 +1318,6 @@ suite('manifest', () => {
   it('keeps the version in every place and the hooks module listed', () => {
     const plugin = json('plugins/auto-effort-control/.claude-plugin/plugin.json');
     expect(json('package.json').version).toBe(plugin.version);
-    expect(json('.claude-plugin/marketplace.json').plugins[0].version).toBe(plugin.version);
     expect(json('plugins/auto-effort-control/hooks/hooks.json')).toEqual({ modules: ['./auto-effort-control.ts'] });
   });
 });
@@ -1306,7 +1325,7 @@ suite('manifest', () => {
 
 suite('plugin log adapter', () => {
   it('screen policy: warning stays off screen with an active log', async () => {
-    const e = engine({ logFile: '' });
+    const e = engine({});
     const written: any[] = [];
     e.$.process.run = async (argv) => {
       for (let i = 7; i < argv.length; i += 2) written.push(JSON.parse(argv[i]!));
@@ -1320,8 +1339,8 @@ suite('plugin log adapter', () => {
     expect(e.logs).toEqual([]);
   });
 
-  it.each(['missing directory', 'write failure', 'initialization failure'])('screen policy: warning reaches screen with no log (%s)', async (failure) => {
-    const e = engine({ logFile: '' }, {
+  it.each(['missing directory', 'write failure', 'initialization failure'])('screen policy: a warning never reaches the screen, even with no log (%s); the log failure shows one line', async (failure) => {
+    const e = engine({}, {
       env: failure === 'missing directory' ? {} : { HOME: '/isolated/home' },
       storeValue: { unsafe: { [OPUS]: { at: 'x', ratio: 0.1, prevPrompt: 1, cacheRead: 0, from: 'high', to: 'medium' } }, probation: {}, graduated: [] },
     });
@@ -1333,13 +1352,13 @@ suite('plugin log adapter', () => {
     await e.prompt();
     await e.step({});
     await e.end();
-    // The saved cache guard warning bypasses note(): its survival proves the log fallback, not an old note() echo.
-    expect(e.logs).toContain(`auto-effort-control is off for ${OPUS}: a cache check failed on it earlier. /auto-effort-control clear ${OPUS} turns it back on.`);
-    expect(e.logs.some((line) => line.includes('plugin log'))).toBe(true);
+    // The saved cache guard warning bypasses note(): its absence proves no fallback echoes a warning.
+    expect(e.logs.filter((line) => line.includes(`auto-effort-control is off for ${OPUS}`))).toEqual([]);
+    expect(e.logs.filter((line) => line.includes('plugin log'))).toHaveLength(1);
   });
 
   it.each([true, false])('screen policy: error always shows with log active=%s', async (active) => {
-    const e = engine({ logFile: '' }, { env: active ? { HOME: '/isolated/home' } : {} });
+    const e = engine({}, { env: active ? { HOME: '/isolated/home' } : {} });
     await e.prompt();
     const error = new Error('upstream failed');
     const hook = e.hooks.find((h) => h.name === 'turn.step')!.fn;
@@ -1354,7 +1373,7 @@ suite('plugin log adapter', () => {
     const home = await mkdtemp(join(tmpdir(), 'auto-effort-control-adapter-'));
     const root = join(home, 'logs');
     const dir = set ? join(root, 'auto-effort-control') : join(home, '.local/state/auto-effort-control/logs');
-    const e = engine({ floor: 'lowest', logFile: '' }, { env: { HOME: home, PLUGIN_LOG_DIR: set ? root : undefined } });
+    const e = engine({ floor: 'lowest' }, { env: { HOME: home, PLUGIN_LOG_DIR: set ? root : undefined } });
     e.$.process.run = async (argv) => { const r = await promisify(execFile)('/bin/sh', argv.slice(1)); return { exitCode: 0, ...r }; };
     await e.start(); await e.start();
     await e.prompt(); await e.step({}); await e.step({ index: 1, effort: 'high' });
@@ -1377,38 +1396,39 @@ suite('plugin log adapter', () => {
   });
 
   it('keeps work results and reports one contextual process failure until recovery', async () => {
-    const e = engine({ floor: 'lowest', logFile: '' }, { env: { HOME: '/isolated/home', PLUGIN_LOG_DIR: '/isolated/logs' } });
+    const e = engine({ floor: 'lowest' }, { env: { HOME: '/isolated/home', PLUGIN_LOG_DIR: '/isolated/logs' } });
     e.$.process.run = async () => { throw new Error('cannot spawn'); };
     await e.start();
     await e.prompt();
     const end = e.hooks.find((h) => h.name === 'session.end');
     if (end) await e.end();
     const notices = () => e.logs.filter((s) => s.includes('plugin log '));
-    expect(notices()).toEqual([expect.stringContaining('/isolated/logs/auto-effort-control: cannot spawn'), expect.stringContaining('/isolated/logs/auto-effort-control: $.process.run failed: cannot spawn')]);
+    // Both scopes write through one queue: one failing streak, one line.
+    expect(notices()).toEqual([expect.stringContaining('/isolated/logs/auto-effort-control failed: $.process.run failed: cannot spawn')]);
     e.$.config.list = async () => { throw new Error('bad config'); };
     expect((await e.prompt('unchanged')).text).toBe('unchanged');
     await e.end();
-    expect(notices()).toHaveLength(2);
+    expect(notices()).toHaveLength(1);
     e.$.process.run = async () => ({ exitCode: 0, stdout: '', stderr: '' });
     await e.prompt(); await e.end();
     e.$.process.run = async () => { throw new Error('second outage'); };
     await e.prompt(); await e.end();
-    expect(notices()).toHaveLength(3);
-    expect(notices()[2]).toContain('second outage');
+    expect(notices()).toHaveLength(2);
+    expect(notices()[1]).toContain('second outage');
   });
 
   it('names missing env/home without throwing or blocking a prompt', async () => {
-    const e = engine({ floor: 'lowest', logFile: '' }, { env: {} });
+    const e = engine({ floor: 'lowest' }, { env: {} });
     await e.start();
     expect((await e.prompt('unchanged')).text).toBe('unchanged');
     const end = e.hooks.find((h) => h.name === 'session.end');
     if (end) await e.end();
-    expect(e.logs.filter((s) => s.includes('plugin log off:'))).toEqual([expect.stringContaining('plugin log off: no PLUGIN_LOG_DIR and no HOME'), expect.stringContaining('plugin log off: no PLUGIN_LOG_DIR and no HOME')]);
+    expect(e.logs.filter((s) => s.includes('plugin log off:'))).toEqual(['auto-effort-control: plugin log off: no PLUGIN_LOG_DIR and no HOME']);
   });
 
   it('logs applied rewrites only, and preserves a next-hook rethrow', async () => {
     const home = await mkdtemp(join(tmpdir(), 'auto-effort-control-changes-'));
-    const e = engine({ logFile: '' }, { env: { HOME: home, PLUGIN_LOG_DIR: home } });
+    const e = engine({}, { env: { HOME: home, PLUGIN_LOG_DIR: home } });
     e.$.process.run = async (argv) => { const r = await promisify(execFile)('/bin/sh', argv.slice(1)); return { exitCode: 0, ...r }; };
     try {
       await e.start(); await e.prompt(); await e.step({});

@@ -31,7 +31,6 @@ export type Settings = {
   redWords: string[];
   greenWords: string[];
   agentDirs: string[];
-  logFile: string;
   logPackets: boolean;
 };
 
@@ -73,7 +72,6 @@ export const DEFAULTS: Settings = {
   redWords: ['FAIL', 'FAILED', 'BLOCKED', 'PARTIAL', 'SPEC-DRIFT'],
   greenWords: ['DONE', 'PASS', 'FIXED'],
   agentDirs: [],
-  logFile: '~/.local/state/auto-effort-control/decisions.jsonl',
   logPackets: false,
 };
 
@@ -123,8 +121,6 @@ const parsePercent = (raw: unknown): Parsed<number> => {
 };
 
 const parseParentTag = (raw: unknown): Parsed<ParentTag> => (isParentTag(raw) ? good(raw) : bad('not honor or ignore'));
-
-const parseText = (raw: unknown): Parsed<string> => (typeof raw === 'string' ? good(raw) : bad('not text'));
 
 function parseTripwireList(raw: unknown): Parsed<string> {
   if (typeof raw !== 'string') return bad('not text');
@@ -185,7 +181,6 @@ const PARSERS: { [K in keyof Settings]: (raw: unknown) => Parsed<Settings[K] | '
   redWords: listOf(wordItem),
   greenWords: listOf(wordItem),
   agentDirs: listOf(dirItem),
-  logFile: parseText,
   logPackets: parseBool,
 };
 

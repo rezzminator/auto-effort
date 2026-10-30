@@ -31,7 +31,6 @@ export type Settings = {
   canaryThreshold: number;
   cacheTtlSeconds: number;
   statusLine: boolean;
-  logFile: string;
   stateFile: string;
 };
 
@@ -71,7 +70,6 @@ export const DEFAULTS: Settings = {
   canaryThreshold: 0.9,
   cacheTtlSeconds: 300,
   statusLine: true,
-  logFile: '~/.local/state/auto-effort-control/decisions.jsonl',
   stateFile: '~/.local/state/auto-effort-control/state.json',
 };
 
@@ -166,7 +164,6 @@ const PARSERS: { [K in keyof Settings]: (raw: unknown) => Parsed<Settings[K] | '
   canaryThreshold: parseRatio,
   cacheTtlSeconds: parseInt1,
   statusLine: parseBool,
-  logFile: parseText,
   stateFile: parseText,
 };
 

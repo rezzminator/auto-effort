@@ -10,14 +10,14 @@ A Claude Code function-hooks plugin: automatic reasoning effort for the main cha
 - `plugins/auto-effort-control/src/`: every decision, pure and unit-tested — the main chat's at its top level, the sub-agents' under `src/subagent/`. `options.ts` declares the one option set (`OPTION_DEFAULTS`, with `models` and `testCommandPatterns` scope-tagged) and resolves each scope's values from every source, legacy ones included (`resolveOptions`); `settings.ts` and `subagent/settings.ts` parse those values for their scope; `state.ts` the per-session state file; `text.ts` and `subagent/text.ts` every sentence the model or the user reads.
 - `tests/`: one vitest file per concern, the sub-agents' under `tests/subagent/`; `options.test.ts` covers the option set, its scope projection and the legacy sources; each `adapter.test.ts` drives the hooks module over a stand-in engine.
 - `types/claude-code.d.ts`: the plugin API (from `/plugin-types`), the truth for every hook's shape; grep it before using an event.
-- `plugins/auto-effort-control/.claude-plugin/`: `plugin.json` (the manifest and its `userConfig` options) and `icon.svg`; the root `.claude-plugin/marketplace.json` makes the repo its own marketplace.
-- `scripts/dev-marketplace.sh`: builds the local `auto-effort-control-dev` directory marketplace from a checkout; `scripts/release-check.sh`: the version places.
+- `plugins/auto-effort-control/.claude-plugin/`: `plugin.json` (the manifest and its `userConfig` options) and `icon.svg`; the plugin installs as `auto-effort-control@professor` from Professor's marketplace.
+- `scripts/release-check.sh`: the version places.
 
 ## Commands
 
 `npm test`, `npm run typecheck`, `npm run validate:plugin` and `npm run release:check` all pass before a commit. `validate:plugin` runs `claude plugin validate --strict`; run it with `CLAUDE_CONFIG_DIR` pointing at a scratch directory so the check reads no live config. `make release-check` runs every check the release workflow runs on a `develop → main` pull request, the same make targets (`check`, `release`) under Node 22.
 
-A live check loads the checkout with `--plugin-dir plugins/auto-effort-control` and `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1`, with any installed copy disabled for that run. `/auto-effort-control status` shows the level, the gate and the settings in effect; the decision log (`logFile`) shows every request.
+A live check loads the checkout with `--plugin-dir plugins/auto-effort-control` and `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1`, with any installed copy disabled for that run. `/auto-effort-control status` shows the level, the gate and the settings in effect; the decision logs (`decisions.{session}.jsonl`, the sub-agents' `decisions.{session}.subagent.jsonl`, in the plugin log directory) show every request.
 
 ## Testing
 
@@ -38,7 +38,7 @@ A live check loads the checkout with `--plugin-dir plugins/auto-effort-control` 
 - The retired plugins' state and logs under `~/.local/state/{auto-effort,effort-live-control}/` are never moved, rewritten or deleted.
 - The decision log never holds prompt or tool-result text, except the judge packets the opt-in `logPackets` option writes (off by default; README § Options says what they hold).
 - Standalone: the plugin runs on a machine with nothing but Claude Code. No path, agent, policy or wording of any other tool appears in code or in a file the plugin writes; credit is in the README and the manifest only.
-- A version bump moves `plugin.json`, `marketplace.json`, `package.json`, `package-lock.json`, `src/version.ts` and the README badge together; `npm run release:check` proves it.
+- A version bump moves `plugin.json`, `package.json`, `package-lock.json`, `src/version.ts` and the README badge together; `npm run release:check` proves it.
 - No machine-absolute paths, personal data or private project names in a tracked file.
 - `$` is passed only to functions declared at the top level of the hooks file and always spelled `$.noun.event(...)`: Claude Code checks this statically and otherwise loads the module with zero hooks. `npm run validate:plugin` catches it.
 - Never write to the live Claude Code config (`~/.claude/**`, `settings.json`) from a test or a check.
@@ -46,7 +46,7 @@ A live check loads the checkout with `--plugin-dir plugins/auto-effort-control` 
 ## Branches and releases
 
 - `develop` is the default branch: every change lands there, by a commit or a pull request, and no CI runs on a push. `.github/workflows/release.yml` runs on the `develop → main` pull request only. `develop` is protected by the ruleset `develop keeps its history`: never force-push or delete it.
-- `main` is release-only (ruleset `main is release-only`). It moves only by merging the `develop → main` pull request, with a merge commit and never a squash, so both branches share one history, and only after `check` and `release` pass: never a direct push, never an admin override. The marketplace installs the plugin from `main` (`git-subdir`, `ref: main`), so users only ever get a released version.
+- `main` is release-only (ruleset `main is release-only`). It moves only by merging the `develop → main` pull request, with a merge commit and never a squash, so both branches share one history, and only after `check` and `release` pass: never a direct push, never an admin override. Professor's marketplace installs the plugin from `main` (`git-subdir`, `ref: main`), so users only ever get a released version.
 - A release, in order:
   1. On `develop`: bump the version in every place `npm run release:check` checks, and move `## [Unreleased]` in `CHANGELOG.md` to `## [X.Y.Z] — date`. Every merge into `main` publishes, so a pre-release suffix (`-dev.N`, `-alpha`) becomes the real release version here.
   2. `make release-check` passes, after `git fetch origin main`.

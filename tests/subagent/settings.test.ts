@@ -22,7 +22,6 @@ describe('resolveSettings', () => {
       redWords: ['FAIL', 'FAILED', 'BLOCKED', 'PARTIAL', 'SPEC-DRIFT'],
       greenWords: ['DONE', 'PASS', 'FIXED'],
       agentDirs: [],
-      logFile: '~/.local/state/auto-effort-control/decisions.jsonl',
       logPackets: false,
       tripwires: 'fail1,fail2,red,redispatch',
       parentTag: 'honor',
@@ -30,11 +29,11 @@ describe('resolveSettings', () => {
     });
     expect(DEFAULTS.testCommandPatterns).toHaveLength(17);
     expect(DEFAULTS.failurePatterns).toHaveLength(6);
-    expect(SETTING_KEYS).toHaveLength(21);
+    expect(SETTING_KEYS).toHaveLength(20);
   });
 
   it('reads valid values of every kind', () => {
-    const raw = { floor: 'low', ceiling: 'max', models: ['claude-x'], judge: true, judgeRaiseAt: 50, judgeModel: 'sonnet', judgeEffort: 'high', judgeTimeoutMs: 9000, buttons: false, announce: false, redWords: ['NO'], greenWords: ['YES'], agentDirs: ['/x'], logFile: '', logPackets: true, tripwires: 'fail2, red' };
+    const raw = { floor: 'low', ceiling: 'max', models: ['claude-x'], judge: true, judgeRaiseAt: 50, judgeModel: 'sonnet', judgeEffort: 'high', judgeTimeoutMs: 9000, buttons: false, announce: false, redWords: ['NO'], greenWords: ['YES'], agentDirs: ['/x'], logPackets: true, tripwires: 'fail2, red' };
     expect(resolveSettings(raw)).toEqual({ settings: { ...DEFAULTS, ...raw }, errors: [] });
   });
 
@@ -86,10 +85,6 @@ describe('resolveSettings', () => {
   it('reads a list given as text, one entry per line, and an empty text as the default', () => {
     expect(resolveSettings({ models: 'a\n b \n\nc' }).settings.models).toEqual(['a', 'b', 'c']);
     expect(resolveSettings({ models: '' }).settings.models).toEqual(DEFAULTS.models);
-  });
-
-  it('R-16: an empty logFile text turns the log off', () => {
-    expect(resolveSettings({ logFile: '' }).settings.logFile).toBe('');
   });
 });
 
@@ -209,7 +204,6 @@ const ENV_ROWS: EnvRow[] = [
   { key: 'redWords', name: 'AUTO_EFFORT_CONTROL_RED_WORDS', env: '["NO"]', expected: ['NO'], option: ['NOPE'], bad: '["OK now"]' },
   { key: 'greenWords', name: 'AUTO_EFFORT_CONTROL_GREEN_WORDS', env: '["YES"]', expected: ['YES'], option: ['OK'], bad: '[1]' },
   { key: 'agentDirs', name: 'AUTO_EFFORT_CONTROL_AGENT_DIRS', env: '["/x"]', expected: ['/x'], option: ['/y'], bad: '{"dir":"/x"}' },
-  { key: 'logFile', name: 'AUTO_EFFORT_CONTROL_LOG_FILE', env: '/logs/env.jsonl', expected: '/logs/env.jsonl', option: '/logs/option.jsonl' },
   { key: 'logPackets', name: 'AUTO_EFFORT_CONTROL_LOG_PACKETS', env: '1', expected: true, option: false, bad: 'yes' },
 ];
 

@@ -2,6 +2,25 @@
 
 All notable changes to this plugin are recorded here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the plugin follows [semantic versioning](https://semver.org/).
 
+## [2.0.0] — 2026-10-30
+
+A major release: the plugin installs as `auto-effort-control@professor` only, and the `logFile` option is removed. § Changed and § Removed say how to move.
+
+### Changed
+
+- Installs as `auto-effort-control@professor` from the professor marketplace; the repo's own marketplace file and `scripts/dev-marketplace.sh` are gone. **Migration:** an `auto-effort-control@auto-effort-control` install gets no further updates: uninstall it, then `claude plugin marketplace add rezzminator/professor` and `claude plugin install auto-effort-control@professor`. Options saved in `settings.json` move with the id: copy `pluginConfigs["auto-effort-control@auto-effort-control"]` to `pluginConfigs["auto-effort-control@professor"]`.
+- The plugin logs go through the shared plugin-log library, vendored as `src/plugin-log.ts`; the sub-agents' own copy (`src/subagent/plugin-log.ts`) is gone, and both scopes write through one queue. A level file past 20 MiB now keeps up to five rotated generations (`.1` to `.5`); a failed write keeps its rows for the next one instead of dropping them.
+- Warnings and info never reach the screen, even when their log cannot be written. The screen shows only errors and one line per failing streak of the log itself.
+
+### Removed
+
+- **Migration:** the `logFile` option and the `AUTO_EFFORT_CONTROL_LOG_FILE`, `AUTO_EFFORT_LOG_FILE` and `EFFORT_LIVE_CONTROL_LOG_FILE` variables are gone; the decision log now lives at `$PLUGIN_LOG_DIR/auto-effort-control/decisions.jsonl`, else `~/.local/state/auto-effort-control/logs/decisions.jsonl` (each session's `decisions.<session>.jsonl` and `decisions.<session>.subagent.jsonl` beside it). A `logFile` still set is reported as an unknown option; the empty value no longer turns the decision log off. Logs written before stay where they are.
+
+### Fixed
+
+- **A cancelled log write no longer shows on screen.** When Claude Code abandons a hook mid-write, the shared plugin-log library keeps the rows for the next write, and nothing is lost; it used to print a "plugin log … failed" line. A real write failure is still said once per failing streak.
+- A plugin log directory that cannot be created is named in a `plugin-log-dir-failed` warning instead of passing silently.
+
 ## [1.0.0] — 2026-10-27
 
 The plugin is now `auto-effort-control`: `auto-effort` (the main chat) and `effort-live-control` (the sub-agents, named `agent-effort` through its 0.1.3) merged into one installation with one option set. Both are retired. A major release: every tool prefix, the command, every option variable and the state and log paths are renamed; § Migration says how to move.
