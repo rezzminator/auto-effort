@@ -92,7 +92,7 @@ export class Definitions {
       try {
         found = await this.fs.exists(path);
       } catch (error) {
-        report(`auto-effort-control: checking ${path} failed: ${message(error)}; treating ${type} as having no definition there`);
+        report(`auto-effort: checking ${path} failed: ${message(error)}; treating ${type} as having no definition there`);
       }
       if (!found) continue;
       const fields = await this.fields(path, type, report);
@@ -124,13 +124,13 @@ export class Definitions {
     if (raw === undefined) return fallback;
     const value = raw.trim().toLowerCase();
     if (isParentTag(value)) return value;
-    report(`auto-effort-control: ${path} effortControl.parentTag for ${type} is invalid (not honor or ignore); using ${fallback}`);
+    report(`auto-effort: ${path} effortControl.parentTag for ${type} is invalid (not honor or ignore); using ${fallback}`);
     return fallback;
   }
 
   private control(type: string, path: string, fields: Record<string, string>, report: (line: string) => void): ControlConfig | undefined {
     const invalid = (key: string, why: string, fallback: string) =>
-      report(`auto-effort-control: ${path} ${key} for ${type} is invalid (${why}); using ${fallback}`);
+      report(`auto-effort: ${path} ${key} for ${type} is invalid (${why}); using ${fallback}`);
     const { floor: defaultFloor, ceiling: defaultCeiling, judge: defaultJudge, tripwires: defaultTripwires, struggleDecay: defaultDecay } = this.defaults;
     const bare = fields.effortControl;
     if (bare !== undefined && bare.trim() !== '') {
@@ -191,7 +191,7 @@ export class Definitions {
     try {
       return parseFrontmatter(await this.fs.read(path));
     } catch (error) {
-      report(`auto-effort-control: reading ${path} failed: ${message(error)}; treating ${type} as having no definition`);
+      report(`auto-effort: reading ${path} failed: ${message(error)}; treating ${type} as having no definition`);
       return 'failed';
     }
   }
@@ -205,7 +205,7 @@ export class Definitions {
           if (!(await this.fs.exists(dir))) continue;
           files = await this.fs.listMarkdown(dir);
         } catch (error) {
-          this.log(`auto-effort-control: listing ${dir} failed: ${message(error)}; its agents are found by file name only`);
+          this.log(`auto-effort: listing ${dir} failed: ${message(error)}; its agents are found by file name only`);
           continue;
         }
         for (const file of files) {
@@ -214,7 +214,7 @@ export class Definitions {
           try {
             name = parseFrontmatter(await this.fs.read(path)).name;
           } catch (error) {
-            this.log(`auto-effort-control: reading ${path} failed: ${message(error)}; skipping it in the name index`);
+            this.log(`auto-effort: reading ${path} failed: ${message(error)}; skipping it in the name index`);
           }
           if (name && !names.has(name)) names.set(name, path);
         }

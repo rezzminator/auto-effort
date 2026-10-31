@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { Definitions, type AgentFs, type ControlDefaults } from '../../plugins/auto-effort-control/src/subagent/agents.ts';
+import { Definitions, type AgentFs, type ControlDefaults } from '../../plugins/auto-effort/src/subagent/agents.ts';
 
 const ALL = ['fail1', 'fail2', 'red', 'redispatch'] as const;
 const DEFAULTS: ControlDefaults = { floor: 'medium', ceiling: 'xhigh', judge: true, tripwires: ALL, parentTag: 'honor', struggleDecay: 20 };
@@ -60,7 +60,7 @@ describe('Definitions.resolve', () => {
     const x = standIn({ '/a/t.md': '---\neffort: low\n---\n' }, ['/a/t.md']);
     const found = await x.defs(['/a']).resolve('t');
     expect(found).toMatchObject({ path: undefined, effort: undefined, control: undefined });
-    expect(x.logs.join('\n')).toContain('auto-effort-control: reading /a/t.md failed: EACCES; treating t as having no definition');
+    expect(x.logs.join('\n')).toContain('auto-effort: reading /a/t.md failed: EACCES; treating t as having no definition');
   });
 
   it('caches per type: the file is read once', async () => {
@@ -89,7 +89,7 @@ describe('effortControl.tripwires', () => {
   it('tripwires: an unknown name is logged with its key, the type and the default, and the default used', async () => {
     const { found, logs } = await control('effortControl:\n  tripwires: fail1, boom');
     expect(found.control?.tripwires).toEqual([...ALL]);
-    expect(logs).toEqual(['auto-effort-control: /a/t.md effortControl.tripwires for t is invalid ("boom" is not a tripwire (fail1, fail2, red, redispatch)); using fail1,fail2,red,redispatch']);
+    expect(logs).toEqual(['auto-effort: /a/t.md effortControl.tripwires for t is invalid ("boom" is not a tripwire (fail1, fail2, red, redispatch)); using fail1,fail2,red,redispatch']);
   });
 });
 
@@ -156,7 +156,7 @@ describe('effortControl', () => {
   it('R-3: an invalid value is logged with its key, the type and the default, and the default used', async () => {
     const { found, logs } = await control('effortControl:\n  floor: sideways\n  ceiling: max');
     expect(found.control).toEqual({ floor: 'medium', ceiling: 'max', landing: [], judge: true, tripwires: [...ALL], struggleDecay: 20 });
-    const line = 'auto-effort-control: /a/t.md effortControl.floor for t is invalid (not a level: low, medium, high, xhigh, max); using medium';
+    const line = 'auto-effort: /a/t.md effortControl.floor for t is invalid (not a level: low, medium, high, xhigh, max); using medium';
     expect(logs).toEqual([line]);
     expect(found.errors).toEqual([line]);
   });
@@ -164,7 +164,7 @@ describe('effortControl', () => {
   it('R-3: an invalid bare value is logged and leaves the agent unsteered', async () => {
     const { found, logs } = await control('effortControl: maybe');
     expect(found.control).toBeUndefined();
-    expect(logs).toEqual(['auto-effort-control: /a/t.md effortControl for t is invalid (not on, off, true, false, yes or no); using off']);
+    expect(logs).toEqual(['auto-effort: /a/t.md effortControl for t is invalid (not on, off, true, false, yes or no); using off']);
   });
 
   it('R-3: a floor above the ceiling is invalid and both fall back to the option defaults', async () => {
@@ -209,7 +209,7 @@ describe('effortControl.parentTag', () => {
   it('parentTag: an unknown value is logged with its key and the type and the option applies', async () => {
     const { found, logs } = await read('effort: high\neffortControl:\n  enabled: off\n  parentTag: sometimes', { ...DEFAULTS, parentTag: 'ignore' });
     expect(found.parentTag).toBe('ignore');
-    const line = 'auto-effort-control: /a/t.md effortControl.parentTag for t is invalid (not honor or ignore); using ignore';
+    const line = 'auto-effort: /a/t.md effortControl.parentTag for t is invalid (not honor or ignore); using ignore';
     expect(logs).toEqual([line]);
     expect(found.errors).toEqual([line]);
   });

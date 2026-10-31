@@ -1,11 +1,11 @@
-import { OPTION_DEFAULTS as DEFAULTS, OPTION_KEYS as SETTING_KEYS } from '../../plugins/auto-effort-control/src/options.ts';
+import { OPTION_DEFAULTS as DEFAULTS, OPTION_KEYS as SETTING_KEYS } from '../../plugins/auto-effort/src/options.ts';
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
 // Every knob is a plugin option. Defaults agree in three places: src/settings.ts, plugin.json's userConfig and the README table. The README table also names each option's environment variable.
 const root = new URL('../../', import.meta.url);
-const manifest = JSON.parse(readFileSync(new URL('plugins/auto-effort-control/.claude-plugin/plugin.json', root), 'utf8'));
-const readmes = ['README.md', 'plugins/auto-effort-control/README.md'].map((path) => [path, readFileSync(new URL(path, root), 'utf8')] as const);
+const manifest = JSON.parse(readFileSync(new URL('plugins/auto-effort/.claude-plugin/plugin.json', root), 'utf8'));
+const readmes = ['README.md', 'plugins/auto-effort/README.md'].map((path) => [path, readFileSync(new URL(path, root), 'utf8')] as const);
 
 describe('plugin options', () => {
   it('judge is false and judgeRaiseAt is 25 in the code, the manifest and both READMEs', () => {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { startOf } from '../../plugins/auto-effort-control/src/subagent/start.ts';
+import { startOf } from '../../plugins/auto-effort/src/subagent/start.ts';
 
 const RANGE = { floor: 'medium', ceiling: 'xhigh' } as const;
 

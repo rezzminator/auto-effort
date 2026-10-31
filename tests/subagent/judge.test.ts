@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { JUDGE_SYSTEM, packet, parseAnswer, PACKET_MAX, type PacketInput } from '../../plugins/auto-effort-control/src/subagent/judge.ts';
+import { JUDGE_SYSTEM, packet, parseAnswer, PACKET_MAX, type PacketInput } from '../../plugins/auto-effort/src/subagent/judge.ts';
 
 describe('parseAnswer', () => {
   it('R-8: reads the probability and the reason after " - "', () => {

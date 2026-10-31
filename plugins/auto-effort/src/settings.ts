@@ -1,4 +1,4 @@
-// Every knob is a plugin option, and each also reads the environment variable AUTO_EFFORT_CONTROL_{OPTION} (the option in upper snake case),
+// Every knob is a plugin option, and each also reads the environment variable AUTO_EFFORT_{OPTION} (the option in upper snake case),
 // which wins over the option, which wins over the default. Defaults agree in three places: here, plugin.json's userConfig and the README table.
 // A bad value is reported by key and value (a bad variable by its name), and the default applies.
 
@@ -6,7 +6,9 @@ import { isEffort, LEVELS, rank, type Effort } from './levels.ts';
 import { normalizeModel } from './model.ts';
 import { clip, quote } from './text.ts';
 
-export const PLUGIN = 'auto-effort-control';
+export const PLUGIN = 'auto-effort';
+/** The plugin's name from 1.0.0 to 2.0.0: its settings, variables and state directory are migrated, never dropped. */
+export const FORMER = 'auto-effort-control';
 
 export type ModelStatus = 'allow' | 'probation' | 'deny';
 export type UnknownModels = 'off' | ModelStatus;
@@ -70,13 +72,13 @@ export const DEFAULTS: Settings = {
   canaryThreshold: 0.9,
   cacheTtlSeconds: 300,
   statusLine: true,
-  stateFile: '~/.local/state/auto-effort-control/state.json',
+  stateFile: '~/.local/state/auto-effort/state.json',
 };
 
 export const SETTING_KEYS = Object.keys(DEFAULTS) as Array<keyof Settings>;
 
-/** The variable an option reads: AUTO_EFFORT_CONTROL_ and the option in upper snake case (`planLevel` is AUTO_EFFORT_CONTROL_PLAN_LEVEL). */
-export const envName = (key: string): string => `AUTO_EFFORT_CONTROL_${key.replace(/[A-Z]/g, (letter) => `_${letter}`).toUpperCase()}`;
+/** The variable an option reads: AUTO_EFFORT_ and the option in upper snake case (`planLevel` is AUTO_EFFORT_PLAN_LEVEL). */
+export const envName = (key: string): string => `AUTO_EFFORT_${key.replace(/[A-Z]/g, (letter) => `_${letter}`).toUpperCase()}`;
 
 /** The text of each option's variable, as the environment holds it; undefined where it is unset. */
 export type EnvValues = Readonly<Partial<Record<keyof Settings, string | undefined>>>;
@@ -168,7 +170,7 @@ const PARSERS: { [K in keyof Settings]: (raw: unknown) => Parsed<Settings[K] | '
 };
 
 function errorLine(key: string, raw: unknown, why: string, from?: string): string {
-  return `auto-effort-control: option "${key}"${from === undefined ? '' : ` (${from})`} is ${quote(raw)}, ${why}; using the default ${JSON.stringify(DEFAULTS[key as keyof Settings])}`;
+  return `auto-effort: option "${key}"${from === undefined ? '' : ` (${from})`} is ${quote(raw)}, ${why}; using the default ${JSON.stringify(DEFAULTS[key as keyof Settings])}`;
 }
 
 /** A variable's text as the option's own parser reads it: 1|0|true|false for a boolean, a JSON array of strings for a list. */
@@ -218,7 +220,7 @@ export function resolveSettings(raw: Readonly<Record<string, unknown>>, env: Env
   const out = settings as Settings;
   if (rank(out.floor) > rank(out.ceiling)) {
     const origin = (key: 'floor' | 'ceiling'): string => (fromEnv.includes(key) ? `, from ${envName(key)}` : '');
-    errors.push(`auto-effort-control: option "floor" (${JSON.stringify(out.floor)}${origin('floor')}) is above option "ceiling" (${JSON.stringify(out.ceiling)}${origin('ceiling')}); using the defaults ${JSON.stringify(DEFAULTS.floor)} and ${JSON.stringify(DEFAULTS.ceiling)}`);
+    errors.push(`auto-effort: option "floor" (${JSON.stringify(out.floor)}${origin('floor')}) is above option "ceiling" (${JSON.stringify(out.ceiling)}${origin('ceiling')}); using the defaults ${JSON.stringify(DEFAULTS.floor)} and ${JSON.stringify(DEFAULTS.ceiling)}`);
     out.floor = DEFAULTS.floor;
     out.ceiling = DEFAULTS.ceiling;
     fromEnv = fromEnv.filter((key) => key !== 'floor' && key !== 'ceiling');

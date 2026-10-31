@@ -1,5 +1,5 @@
 {
-  "name": "auto-effort-control",
+  "name": "auto-effort",
   "version": "2.0.0",
   "description": "Automatic reasoning effort for main chats and sub-agents, with planning, cache checks, spawn tags, tripwires and control tools.",
   "license": "MIT",
@@ -22,13 +22,13 @@
   "userConfig": {
     "floor": {
       "type": "string",
-      "title": "floor: the lowest effort auto-effort-control ever sends",
+      "title": "floor: the lowest effort auto-effort ever sends",
       "description": "The lowest reasoning effort the plugin sends: low, medium, high, xhigh or max. A lower level the model asks for is raised to this one. Must not be above ceiling.",
       "default": "medium"
     },
     "ceiling": {
       "type": "string",
-      "title": "ceiling: the highest effort auto-effort-control ever sends",
+      "title": "ceiling: the highest effort auto-effort ever sends",
       "description": "The highest reasoning effort the plugin sends: low, medium, high, xhigh or max. A higher level the model asks for, or an escalation, is lowered to this one. Must not be below floor.",
       "default": "xhigh"
     },
@@ -137,12 +137,12 @@
     "userEffortPins": {
       "type": "boolean",
       "title": "userEffortPins: a /effort change between turns pins the session",
-      "description": "On: when you change the effort yourself with /effort, auto-effort-control stops steering that session until /auto-effort-control on. Off: it keeps steering whatever you set.",
+      "description": "On: when you change the effort yourself with /effort, auto-effort stops steering that session until /auto-effort on. Off: it keeps steering whatever you set.",
       "default": true
     },
     "models": {
       "type": "string",
-      "title": "models: which models auto-effort-control may steer",
+      "title": "models: which models auto-effort may steer",
       "description": "Scope-tagged entries: main:model=allow|probation|deny and subagent:model-prefix. Unqualified entries are rejected.",
       "default": [
         "main:claude-opus-5-5=allow",
@@ -172,7 +172,7 @@
     "canaryThreshold": {
       "type": "number",
       "title": "canaryThreshold: cache read the switched request must keep (0 to 1)",
-      "description": "After an effort change, the switched request must read at least this fraction of the previous request's whole prompt from the prompt cache. Below it the plugin stops changing effort on that model, tells you once, and remembers across sessions until /auto-effort-control clear.",
+      "description": "After an effort change, the switched request must read at least this fraction of the previous request's whole prompt from the prompt cache. Below it the plugin stops changing effort on that model, tells you once, and remembers across sessions until /auto-effort clear.",
       "default": 0.9,
       "min": 0.01,
       "max": 1
@@ -194,7 +194,7 @@
       "type": "string",
       "title": "stateFile: the effort's mode, level and reason, for a status line",
       "description": "One JSON line per session naming the mode the main chat's effort is in (auto, model, pin or off), its level, the reason and the keeper that vouches for it, rewritten when one of them changes; the line at a path the plugin leaves is retired (keeper 0). The session id is inserted before the extension (state.<session>.json). A leading ~ is your home directory; a relative path is under the session's working directory, so give an absolute one. Empty: no file.",
-      "default": "~/.local/state/auto-effort-control/state.json"
+      "default": "~/.local/state/auto-effort/state.json"
     },
     "parentTag": {
       "type": "string",

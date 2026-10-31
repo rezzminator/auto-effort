@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { sessionLogPath } from '../../plugins/auto-effort-control/src/subagent/log.ts';
-import { sessionLogPath as mainLogPath } from '../../plugins/auto-effort-control/src/log.ts';
+import { sessionLogPath } from '../../plugins/auto-effort/src/subagent/log.ts';
+import { sessionLogPath as mainLogPath } from '../../plugins/auto-effort/src/log.ts';
 
 describe('sub-agent decision log', () => {
   it.each([

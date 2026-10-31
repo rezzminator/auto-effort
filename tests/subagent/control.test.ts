@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { Controller, type Action, type Outcome, type Setup } from '../../plugins/auto-effort-control/src/subagent/control.ts';
-import { TRIPWIRES, type Tripwire } from '../../plugins/auto-effort-control/src/subagent/judge.ts';
-import { DEFAULTS } from '../../plugins/auto-effort-control/src/subagent/settings.ts';
+import { Controller, type Action, type Outcome, type Setup } from '../../plugins/auto-effort/src/subagent/control.ts';
+import { TRIPWIRES, type Tripwire } from '../../plugins/auto-effort/src/subagent/judge.ts';
+import { DEFAULTS } from '../../plugins/auto-effort/src/subagent/settings.ts';
 
 const USAGE = { input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 };
 
@@ -82,7 +82,7 @@ describe('own test runs', () => {
     const out = c.onTestRun(FAIL);
     expect(c.level).toBe('high');
     expect(rows(out, 'mechanical')).toEqual([{ event: 'mechanical', tripwire: 'fail1', from: 'medium', to: 'high' }]);
-    expect(c.takeAnnouncement()).toBe('auto-effort-control: your reasoning effort is now high — a failing test run.');
+    expect(c.takeAnnouncement()).toBe('auto-effort: your reasoning effort is now high — a failing test run.');
   });
 
   it('R-5: the second failing run raises again up to the ceiling', () => {
@@ -699,9 +699,9 @@ describe('announcements', () => {
   it('queues one line per level change, handed over once', () => {
     const c = make({ judge: false });
     c.onTestRun(FAIL);
-    expect(c.takeAnnouncement()).toBe('auto-effort-control: your reasoning effort is now high — a failing test run.');
+    expect(c.takeAnnouncement()).toBe('auto-effort: your reasoning effort is now high — a failing test run.');
     c.onTestRun(FAIL);
-    expect(c.takeAnnouncement()).toBe('auto-effort-control: your reasoning effort is now xhigh — 2nd failing test run in a row.');
+    expect(c.takeAnnouncement()).toBe('auto-effort: your reasoning effort is now xhigh — 2nd failing test run in a row.');
     expect(c.takeAnnouncement()).toBeUndefined();
   });
 
@@ -719,7 +719,7 @@ describe('announcements', () => {
     c.onTestRun(FAIL);
     c.onTestRun(FAIL);
     c.onTestRun(PASS);
-    expect(c.takeAnnouncement()).toBe('auto-effort-control: your reasoning effort is now medium — the trouble is resolved, back to medium.');
+    expect(c.takeAnnouncement()).toBe('auto-effort: your reasoning effort is now medium — the trouble is resolved, back to medium.');
   });
 
   it('a press drops an undelivered line: its own result is the last word on the level (a step, a bound, effort_auto)', () => {
@@ -741,20 +741,20 @@ describe('announcements', () => {
     const c = make();
     fail2(c);
     c.onJudgeAnswer(1, '85 - cause unknown', 1, USAGE);
-    expect(c.takeAnnouncement()).toBe('auto-effort-control: your reasoning effort is now high — judge: cause unknown.');
+    expect(c.takeAnnouncement()).toBe('auto-effort: your reasoning effort is now high — judge: cause unknown.');
   });
 
   it('R-11: carries the landing line', () => {
     const c = make({ home: 'high', landing: ['lander'] });
     c.onSpawn({ childId: 'c1', type: 'lander' });
-    expect(c.takeAnnouncement()).toBe('auto-effort-control: your reasoning effort is now medium — landing, one step below your home level.');
+    expect(c.takeAnnouncement()).toBe('auto-effort: your reasoning effort is now medium — landing, one step below your home level.');
   });
 
   it('says "judge unavailable" after a failed call', () => {
     const c = make();
     fail2(c);
     c.onJudgeFailure(1, 'aborted');
-    expect(c.takeAnnouncement()).toBe('auto-effort-control: your reasoning effort is now high — judge unavailable, raised one step.');
+    expect(c.takeAnnouncement()).toBe('auto-effort: your reasoning effort is now high — judge unavailable, raised one step.');
   });
 
   it('says nothing for a change that leaves the level where it was, for a button press, or with announce off', () => {

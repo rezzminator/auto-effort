@@ -282,7 +282,7 @@ export class Controller {
     // A level outside the five is none this plugin can steer or show: the model is left as one that takes no level.
     if (effort === undefined || typeof effort === 'number' || !isEffort(effort)) {
       this.takesLevel = false;
-      const why = typeof effort === 'string' ? `${input.model} carries effort ${quote(effort)}, no level auto-effort-control sets` : `${input.model} takes no effort level`;
+      const why = typeof effort === 'string' ? `${input.model} carries effort ${quote(effort)}, no level auto-effort sets` : `${input.model} takes no effort level`;
       return this.inactive(input, effort, why, gate, newTurn, rows);
     }
     this.takesLevel = true;
@@ -297,11 +297,11 @@ export class Controller {
     }
     this.lastSeen = { model: name, effort };
 
-    if (!this.enabled) return this.inactive(input, effort, 'auto-effort-control is off for this session', gate, newTurn, rows);
+    if (!this.enabled) return this.inactive(input, effort, 'auto-effort is off for this session', gate, newTurn, rows);
     if (!gate.active) {
-      const notice = gate.status === 'unsafe' && !this.told.has(name) ? `auto-effort-control is off for ${input.model}: a cache check failed on it earlier. /auto-effort-control clear ${name} turns it back on.` : undefined;
+      const notice = gate.status === 'unsafe' && !this.told.has(name) ? `auto-effort is off for ${input.model}: a cache check failed on it earlier. /auto-effort clear ${name} turns it back on.` : undefined;
       if (notice !== undefined) this.told.add(name);
-      const inactive = this.inactive(input, effort, `auto-effort-control does not change effort on ${input.model} (${gate.status})`, gate, newTurn, rows);
+      const inactive = this.inactive(input, effort, `auto-effort does not change effort on ${input.model} (${gate.status})`, gate, newTurn, rows);
       return { ...inactive, ...(notice === undefined ? {} : { warning: { event: 'gate-unsafe', msg: notice, where: 'src/controller.ts#beginStep' } as PluginWarning }) };
     }
     if (this.pin !== null) {
@@ -401,7 +401,7 @@ export class Controller {
         persisted = this.store;
         this.told.add(normalizeModel(inf.model));
         rows.push({ event: 'gate', model: inf.model, status: 'unsafe', why: 'cache canary', ratio: verdict.ratio });
-        notice = `auto-effort-control stopped changing effort on ${inf.model}: after the change from ${String(prev.wire)} to ${String(inf.wire)} the cache read was ${(verdict.ratio * 100).toFixed(1)}% of the previous prompt (the check wants ${(s.canaryThreshold * 100).toFixed(0)}%). /auto-effort-control clear ${normalizeModel(inf.model)} turns it back on.`;
+        notice = `auto-effort stopped changing effort on ${inf.model}: after the change from ${String(prev.wire)} to ${String(inf.wire)} the cache read was ${(verdict.ratio * 100).toFixed(1)}% of the previous prompt (the check wants ${(s.canaryThreshold * 100).toFixed(0)}%). /auto-effort clear ${normalizeModel(inf.model)} turns it back on.`;
       }
     }
     this.last = usage === null ? undefined : { model: normalizeModel(inf.model), wire: inf.wire, usage, endedAt, messages: inf.messages };
@@ -425,10 +425,10 @@ export class Controller {
     if (input.agent) return refuse('Not applied: set_effort applies to the main chat only.');
     const requested = input.input.level ?? input.input.effort;
     if (requested === 'auto') return this.handBack(shortReason(input.input.reason));
-    if (!this.enabled) return refuse('Not applied: auto-effort-control is off for this session; /auto-effort-control on turns it back on.');
-    if (this.pin !== null) return refuse(`Not applied: the effort is pinned at ${this.pin.level} by your /effort command; /effort auto or /auto-effort-control on resumes automatic effort.`);
+    if (!this.enabled) return refuse('Not applied: auto-effort is off for this session; /auto-effort on turns it back on.');
+    if (this.pin !== null) return refuse(`Not applied: the effort is pinned at ${this.pin.level} by your /effort command; /effort auto or /auto-effort on resumes automatic effort.`);
     const gate = this.lastModel === undefined ? undefined : this.gate(this.lastModel);
-    if (gate !== undefined && !gate.active) return refuse(`Not applied: auto-effort-control does not change effort on ${this.lastModel} (${gate.status}).`);
+    if (gate !== undefined && !gate.active) return refuse(`Not applied: auto-effort does not change effort on ${this.lastModel} (${gate.status}).`);
     if (!this.takesLevel) return refuse(`Not applied: ${this.lastModel ?? 'this model'} takes no effort level.`);
     if (!isEffort(requested)) return refuse(`Not applied: level must be auto or one of ${levelsWithin(s.floor, s.ceiling).join(', ')}; got ${quote(requested ?? null)}.`);
     const applied = clamp(requested, s.floor, s.ceiling);
@@ -468,10 +468,10 @@ export class Controller {
 
   /** What decides the effort over the automatic rules: off, the user's pin, the model gate, a model taking no level; none while the rules apply. */
   private outranked(): { outranked?: string } {
-    if (!this.enabled) return { outranked: 'auto-effort-control is off for this session until /auto-effort-control on' };
-    if (this.pin !== null) return { outranked: `your /effort pin at ${this.pin.level} still applies until /auto-effort-control on` };
+    if (!this.enabled) return { outranked: 'auto-effort is off for this session until /auto-effort on' };
+    if (this.pin !== null) return { outranked: `your /effort pin at ${this.pin.level} still applies until /auto-effort on` };
     const gate = this.lastModel === undefined ? undefined : this.gate(this.lastModel);
-    if (gate !== undefined && !gate.active) return { outranked: `auto-effort-control does not change effort on ${this.lastModel} (${gate.status})` };
+    if (gate !== undefined && !gate.active) return { outranked: `auto-effort does not change effort on ${this.lastModel} (${gate.status})` };
     if (!this.takesLevel) return { outranked: `${this.lastModel ?? 'this model'} takes no effort level, so none is steered` };
     return {};
   }
@@ -548,7 +548,7 @@ export class Controller {
     ];
   }
 
-  /** What `/auto-effort-control status` shows. */
+  /** What `/auto-effort status` shows. */
   view(): View {
     const model = this.lastModel;
     const gate = model === undefined ? undefined : this.gate(model);

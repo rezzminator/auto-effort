@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { Controller, readSessionState, type Row } from '../plugins/auto-effort-control/src/controller.ts';
-import { EMPTY_PERSISTED, markUnsafe, type Persisted } from '../plugins/auto-effort-control/src/gate.ts';
-import { resolveSettings } from '../plugins/auto-effort-control/src/settings.ts';
-import { deescalationLine, escalationLine, handBackText, heldLine, setText } from '../plugins/auto-effort-control/src/text.ts';
+import { Controller, readSessionState, type Row } from '../plugins/auto-effort/src/controller.ts';
+import { EMPTY_PERSISTED, markUnsafe, type Persisted } from '../plugins/auto-effort/src/gate.ts';
+import { resolveSettings } from '../plugins/auto-effort/src/settings.ts';
+import { deescalationLine, escalationLine, handBackText, heldLine, setText } from '../plugins/auto-effort/src/text.ts';
 
 const OPUS = 'claude-opus-5-5';
-const TOOL = 'mcp__auto-effort-control__set_effort';
+const TOOL = 'mcp__auto-effort__set_effort';
 const usage = (input: number, cacheRead: number, cacheWrite: number, output = 100) => ({ input_tokens: input, output_tokens: output, cache_read_input_tokens: cacheRead, cache_creation_input_tokens: cacheWrite });
 
 // A controller on a clock the test moves, and the rows every call returned.
@@ -39,7 +39,7 @@ describe('planning level (R2)', () => {
     r.prompt();
     const first = r.step('t1', 0).plan;
     expect(first).toMatchObject({ send: 'high', level: 'high', source: 'plan', reason: 'planning turn', newTurn: true });
-    expect(r.ctl.stateNow()).toEqual({ version: 2, mode: 'auto', level: 'high', reason: 'planning turn' });
+    expect(r.ctl.stateNow()).toEqual({ version: 3, mode: 'auto', level: 'high', reason: 'planning turn' });
     expect(r.step('t1', 1).plan).toMatchObject({ send: 'high', level: 'high', source: 'plan', newTurn: false });
   });
 
@@ -83,7 +83,7 @@ describe('set_effort (R3, R6)', () => {
     expect(r.set({ level: 'medium', reason: 'mechanical rename' }).text).toBe(setText('medium', 'medium', 'medium', 'xhigh'));
     const next = r.step('t1', 1).plan;
     expect(next).toMatchObject({ send: 'medium', level: 'medium', source: 'model', reason: 'mechanical rename' });
-    expect(r.ctl.stateNow()).toEqual({ version: 2, mode: 'model', level: 'medium', reason: 'mechanical rename' });
+    expect(r.ctl.stateNow()).toEqual({ version: 3, mode: 'model', level: 'medium', reason: 'mechanical rename' });
     expect(r.step('t1', 2).plan).toMatchObject({ send: 'medium', source: 'model' });
   });
 
@@ -150,7 +150,7 @@ describe('set_effort (R3, R6)', () => {
     pinned.step('t1', 0, { effort: 'xhigh' });
     pinned.prompt();
     pinned.step('t2', 0, { effort: 'low' });
-    expect(pinned.set({ level: 'high', reason: 'x' }).text).toMatch(/^Not applied: .*pinned.*\/effort auto or \/auto-effort-control on resumes/);
+    expect(pinned.set({ level: 'high', reason: 'x' }).text).toMatch(/^Not applied: .*pinned.*\/effort auto or \/auto-effort on resumes/);
     const off = rig();
     off.ctl.setEnabled(false);
     off.prompt();
@@ -172,7 +172,7 @@ describe('set_effort (R3, R6)', () => {
     r.prompt();
     r.step('t1', 0, { effort: 'xhigh' });
     r.prompt();
-    expect(r.step('t2', 0, { effort: 'ultra' as never }).plan).toMatchObject({ send: undefined, source: 'off', reason: 'claude-opus-5-5 carries effort "ultra", no level auto-effort-control sets' });
+    expect(r.step('t2', 0, { effort: 'ultra' as never }).plan).toMatchObject({ send: undefined, source: 'off', reason: 'claude-opus-5-5 carries effort "ultra", no level auto-effort sets' });
     expect(r.ctl.stateNow()).toMatchObject({ mode: 'off', level: null });
     expect(r.ctl.sessionState()).toMatchObject({ pin: null });
     r.prompt();
@@ -181,7 +181,7 @@ describe('set_effort (R3, R6)', () => {
 });
 
 // A: the main chat's own level wins over every automatic rule and holds within a turn until it ends or calls set_effort with auto;
-// the user's /effort pin and /auto-effort-control off still outrank it.
+// the user's /effort pin and /auto-effort off still outrank it.
 describe("the main chat's own level (A)", () => {
   it('expires at the next turn, whose plan and decision row apply', () => {
     const r = rig();
@@ -248,7 +248,7 @@ describe("the main chat's own level (A)", () => {
     expect(r.step('t1', 0).plan).toMatchObject({ send: 'high', level: 'high', source: 'plan', reason: 'planning turn' });
   });
 
-  it("is outranked by the user's /effort pin, expires at the boundary, and planning resumes after /auto-effort-control on", () => {
+  it("is outranked by the user's /effort pin, expires at the boundary, and planning resumes after /auto-effort on", () => {
     const r = rig();
     r.prompt();
     r.step('t1', 0, { effort: 'xhigh' });
@@ -263,7 +263,7 @@ describe("the main chat's own level (A)", () => {
     expect(r.step('t3', 0, { effort: 'low' }).plan).toMatchObject({ send: 'high', level: 'high', source: 'plan', reason: 'planning turn' });
   });
 
-  it('is outranked by /auto-effort-control off; auto is still taken there and says the off holds', () => {
+  it('is outranked by /auto-effort off; auto is still taken there and says the off holds', () => {
     const r = rig();
     r.prompt();
     r.step('t1', 0);
@@ -277,7 +277,7 @@ describe("the main chat's own level (A)", () => {
     r.prompt();
     expect(r.step('t3', 0).plan).toMatchObject({ send: 'high', source: 'plan' });
     r.ctl.setEnabled(false);
-    expect(r.set({ level: 'auto' }).text).toBe(handBackText({ held: false, level: null, outranked: 'auto-effort-control is off for this session until /auto-effort-control on' }));
+    expect(r.set({ level: 'auto' }).text).toBe(handBackText({ held: false, level: null, outranked: 'auto-effort is off for this session until /auto-effort on' }));
     r.ctl.setEnabled(true);
     r.prompt();
     expect(r.step('t4', 0).plan).toMatchObject({ send: 'high', source: 'plan' });
@@ -311,12 +311,12 @@ describe('stateNow', () => {
     expect(r.ctl.stateNow()).toMatchObject({ mode: 'auto', level: null });
     r.prompt();
     r.step('t1', 0, { effort: 'xhigh' });
-    expect(r.ctl.stateNow()).toEqual({ version: 2, mode: 'auto', level: 'high', reason: 'planning turn' });
+    expect(r.ctl.stateNow()).toEqual({ version: 3, mode: 'auto', level: 'high', reason: 'planning turn' });
     r.tool('Bash', 'FAILED');
     r.tool('Bash', 'FAILED');
-    expect(r.ctl.stateNow()).toEqual({ version: 2, mode: 'auto', level: 'xhigh', reason: '2 failing test runs' });
+    expect(r.ctl.stateNow()).toEqual({ version: 3, mode: 'auto', level: 'xhigh', reason: '2 failing test runs' });
     r.set({ level: 'medium', reason: 'mechanical rename' });
-    expect(r.ctl.stateNow()).toEqual({ version: 2, mode: 'model', level: 'medium', reason: 'mechanical rename' });
+    expect(r.ctl.stateNow()).toEqual({ version: 3, mode: 'model', level: 'medium', reason: 'mechanical rename' });
     r.prompt();
     r.step('t2', 0, { effort: 'low' });
     expect(r.ctl.stateNow()).toMatchObject({ mode: 'pin', level: 'low' });
@@ -328,11 +328,11 @@ describe('stateNow', () => {
     const denied = rig();
     denied.prompt('x', 'claude-sonnet-5');
     denied.step('t1', 0, { model: 'claude-sonnet-5' });
-    expect(denied.ctl.stateNow()).toEqual({ version: 2, mode: 'off', level: null, reason: 'this model is not steered' });
+    expect(denied.ctl.stateNow()).toEqual({ version: 3, mode: 'off', level: null, reason: 'this model is not steered' });
     const none = rig();
     none.prompt();
     none.step('t1', 0, { effort: undefined });
-    expect(none.ctl.stateNow()).toEqual({ version: 2, mode: 'off', level: null, reason: 'this model is not steered' });
+    expect(none.ctl.stateNow()).toEqual({ version: 3, mode: 'off', level: null, reason: 'this model is not steered' });
     none.prompt();
     none.step('t2', 0, { effort: 'xhigh' });
     expect(none.ctl.stateNow()).toMatchObject({ mode: 'auto', level: 'high' });
@@ -572,7 +572,7 @@ describe('user pin (R7)', () => {
     expect(r.ctl.stateNow()).toMatchObject({ mode: 'auto', level: 'high' });
     const plan = r.step('t3', 0, { effort: 'medium' }).plan;
     expect(plan).toMatchObject({ send: undefined, level: 'medium', source: 'pin', newTurn: true });
-    expect(r.ctl.stateNow()).toEqual({ version: 2, mode: 'pin', level: 'medium', reason: 'you set /effort; /effort auto or /auto-effort-control on resumes' });
+    expect(r.ctl.stateNow()).toEqual({ version: 3, mode: 'pin', level: 'medium', reason: 'you set /effort; /effort auto or /auto-effort on resumes' });
     expect(r.step('t3', 1, { effort: 'medium' }).plan).toMatchObject({ send: undefined, source: 'pin' });
     r.prompt();
     expect(r.step('t4', 0, { effort: 'medium' }).plan).toMatchObject({ send: undefined, source: 'pin' });
@@ -583,7 +583,7 @@ describe('user pin (R7)', () => {
     expect(r.ctl.sessionState()).toEqual({ enabled: true, pin: 'low', override: null });
   });
 
-  it('resumes on `/auto-effort-control on`', () => {
+  it('resumes on `/auto-effort on`', () => {
     const r = pinned();
     r.step('t3', 0, { effort: 'medium' });
     r.ctl.setEnabled(true);
@@ -641,7 +641,7 @@ describe('model gate (R8)', () => {
     expect(unknown.step('t1', 0, { model: 'claude-new-9' }).plan).toMatchObject({ send: 'high', source: 'plan' });
   });
 
-  it('is off for the session on `/auto-effort-control off`', () => {
+  it('is off for the session on `/auto-effort off`', () => {
     const r = rig();
     r.ctl.setEnabled(false);
     r.prompt();
@@ -679,7 +679,7 @@ describe('cache canary (R9)', () => {
     const { r, out } = switched(200);
     expect(out.end.persisted?.unsafe[OPUS]).toMatchObject({ from: 'high', to: 'medium' });
     expect(out.end.warning?.msg).toContain(OPUS);
-    expect(out.end.warning?.msg).toContain('/auto-effort-control clear');
+    expect(out.end.warning?.msg).toContain('/auto-effort clear');
     expect(r.rows.find((row) => row.event === 'canary')).toMatchObject({ verdict: 'fail' });
     const after = r.step('t1', 2, { effort: 'xhigh' });
     expect(after.plan).toMatchObject({ send: undefined, source: 'off' });
@@ -898,13 +898,13 @@ it('returns warning diagnostics for unsafe and failed-canary decisions', () => {
   const unsafe = markUnsafe(EMPTY_PERSISTED, OPUS, { at: 'x', ratio: 0.1, prevPrompt: 1, cacheRead: 0, from: 'high', to: 'medium' });
   const off = rig({}, unsafe);
   const first = off.step('t1', 0).plan;
-  expect(first.warning).toEqual({ event: 'gate-unsafe', msg: expect.stringContaining(`auto-effort-control is off for ${OPUS}`), where: 'src/controller.ts#beginStep' });
+  expect(first.warning).toEqual({ event: 'gate-unsafe', msg: expect.stringContaining(`auto-effort is off for ${OPUS}`), where: 'src/controller.ts#beginStep' });
   expect(off.step('t1', 1).plan.warning?.msg).toBeUndefined();
   const active = rig();
   active.prompt(); active.step('t1', 0, { u: usage(10, 0, 5000) });
   active.set({ level: 'medium', reason: 'rename' });
   const end = active.step('t1', 1, { u: usage(4000, 100, 900) }).end;
-  expect(end.warning).toEqual({ event: 'canary-failed', msg: expect.stringContaining(`auto-effort-control stopped changing effort on ${OPUS}`), where: 'src/controller.ts#endStep' });
+  expect(end.warning).toEqual({ event: 'canary-failed', msg: expect.stringContaining(`auto-effort stopped changing effort on ${OPUS}`), where: 'src/controller.ts#endStep' });
   expect(end.warning?.msg).toContain('stopped changing effort');
 });
 
@@ -973,7 +973,7 @@ describe('hand control', () => {
   it('reminds from the plan, clamps the hint level, and logs only pattern sources', () => {
     const r = rig({ ceiling: 'high' }); r.step('t1', 0); r.set({ level: 'medium' });
     expect(r.prompt('DESIGN secret-project').reminder).toContain('starts this turn at high');
-    expect(r.prompt('DESIGN secret-project').reminder).toContain('"design": the mcp__auto-effort-control__set_effort guide places that kind of work at high');
+    expect(r.prompt('DESIGN secret-project').reminder).toContain('"design": the mcp__auto-effort__set_effort guide places that kind of work at high');
     expect(r.step('t2', 0).plan.rows).toContainEqual(expect.objectContaining({ event: 'decision', hints: ['\\bdesign'] }));
     expect(r.step('t3', 0).plan.rows).toContainEqual(expect.objectContaining({ event: 'decision', hints: null }));
   });

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { compile, DEFAULTS, resolveSettings } from '../plugins/auto-effort-control/src/settings.ts';
+import { compile, DEFAULTS, resolveSettings } from '../plugins/auto-effort/src/settings.ts';
 
 // R12: every knob of R2-R10 is an option, validated at load; an invalid value is reported by key and value, and the default applies.
 describe('resolveSettings', () => {
@@ -112,29 +112,29 @@ describe('resolveSettings', () => {
   });
 });
 
-// The environment layer: AUTO_EFFORT_CONTROL_{OPTION} over the option, over the default. A bad value is reported by its variable name and the option's default applies.
+// The environment layer: AUTO_EFFORT_{OPTION} over the option, over the default. A bad value is reported by its variable name and the option's default applies.
 describe('resolveSettings with environment variables', () => {
   const NAMES = {
-    floor: 'AUTO_EFFORT_CONTROL_FLOOR',
-    ceiling: 'AUTO_EFFORT_CONTROL_CEILING',
-    planLevel: 'AUTO_EFFORT_CONTROL_PLAN_LEVEL',
-    hintPatterns: 'AUTO_EFFORT_CONTROL_HINT_PATTERNS',
-    planUpshiftPatterns: 'AUTO_EFFORT_CONTROL_PLAN_UPSHIFT_PATTERNS',
-    planUpshiftChars: 'AUTO_EFFORT_CONTROL_PLAN_UPSHIFT_CHARS',
-    turnReminder: 'AUTO_EFFORT_CONTROL_TURN_REMINDER',
-    escalateAfterFailures: 'AUTO_EFFORT_CONTROL_ESCALATE_AFTER_FAILURES',
-    failurePatterns: 'AUTO_EFFORT_CONTROL_FAILURE_PATTERNS',
-    failureTools: 'AUTO_EFFORT_CONTROL_FAILURE_TOOLS',
-    userEffortPins: 'AUTO_EFFORT_CONTROL_USER_EFFORT_PINS',
-    models: 'AUTO_EFFORT_CONTROL_MODELS',
-    unknownModels: 'AUTO_EFFORT_CONTROL_UNKNOWN_MODELS',
-    probationSwitches: 'AUTO_EFFORT_CONTROL_PROBATION_SWITCHES',
-    canaryThreshold: 'AUTO_EFFORT_CONTROL_CANARY_THRESHOLD',
-    cacheTtlSeconds: 'AUTO_EFFORT_CONTROL_CACHE_TTL_SECONDS',
-    statusLine: 'AUTO_EFFORT_CONTROL_STATUS_LINE',
-    stateFile: 'AUTO_EFFORT_CONTROL_STATE_FILE',
-    lowerOnPass: 'AUTO_EFFORT_CONTROL_LOWER_ON_PASS',
-    testCommandPatterns: 'AUTO_EFFORT_CONTROL_TEST_COMMAND_PATTERNS',
+    floor: 'AUTO_EFFORT_FLOOR',
+    ceiling: 'AUTO_EFFORT_CEILING',
+    planLevel: 'AUTO_EFFORT_PLAN_LEVEL',
+    hintPatterns: 'AUTO_EFFORT_HINT_PATTERNS',
+    planUpshiftPatterns: 'AUTO_EFFORT_PLAN_UPSHIFT_PATTERNS',
+    planUpshiftChars: 'AUTO_EFFORT_PLAN_UPSHIFT_CHARS',
+    turnReminder: 'AUTO_EFFORT_TURN_REMINDER',
+    escalateAfterFailures: 'AUTO_EFFORT_ESCALATE_AFTER_FAILURES',
+    failurePatterns: 'AUTO_EFFORT_FAILURE_PATTERNS',
+    failureTools: 'AUTO_EFFORT_FAILURE_TOOLS',
+    userEffortPins: 'AUTO_EFFORT_USER_EFFORT_PINS',
+    models: 'AUTO_EFFORT_MODELS',
+    unknownModels: 'AUTO_EFFORT_UNKNOWN_MODELS',
+    probationSwitches: 'AUTO_EFFORT_PROBATION_SWITCHES',
+    canaryThreshold: 'AUTO_EFFORT_CANARY_THRESHOLD',
+    cacheTtlSeconds: 'AUTO_EFFORT_CACHE_TTL_SECONDS',
+    statusLine: 'AUTO_EFFORT_STATUS_LINE',
+    stateFile: 'AUTO_EFFORT_STATE_FILE',
+    lowerOnPass: 'AUTO_EFFORT_LOWER_ON_PASS',
+    testCommandPatterns: 'AUTO_EFFORT_TEST_COMMAND_PATTERNS',
   } as const;
 
   it('names one variable per option', () => {
@@ -219,7 +219,7 @@ describe('resolveSettings with environment variables', () => {
     expect([settings.floor, settings.ceiling]).toEqual(['medium', 'xhigh']);
     expect(errors).toHaveLength(1);
     expect(errors[0]).toContain('"floor"');
-    expect(errors[0]).toContain('"floor" ("high", from AUTO_EFFORT_CONTROL_FLOOR)');
+    expect(errors[0]).toContain('"floor" ("high", from AUTO_EFFORT_FLOOR)');
     expect(errors[0]).toContain('"ceiling" ("low")');
   });
 
@@ -231,7 +231,7 @@ describe('resolveSettings with environment variables', () => {
 
   it('quotes a short piece of a rejected variable, never the whole value', () => {
     const { errors } = resolveSettings({}, { planLevel: 'x'.repeat(5000) });
-    expect(errors[0]).toContain('AUTO_EFFORT_CONTROL_PLAN_LEVEL');
+    expect(errors[0]).toContain('AUTO_EFFORT_PLAN_LEVEL');
     expect(errors[0]!.length).toBeLessThan(400);
   });
 });
@@ -314,5 +314,5 @@ it('parses hintPatterns and reports a bad regex by option or environment name', 
     expect(result.errors.join()).toContain('hintPatterns');
     expect(result.settings.hintPatterns).toEqual(DEFAULTS.hintPatterns);
   }
-  expect(resolveSettings({}, { hintPatterns: '["["]' }).errors.join()).toContain('AUTO_EFFORT_CONTROL_HINT_PATTERNS');
+  expect(resolveSettings({}, { hintPatterns: '["["]' }).errors.join()).toContain('AUTO_EFFORT_HINT_PATTERNS');
 });

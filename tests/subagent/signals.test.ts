@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { DEFAULTS } from '../../plugins/auto-effort-control/src/subagent/settings.ts';
-import { isRead, isTestCommand, isTestRun, returnLine, testOutcome, type ReturnWords } from '../../plugins/auto-effort-control/src/subagent/signals.ts';
+import { DEFAULTS } from '../../plugins/auto-effort/src/subagent/settings.ts';
+import { isRead, isTestCommand, isTestRun, returnLine, testOutcome, type ReturnWords } from '../../plugins/auto-effort/src/subagent/signals.ts';
 
 const patterns = (list: string[]) => list.map((source) => new RegExp(source));
 const TEST = patterns(DEFAULTS.testCommandPatterns);

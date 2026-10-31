@@ -53,9 +53,9 @@ jobs:
       - name: The tag is new
         id: tag
         run: |
-          v="$(node -p 'require("./plugins/auto-effort-control/.claude-plugin/plugin.json").version')"
+          v="$(node -p 'require("./plugins/auto-effort/.claude-plugin/plugin.json").version')"
           case "$v" in *-*) echo "::error::$v is a pre-release; a merge into main publishes only a release version"; exit 1 ;; esac
-          tag="auto-effort-control--v$v"
+          tag="auto-effort--v$v"
           rc=0
           git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null || rc=$?
           if [ "$rc" -eq 0 ]; then echo "::error::$tag already exists"; exit 1; fi
@@ -69,7 +69,7 @@ jobs:
           v_re=$(printf '%s' "$v" | sed 's/[.]/[.]/g')
           awk -v v="$v_re" '$0 ~ "^## \\[" v "\\]" {f=1; next} /^## \[/ || /^\[/ {f=0} f' CHANGELOG.md > notes.md
           test -s notes.md
-      - run: gh release create "$tag" --target "${{ github.event.pull_request.merge_commit_sha }}" --title "auto-effort-control $v" --notes-file notes.md
+      - run: gh release create "$tag" --target "${{ github.event.pull_request.merge_commit_sha }}" --title "auto-effort $v" --notes-file notes.md
         env:
           GH_TOKEN: ${{ github.token }}
           tag: ${{ steps.tag.outputs.tag }}

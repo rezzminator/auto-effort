@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { announceLine, autoText, BUTTON_AUTO, BUTTON_DOWN, BUTTON_UP, boundText, buttonText, MAIN_REFUSED, mainEffortToolOf, REFUSED, whyChild, whyRedispatch } from '../../plugins/auto-effort-control/src/subagent/text.ts';
+import { announceLine, autoText, BUTTON_AUTO, BUTTON_DOWN, BUTTON_UP, boundText, buttonText, MAIN_REFUSED, mainEffortToolOf, REFUSED, whyChild, whyRedispatch } from '../../plugins/auto-effort/src/subagent/text.ts';
 
 describe('button texts', () => {
   it('R-12: the three descriptions are the spec text, character for character', () => {
@@ -28,7 +28,7 @@ describe('button texts', () => {
   });
 
   it("main chat: the refusal names the main chat's own effort tool with a level or auto, else the user's /effort", () => {
-    expect(MAIN_REFUSED('mcp__auto-effort-control__set_effort')).toBe('Not available here: these effort buttons do not steer the main chat. Your effort has its own control, mcp__auto-effort-control__set_effort: call it with a level, or auto. Nothing changed.');
+    expect(MAIN_REFUSED('mcp__auto-effort__set_effort')).toBe('Not available here: these effort buttons do not steer the main chat. Your effort has its own control, mcp__auto-effort__set_effort: call it with a level, or auto. Nothing changed.');
     expect(MAIN_REFUSED(undefined)).toBe('Not available here: these effort buttons do not steer the main chat, and no tool here sets its effort; the user sets it with /effort. Nothing changed.');
   });
 
@@ -50,7 +50,7 @@ describe('button texts', () => {
 
 describe('announcements', () => {
   it('names the new level and why', () => {
-    expect(announceLine('high', '2nd failing test run in a row')).toBe('auto-effort-control: your reasoning effort is now high — 2nd failing test run in a row.');
+    expect(announceLine('high', '2nd failing test run in a row')).toBe('auto-effort: your reasoning effort is now high — 2nd failing test run in a row.');
     expect(whyChild('lander', 'BLOCKED')).toBe('lander returned BLOCKED');
     expect(whyRedispatch('builder')).toBe('builder sent back a red result');
   });

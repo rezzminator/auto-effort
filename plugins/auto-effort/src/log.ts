@@ -4,7 +4,7 @@
 /** `~/` expanded to the home directory; a path that does not start with it is returned as it is. */
 export function expandHome(path: string, home: string | undefined): string {
   if (path === '~' || path.startsWith('~/')) {
-    if (home === undefined || home === '') throw new Error(`auto-effort-control: the path ${path} needs the home directory, which is not set`);
+    if (home === undefined || home === '') throw new Error(`auto-effort: the path ${path} needs the home directory, which is not set`);
     return home.replace(/\/+$/, '') + path.slice(1);
   }
   return path;
@@ -16,7 +16,7 @@ export function expandHome(path: string, home: string | undefined): string {
  * (`decisions.<session>.2.jsonl`).
  */
 export function sessionLogPath(base: string, sessionId: string, segment = 1): string {
-  if (sessionId === '') throw new Error('auto-effort-control: empty session id; cannot name the log file');
+  if (sessionId === '') throw new Error('auto-effort: empty session id; cannot name the log file');
   const safe = sessionId.replace(/[^A-Za-z0-9_-]/g, '_');
   const part = segment > 1 ? `${safe}.${segment}` : safe;
   const slash = base.lastIndexOf('/');
