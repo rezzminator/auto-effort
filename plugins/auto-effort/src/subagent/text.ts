@@ -58,7 +58,7 @@ export function autoText(home: string, from: string, floor: string, ceiling: str
 
 /** The line a steered agent reads after its next tool result once its level changed. */
 export function announceLine(level: string, why: string): string {
-  return `auto-effort-control: your reasoning effort is now ${level} — ${why}.`;
+  return `auto-effort: your reasoning effort is now ${level} — ${why}.`;
 }
 
 export const WHY_FAIL1 = 'a failing test run';

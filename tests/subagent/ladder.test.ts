@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { clamp, isLevel, step } from '../../plugins/auto-effort-control/src/subagent/ladder.ts';
+import { clamp, isLevel, step } from '../../plugins/auto-effort/src/subagent/ladder.ts';
 
 describe('isLevel', () => {
   it('accepts the five levels and nothing else', () => {

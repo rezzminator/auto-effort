@@ -1,4 +1,4 @@
-// Every knob is a plugin option, and each is also read from the environment variable AUTO_EFFORT_CONTROL_{OPTION}.
+// Every knob is a plugin option, and each is also read from the environment variable AUTO_EFFORT_{OPTION}.
 // Precedence: the variable, then the plugin option, then the default. Defaults agree in three places: here,
 // plugin.json's userConfig and the README table.
 // A bad value is reported by key (or variable name) and value, and the default applies.
@@ -77,8 +77,8 @@ export const DEFAULTS: Settings = {
 
 export const SETTING_KEYS = Object.keys(DEFAULTS) as Array<keyof Settings>;
 
-/** The environment variable that sets an option: `AUTO_EFFORT_CONTROL_` and the option name in upper snake case. */
-export const envName = (key: keyof Settings): string => `AUTO_EFFORT_CONTROL_${key.replace(/[A-Z]/g, (letter) => `_${letter}`).toUpperCase()}`;
+/** The environment variable that sets an option: `AUTO_EFFORT_` and the option name in upper snake case. */
+export const envName = (key: keyof Settings): string => `AUTO_EFFORT_${key.replace(/[A-Z]/g, (letter) => `_${letter}`).toUpperCase()}`;
 
 /** The variables' text by option; an unset variable has no entry or `undefined`. */
 export type OptionEnv = Readonly<Partial<Record<keyof Settings, string | undefined>>>;
@@ -207,11 +207,11 @@ function parseEnv(key: keyof Settings, text: string): Parsed<unknown> {
 }
 
 function errorLine(key: string, raw: unknown, why: string): string {
-  return `auto-effort-control: option "${key}" is ${quote(raw)}, ${why}; using the default ${JSON.stringify(DEFAULTS[key as keyof Settings])}`;
+  return `auto-effort: option "${key}" is ${quote(raw)}, ${why}; using the default ${JSON.stringify(DEFAULTS[key as keyof Settings])}`;
 }
 
 function envErrorLine(key: keyof Settings, text: string, why: string): string {
-  return `auto-effort-control: environment variable ${envName(key)} is ${quote(text)}, ${why}; using the default ${JSON.stringify(DEFAULTS[key])}`;
+  return `auto-effort: environment variable ${envName(key)} is ${quote(text)}, ${why}; using the default ${JSON.stringify(DEFAULTS[key])}`;
 }
 
 /**
@@ -241,7 +241,7 @@ export function resolveSettings(raw: Readonly<Record<string, unknown>>, env: Opt
   const out = settings as Settings;
   if (rank(out.floor) > rank(out.ceiling)) {
     const side = (key: 'floor' | 'ceiling') => (fromEnv.has(key) ? `environment variable ${envName(key)}` : `option "${key}"`);
-    errors.push(`auto-effort-control: ${side('floor')} (${JSON.stringify(out.floor)}) is above ${side('ceiling')} (${JSON.stringify(out.ceiling)}); using the defaults ${JSON.stringify(DEFAULTS.floor)} and ${JSON.stringify(DEFAULTS.ceiling)}`);
+    errors.push(`auto-effort: ${side('floor')} (${JSON.stringify(out.floor)}) is above ${side('ceiling')} (${JSON.stringify(out.ceiling)}); using the defaults ${JSON.stringify(DEFAULTS.floor)} and ${JSON.stringify(DEFAULTS.ceiling)}`);
     out.floor = DEFAULTS.floor;
     out.ceiling = DEFAULTS.ceiling;
   }

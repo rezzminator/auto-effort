@@ -5,9 +5,10 @@ import { parseCommand, statusText, USAGE } from '../src/command.ts';
 import { Controller, readSessionState, type Row, type StepPlan } from '../src/controller.ts';
 import { EMPTY_PERSISTED, mergeModels, readPersisted } from '../src/gate.ts';
 import { levelsWithin } from '../src/levels.ts';
+import { formerDirs, MOVE_SCRIPT } from '../src/former.ts';
 import { expandHome, fillSegments, SEGMENT_ROWS, sessionLogPath } from '../src/log.ts';
 import { normalizeModel } from '../src/model.ts';
-import { envName, PLUGIN, resolveSettings, SETTING_KEYS, type EnvValues } from '../src/settings.ts';
+import { envName, FORMER, PLUGIN, resolveSettings, SETTING_KEYS, type EnvValues } from '../src/settings.ts';
 import { KEEPER_ARGV, stateText, type EffortState } from '../src/state.ts';
 import { quote, toolDescription } from '../src/text.ts';
 import { levelRow, onScreen, pluginLogDir, PluginLogQueue, type PluginLogLevel } from '../src/plugin-log.ts';
@@ -90,7 +91,7 @@ function plog($: EngineInterface, st: State, level: PluginLogLevel, event: strin
 }
 
 function note($: EngineInterface, st: State, level: PluginLogLevel, event: string, where: string, what: string, error: unknown, then: string): void {
-  const text = `auto-effort-control: ${what} failed: ${message(error)}; ${then}`;
+  const text = `auto-effort: ${what} failed: ${message(error)}; ${then}`;
   plog($, st, level, event, text, where, { error: message(error) });
 }
 
@@ -148,7 +149,7 @@ async function flush($: EngineInterface, st: State): Promise<void> {
         newest.text = part.text;
       }
     } catch (error) {
-      note($, st, 'error', 'decision-log-write-failed', 'hooks/auto-effort-control.ts#flush', 'writing the decision log', error, `${left} rows were not kept`);
+      note($, st, 'error', 'decision-log-write-failed', 'hooks/auto-effort.ts#flush', 'writing the decision log', error, `${left} rows were not kept`);
     }
   }
 }
@@ -164,7 +165,7 @@ function notice($: EngineInterface, st: State, text: string): void {
   try {
     $.ui.toast(text);
   } catch (error) {
-    note($, st, 'warning', 'toast-failed', 'hooks/auto-effort-control.ts#notice', 'showing a notice', error, `the notice was: ${text}`);
+    note($, st, 'warning', 'toast-failed', 'hooks/auto-effort.ts#notice', 'showing a notice', error, `the notice was: ${text}`);
   }
 }
 
@@ -230,8 +231,8 @@ async function startKeeper($: EngineInterface, st: State): Promise<void> {
       st.keeperEnded = true;
       try {
         // SIGTERM is the host unloading the plugin (a session's end, a reload, a disable): the expected end, not a fault.
-        if (stopped) plog($, st, 'info', 'state-keeper-stopped', 'auto-effort-control: the state file keeper was stopped by the host (SIGTERM); a status line shows the state stale until the next prompt starts another', 'hooks/auto-effort-control.ts#startKeeper');
-        else note($, st, 'warning', 'state-keeper-ended', 'hooks/auto-effort-control.ts#startKeeper', 'keeping the state file keeper', new Error(`the state file keeper ended: ${why}`), 'a status line shows the state stale until the next prompt starts another');
+        if (stopped) plog($, st, 'info', 'state-keeper-stopped', 'auto-effort: the state file keeper was stopped by the host (SIGTERM); a status line shows the state stale until the next prompt starts another', 'hooks/auto-effort.ts#startKeeper');
+        else note($, st, 'warning', 'state-keeper-ended', 'hooks/auto-effort.ts#startKeeper', 'keeping the state file keeper', new Error(`the state file keeper ended: ${why}`), 'a status line shows the state stale until the next prompt starts another');
       } catch {
         // A module the host unloaded has no screen left: its keeper ending is the unload itself.
       }
@@ -241,9 +242,9 @@ async function startKeeper($: EngineInterface, st: State): Promise<void> {
     if (st.keeperFailed) return;
     st.keeperFailed = true;
     try {
-      note($, st, 'warning', 'state-keeper-failed', 'hooks/auto-effort-control.ts#startKeeper', 'starting the state file keeper', error, 'the state file names no keeper, so a status line shows it stale; the next prompt tries again');
+      note($, st, 'warning', 'state-keeper-failed', 'hooks/auto-effort.ts#startKeeper', 'starting the state file keeper', error, 'the state file names no keeper, so a status line shows it stale; the next prompt tries again');
     } catch (screenError) {
-      plog($, st, 'warning', 'state-keeper-failed', `auto-effort-control: showing the state file keeper failure failed: ${message(screenError)}; the failure was: ${message(error)}`, 'hooks/auto-effort-control.ts#startKeeper');
+      plog($, st, 'warning', 'state-keeper-failed', `auto-effort: showing the state file keeper failure failed: ${message(screenError)}; the failure was: ${message(error)}`, 'hooks/auto-effort.ts#startKeeper');
     }
   }
 }
@@ -276,9 +277,9 @@ async function retryRetires($: EngineInterface, st: State, keep: string): Promis
       if (held.said) continue;
       held.said = true;
       try {
-        note($, st, 'warning', 'state-file-retire-failed', 'hooks/auto-effort-control.ts#retireState', `retiring the state file ${path}`, error, 'a status line reading it trusts it until a later write retires it');
+        note($, st, 'warning', 'state-file-retire-failed', 'hooks/auto-effort.ts#retireState', `retiring the state file ${path}`, error, 'a status line reading it trusts it until a later write retires it');
       } catch (screenError) {
-        plog($, st, 'warning', 'state-file-retire-failed', `auto-effort-control: showing the state file retire failure failed: ${message(screenError)}; the failure was: ${message(error)}`, 'hooks/auto-effort-control.ts#retireState');
+        plog($, st, 'warning', 'state-file-retire-failed', `auto-effort: showing the state file retire failure failed: ${message(screenError)}; the failure was: ${message(error)}`, 'hooks/auto-effort.ts#retireState');
       }
     }
   }
@@ -292,6 +293,7 @@ async function writeState($: EngineInterface, st: State, state: EffortState): Pr
   const file = st.ctl.settings.stateFile;
   let key = `${file}\n${JSON.stringify(state)}`;
   try {
+    await SubSetupPlugin(st.rt, $);
     let path = '';
     if (file !== '') {
       const id = st.sessionId ?? (st.sessionId = await $.session.id());
@@ -316,9 +318,9 @@ async function writeState($: EngineInterface, st: State, state: EffortState): Pr
     if (st.stateFailed === key) return;
     st.stateFailed = key;
     try {
-      note($, st, 'warning', 'state-file-write-failed', 'hooks/auto-effort-control.ts#writeState', 'writing the state file', error, 'a status line reading it shows the state it held before');
+      note($, st, 'warning', 'state-file-write-failed', 'hooks/auto-effort.ts#writeState', 'writing the state file', error, 'a status line reading it shows the state it held before');
     } catch (screenError) {
-      plog($, st, 'warning', 'state-file-write-failed', `auto-effort-control: showing the state file failure failed: ${message(screenError)}; the failure was: ${message(error)}`, 'hooks/auto-effort-control.ts#writeState');
+      plog($, st, 'warning', 'state-file-write-failed', `auto-effort: showing the state file failure failed: ${message(screenError)}; the failure was: ${message(error)}`, 'hooks/auto-effort.ts#writeState');
     }
   }
 }
@@ -340,7 +342,7 @@ function reportErrors($: EngineInterface, st: State, errors: string[]): void {
   const key = errors.join('\n');
   if (key === st.errorKey) return;
   for (const line of errors) {
-    plog($, st, 'error', 'option-error', line, 'hooks/auto-effort-control.ts#reportErrors');
+    plog($, st, 'error', 'option-error', line, 'hooks/auto-effort.ts#reportErrors');
   }
   st.errorKey = key;
   record($, st, errors.map((line) => ({ event: 'option-error', message: line })));
@@ -376,18 +378,18 @@ async function restoreSession($: EngineInterface, st: State): Promise<void> {
   st.restored = st.sessionId;
   st.savedSession = '';
   try {
-    const { value } = await $.state.get({ plugin: 'auto-effort-control', key: 'session', id: st.sessionId });
+    const { value } = await $.state.get({ plugin: 'auto-effort', key: 'session', id: st.sessionId });
     if (value !== undefined) {
       const saved = readSessionState(value);
       if (saved === undefined) {
-        note($, st, 'error', 'saved-switch-unreadable', 'hooks/auto-effort-control.ts#restoreSession', 'reading the saved on/off, the pin and the set_effort level', new Error(`${quote(value)} is not in the expected form`), 'this session is on and unpinned, with no set_effort level');
+        note($, st, 'error', 'saved-switch-unreadable', 'hooks/auto-effort.ts#restoreSession', 'reading the saved on/off, the pin and the set_effort level', new Error(`${quote(value)} is not in the expected form`), 'this session is on and unpinned, with no set_effort level');
       } else {
         st.ctl.restoreSession(saved);
         st.savedSession = JSON.stringify(st.ctl.sessionState());
       }
     }
   } catch (error) {
-    note($, st, 'error', 'saved-switch-unreadable', 'hooks/auto-effort-control.ts#restoreSession', 'reading the saved on/off, the pin and the set_effort level', error, 'this session is on and unpinned, with no set_effort level');
+    note($, st, 'error', 'saved-switch-unreadable', 'hooks/auto-effort.ts#restoreSession', 'reading the saved on/off, the pin and the set_effort level', error, 'this session is on and unpinned, with no set_effort level');
   }
 }
 
@@ -398,7 +400,7 @@ async function saveSession($: EngineInterface, st: State): Promise<void> {
   if (text === st.savedSession) return;
   let failure: unknown;
   try {
-    const result = await $.state.set({ plugin: 'auto-effort-control', key: 'session', id: st.sessionId }, now);
+    const result = await $.state.set({ plugin: 'auto-effort', key: 'session', id: st.sessionId }, now);
     if (result.isSet) {
       st.savedSession = text;
       st.saveFailed = '';
@@ -411,19 +413,19 @@ async function saveSession($: EngineInterface, st: State): Promise<void> {
   // The save is tried again at each request; it is said once for each state that cannot be saved.
   if (st.saveFailed === text) return;
   st.saveFailed = text;
-  note($, st, 'error', 'saved-switch-unsaved', 'hooks/auto-effort-control.ts#saveSession', 'saving the on/off, the pin and the set_effort level', failure, 'they hold in this session, but a reload would lose them');
+  note($, st, 'error', 'saved-switch-unsaved', 'hooks/auto-effort.ts#saveSession', 'saving the on/off, the pin and the set_effort level', failure, 'they hold in this session, but a reload would lose them');
 }
 
 async function start($: EngineInterface, st: State): Promise<void> {
   try {
     st.sessionId ??= await $.session.id();
   } catch (error) {
-    note($, st, 'error', 'session-id-unreadable', 'hooks/auto-effort-control.ts#start', 'reading the session id', error, 'the log file is named at the first row');
+    note($, st, 'error', 'session-id-unreadable', 'hooks/auto-effort.ts#start', 'reading the session id', error, 'the log file is named at the first row');
   }
   try {
     st.ctl.loadPersisted(readPersisted(await $.store.get(STORE_KEY)));
   } catch (error) {
-    note($, st, 'error', 'saved-marks-unreadable', 'hooks/auto-effort-control.ts#start', 'reading the saved model marks', error, 'starting with none');
+    note($, st, 'error', 'saved-marks-unreadable', 'hooks/auto-effort.ts#start', 'reading the saved model marks', error, 'starting with none');
     st.ctl.loadPersisted(EMPTY_PERSISTED);
   }
   await restoreSession($, st);
@@ -431,20 +433,20 @@ async function start($: EngineInterface, st: State): Promise<void> {
   try {
     await ensureTool($, st);
   } catch (error) {
-    note($, st, 'error', 'tool-register-failed', 'hooks/auto-effort-control.ts#start', 'registering the set_effort tool', error, 'the turn reminder and the planning level still apply; the next prompt tries again');
+    note($, st, 'error', 'tool-register-failed', 'hooks/auto-effort.ts#start', 'registering the set_effort tool', error, 'the turn reminder and the planning level still apply; the next prompt tries again');
   }
   // The effort line moved to the state file: a line an older version pinned to the status area goes.
   try {
     $.ui.status(undefined);
   } catch (error) {
-    note($, st, 'warning', 'status-failed', 'hooks/auto-effort-control.ts#start', 'clearing the status line', error, 'a line an older version pinned may stay');
+    note($, st, 'warning', 'status-failed', 'hooks/auto-effort.ts#start', 'clearing the status line', error, 'a line an older version pinned may stay');
   }
   await ensureKeeper($, st);
   publish($, st);
   try {
     await $.command.register({ name: PLUGIN, description: 'Show or change automatic reasoning effort: status, on, off, set <key> <value>, clear [model]' });
   } catch (error) {
-    note($, st, 'error', 'command-register-failed', 'hooks/auto-effort-control.ts#start', `registering the /${PLUGIN} command`, error, 'automatic effort works without it');
+    note($, st, 'error', 'command-register-failed', 'hooks/auto-effort.ts#start', `registering the /${PLUGIN} command`, error, 'automatic effort works without it');
   }
 }
 
@@ -465,7 +467,7 @@ async function followSession($: EngineInterface, st: State): Promise<void> {
   try {
     id = await $.session.id();
   } catch (error) {
-    note($, st, 'error', 'session-id-unreadable', 'hooks/auto-effort-control.ts#followSession', 'reading the session id', error, 'this stays with the session it had');
+    note($, st, 'error', 'session-id-unreadable', 'hooks/auto-effort.ts#followSession', 'reading the session id', error, 'this stays with the session it had');
     return;
   }
   if (st.sessionId !== undefined && id !== st.sessionId) {
@@ -497,7 +499,7 @@ async function saveMarks($: EngineInterface, st: State, changed: readonly string
     await syncMarks($, st, changed);
     return true;
   } catch (error) {
-    note($, st, 'error', 'marks-failed', 'hooks/auto-effort-control.ts#saveMarks', 'reading or saving the model marks', error, 'they hold in this session, and the next prompt tries again');
+    note($, st, 'error', 'marks-failed', 'hooks/auto-effort.ts#saveMarks', 'reading or saving the model marks', error, 'they hold in this session, and the next prompt tries again');
     return false;
   }
 }
@@ -540,7 +542,7 @@ async function refresh($: EngineInterface, st: State): Promise<void> {
     await saveMarks($, st, []);
     await ensureTool($, st);
   } catch (error) {
-    note($, st, 'error', 'options-unreadable', 'hooks/auto-effort-control.ts#refresh', 'reading the plugin options', error, 'the settings of the last prompt stay');
+    note($, st, 'error', 'options-unreadable', 'hooks/auto-effort.ts#refresh', 'reading the plugin options', error, 'the settings of the last prompt stay');
   }
 }
 
@@ -553,7 +555,7 @@ async function finishStep($: EngineInterface, st: State, raw: unknown): Promise<
     if (end.model !== undefined) await saveMarks($, st, [end.model]);
   } catch (error) {
     st.ctl.failStep();
-    note($, st, 'error', 'judge-failed', 'hooks/auto-effort-control.ts#finishStep', 'judging the request', error, 'the next request is not compared with it');
+    note($, st, 'error', 'judge-failed', 'hooks/auto-effort.ts#finishStep', 'judging the request', error, 'the next request is not compared with it');
   }
 }
 
@@ -566,7 +568,7 @@ async function answerSetEffort($: EngineInterface, st: State, e: Record<string, 
     await saveSession($, st);
     return { result: answer.text };
   } catch (error) {
-    note($, st, 'error', 'set-effort-failed', 'hooks/auto-effort-control.ts#answerSetEffort', 'applying set_effort', error, 'the effort stays as it was');
+    note($, st, 'error', 'set-effort-failed', 'hooks/auto-effort.ts#answerSetEffort', 'applying set_effort', error, 'the effort stays as it was');
     return { result: 'Not applied: the effort stays as it was.' };
   }
 }
@@ -581,7 +583,7 @@ async function runCommand($: EngineInterface, st: State, args: string): Promise<
       st.ctl.setEnabled(command.kind === 'on');
       await saveSession($, st);
       publish($, st);
-      return `auto-effort-control is ${command.kind} for this session.`;
+      return `auto-effort is ${command.kind} for this session.`;
     case 'clear': {
       const stored = readPersisted(await $.store.get(STORE_KEY));
       const mine = st.ctl.persisted;
@@ -611,7 +613,7 @@ async function runCommand($: EngineInterface, st: State, args: string): Promise<
       publish($, st);
       const now = JSON.stringify(applied.settings[command.key]);
       if (applied.fromEnv.includes(command.key)) return `${command.key} is saved as ${JSON.stringify(typed)}, but ${envName(command.key)} is set and still applies: ${command.key} stays ${now}.`;
-      if (now !== JSON.stringify(typed)) return `${command.key} is saved as ${JSON.stringify(typed)}, but ${now} is in effect: see the option errors in /auto-effort-control status.`;
+      if (now !== JSON.stringify(typed)) return `${command.key} is saved as ${JSON.stringify(typed)}, but ${now} is in effect: see the option errors in /auto-effort status.`;
       return `${command.key} is now ${JSON.stringify(typed)}.`;
     }
     case 'status': {
@@ -661,16 +663,16 @@ function SubMessage(error: unknown): string {
 // Pins live in host state, so a plugin reload keeps them; one value per agent id.
 async function SubReadPin(rt: SubRuntime, $: EngineInterface, agentId: string): Promise<SubPin | undefined> {
   try {
-    const { value } = await $.state.get({ plugin: 'auto-effort-control', key: 'pin', id: agentId });
+    const { value } = await $.state.get({ plugin: 'auto-effort', key: 'pin', id: agentId });
     return value ?? undefined;
   } catch (error) {
-    SubNotice(rt, $, 'error', 'pin-unreadable', `auto-effort-control: reading sub-agent ${agentId}'s pin failed: ${SubMessage(error)}; its request goes at the effort it carries`, 'readPin');
+    SubNotice(rt, $, 'error', 'pin-unreadable', `auto-effort: reading sub-agent ${agentId}'s pin failed: ${SubMessage(error)}; its request goes at the effort it carries`, 'readPin');
     throw error;
   }
 }
 
 async function SubWritePin($: EngineInterface, agentId: string, pin: SubPin): Promise<void> {
-  await $.state.set({ plugin: 'auto-effort-control', key: 'pin', id: agentId }, pin);
+  await $.state.set({ plugin: 'auto-effort', key: 'pin', id: agentId }, pin);
 }
 
 type SubSpawns = {
@@ -710,7 +712,7 @@ async function SubAwaitPin(rt: SubRuntime, $: EngineInterface, spawns: SubSpawns
   const deadline = $.clock.sleep(SubSPAWN_WAIT_MS, { signal: waiting.signal }).then(
     () => 'over' as const,
     (error: unknown) => {
-      if (!waiting.signal.aborted) SubNotice(rt, $, 'error', 'spawn-wait-failed', `auto-effort-control: sub-agent ${agentId}'s wait for its spawn failed: ${SubMessage(error)}; it goes on without waiting`, 'awaitPin');
+      if (!waiting.signal.aborted) SubNotice(rt, $, 'error', 'spawn-wait-failed', `auto-effort: sub-agent ${agentId}'s wait for its spawn failed: ${SubMessage(error)}; it goes on without waiting`, 'awaitPin');
       return 'over' as const;
     },
   );
@@ -776,6 +778,7 @@ function SubSetupPlugin(rt: SubRuntime, $: EngineInterface): Promise<string | un
     try { configured = await $.env.get('PLUGIN_LOG_DIR'); } catch (error) { dirError = { cause: error }; }
     rt.pluginDir = pluginLogDir(configured, home, PLUGIN);
     rt.pluginQueue = new PluginLogQueue(rt.pluginDir, PLUGIN);
+    await SubMoveFormerDirs(rt, $, configured, home);
     if (rt.pluginDir !== undefined) {
       // The decision log's $.fs.write would create the directory with the host's modes; the plugin log directory is 0700.
       let why: string | undefined;
@@ -783,14 +786,34 @@ function SubSetupPlugin(rt: SubRuntime, $: EngineInterface): Promise<string | un
         const made = await $.process.run(['/bin/sh', '-c', 'umask 077 && mkdir -p -- "$1"', 'plugin-log-dir', rt.pluginDir], { timeoutMs: PLUGIN_LOG_TIMEOUT_MS });
         if (made.exitCode !== 0) why = `mkdir exited ${String(made.exitCode)}: ${made.stderr.trim()}`;
       } catch (error) { why = SubMessage(error); }
-      if (why !== undefined) SubNotice(rt, $, 'warning', 'plugin-log-dir-failed', `auto-effort-control: creating the plugin log directory ${rt.pluginDir} failed: ${why}; the decision log may create it with the host's modes`, 'start');
+      if (why !== undefined) SubNotice(rt, $, 'warning', 'plugin-log-dir-failed', `auto-effort: creating the plugin log directory ${rt.pluginDir} failed: ${why}; the decision log may create it with the host's modes`, 'start');
     }
-    if (homeError !== undefined) SubNotice(rt, $, 'error', 'home-missing', `auto-effort-control: reading HOME failed: ${SubMessage(homeError.cause)}; skipping ~/.claude/agents, and the logs need PLUGIN_LOG_DIR`, 'start');
-    if (dirError !== undefined) SubNotice(rt, $, 'warning', 'plugin-log-dir-unreadable', `auto-effort-control: reading PLUGIN_LOG_DIR failed: ${SubMessage(dirError.cause)}; using the HOME fallback when available`, 'start');
-    if (rt.pluginDir === undefined && homeError === undefined && dirError === undefined) SubNotice(rt, $, 'error', 'decision-log-off', 'auto-effort-control: no PLUGIN_LOG_DIR and no HOME; the decision log is off', 'start');
+    if (homeError !== undefined) SubNotice(rt, $, 'error', 'home-missing', `auto-effort: reading HOME failed: ${SubMessage(homeError.cause)}; skipping ~/.claude/agents, and the logs need PLUGIN_LOG_DIR`, 'start');
+    if (dirError !== undefined) SubNotice(rt, $, 'warning', 'plugin-log-dir-unreadable', `auto-effort: reading PLUGIN_LOG_DIR failed: ${SubMessage(dirError.cause)}; using the HOME fallback when available`, 'start');
+    if (rt.pluginDir === undefined && homeError === undefined && dirError === undefined) SubNotice(rt, $, 'error', 'decision-log-off', 'auto-effort: no PLUGIN_LOG_DIR and no HOME; the decision log is off', 'start');
     return home;
   })();
   return rt.pluginSetup;
+}
+
+// The state and log directories under the former name move to this name before anything writes under it.
+async function SubMoveFormerDirs(rt: SubRuntime, $: EngineInterface, configured: string | undefined, home: string | undefined): Promise<void> {
+  const moves: string[] = [];
+  for (const [from, to] of formerDirs(configured, home)) {
+    try { if (await $.fs.exists(from)) moves.push(from, to); }
+    catch (error) { SubNotice(rt, $, 'error', 'former-dir-unreadable', `auto-effort: checking ${from}, the ${FORMER} directory, failed: ${SubMessage(error)}; it stays where it is`, 'moveFormerDirs'); }
+  }
+  if (moves.length === 0) return;
+  let why: string | undefined;
+  try {
+    const moved = await $.process.run(['/bin/sh', '-c', MOVE_SCRIPT, 'move-former-dirs', ...moves], { timeoutMs: PLUGIN_LOG_TIMEOUT_MS });
+    for (const line of moved.stdout.split('\n').filter((text) => text !== '')) {
+      if (line.startsWith('kept ')) SubNotice(rt, $, 'warning', 'former-dir-kept', `auto-effort: ${line}, so the ${FORMER} directory stays where it is`, 'moveFormerDirs');
+      else SubNotice(rt, $, 'info', 'former-dir-moved', `auto-effort: ${line}, from the former name ${FORMER}`, 'moveFormerDirs');
+    }
+    if (moved.exitCode !== 0) why = `exited ${String(moved.exitCode)}: ${moved.stderr.trim()}`;
+  } catch (error) { why = SubMessage(error); }
+  if (why !== undefined) SubNotice(rt, $, 'error', 'former-dir-move-failed', `auto-effort: moving the ${FORMER} directories ${moves.join(' ')} failed: ${why}; their logs and state stay there`, 'moveFormerDirs');
 }
 
 /** The decision log's base name in the plugin log directory; each scope and session writes its own file beside it. */
@@ -818,7 +841,7 @@ function levelLog(rt: SubRuntime, $: EngineInterface, level: PluginLogLevel, eve
     const session = known ?? await $.session.id().catch((error) => {
       if (!rt.pluginSessionFailed) {
         rt.pluginSessionFailed = true;
-        SubNotice(rt, $, 'warning', 'session-id-unreadable', `auto-effort-control: reading the session id for plugin logs failed: ${SubMessage(error)}; rows omit the session`, 'plog');
+        SubNotice(rt, $, 'warning', 'session-id-unreadable', `auto-effort: reading the session id for plugin logs failed: ${SubMessage(error)}; rows omit the session`, 'plog');
       }
       return undefined;
     });
@@ -828,14 +851,14 @@ function levelLog(rt: SubRuntime, $: EngineInterface, level: PluginLogLevel, eve
   }).catch((error) => {
     if (rt.pluginPrepareFailed) return;
     rt.pluginPrepareFailed = true;
-    SubLogFallback($, `auto-effort-control: plugin log ${rt.pluginDir ?? 'off'}: preparing ${event} failed: ${SubMessage(error)}`);
+    SubLogFallback($, `auto-effort: plugin log ${rt.pluginDir ?? 'off'}: preparing ${event} failed: ${SubMessage(error)}`);
   });
-  rt.pluginFlushing = rt.pluginWriting.then(() => SubFlushPlugin(rt, $)).catch((error) => SubLogFallback($, `auto-effort-control: plugin log ${rt.pluginDir ?? 'off'}: flushing failed: ${SubMessage(error)}`));
+  rt.pluginFlushing = rt.pluginWriting.then(() => SubFlushPlugin(rt, $)).catch((error) => SubLogFallback($, `auto-effort: plugin log ${rt.pluginDir ?? 'off'}: flushing failed: ${SubMessage(error)}`));
   if (onScreen(level)) $.ui.log(msg);
 }
 
 function SubNotice(rt: SubRuntime, $: EngineInterface, level: PluginLogLevel, event: string, text: string, component: string): void {
-  levelLog(rt, $, level, event, text, `hooks/auto-effort-control.ts#${component}`);
+  levelLog(rt, $, level, event, text, `hooks/auto-effort.ts#${component}`);
 }
 
 // Rows queue in memory; each flush reads the session's file and appends them,
@@ -856,7 +879,7 @@ function SubRecord(rt: SubRuntime, $: EngineInterface, agent: string, type: stri
         (error) => {
           if (!rt.logPathFailed) {
             rt.logPathFailed = true;
-            SubNotice(rt, $, 'error', 'session-id-unreadable', `auto-effort-control: reading the session id failed: ${SubMessage(error)}; these decision rows are not written, and the next write tries again`, 'record');
+            SubNotice(rt, $, 'error', 'session-id-unreadable', `auto-effort: reading the session id failed: ${SubMessage(error)}; these decision rows are not written, and the next write tries again`, 'record');
           }
           return undefined;
         },
@@ -866,7 +889,7 @@ function SubRecord(rt: SubRuntime, $: EngineInterface, agent: string, type: stri
       const existing = (await $.fs.exists(path)) ? await $.fs.read(path) : '';
       await $.fs.write(path, SubAppendRows(existing, rows, SubLOG_CAP));
     })
-    .catch((error) => SubNotice(rt, $, 'error', 'decision-log-write-failed', `auto-effort-control: writing the sub-agents' decision log failed: ${SubMessage(error)}`, 'record'));
+    .catch((error) => SubNotice(rt, $, 'error', 'decision-log-write-failed', `auto-effort: writing the sub-agents' decision log failed: ${SubMessage(error)}`, 'record'));
 }
 
 // The option was validated when the settings resolved, so a list that fails here is a bug: arm all four rather than none.
@@ -882,7 +905,7 @@ function SubSettleOptions(rt: SubRuntime, $: EngineInterface): Promise<void> {
     rt.config = settings;
     rt.compiled = SubCompile(settings);
     rt.optionErrors = [...merged.errors, ...errors];
-  })().catch((error) => SubNotice(rt, $, 'error', 'environment-unreadable', `auto-effort-control: reading configuration failed: ${SubMessage(error)}; using the plugin options`, 'settleOptions'));
+  })().catch((error) => SubNotice(rt, $, 'error', 'environment-unreadable', `auto-effort: reading configuration failed: ${SubMessage(error)}; using the plugin options`, 'settleOptions'));
   return rt.optionsSettled;
 }
 
@@ -896,12 +919,12 @@ function SubStart(rt: SubRuntime, $: EngineInterface): Promise<void> {
     try {
       cwd = await $.session.cwd();
     } catch (error) {
-      SubNotice(rt, $, 'error', 'cwd-unreadable', `auto-effort-control: reading the session cwd failed: ${SubMessage(error)}; using relative paths`, 'start');
+      SubNotice(rt, $, 'error', 'cwd-unreadable', `auto-effort: reading the session cwd failed: ${SubMessage(error)}; using relative paths`, 'start');
     }
     try {
       configDir = await $.env.get('CLAUDE_CONFIG_DIR');
     } catch (error) {
-      SubNotice(rt, $, 'error', 'config-dir-missing', `auto-effort-control: reading CLAUDE_CONFIG_DIR failed: ${SubMessage(error)}; skipping its agents directory`, 'start');
+      SubNotice(rt, $, 'error', 'config-dir-missing', `auto-effort: reading CLAUDE_CONFIG_DIR failed: ${SubMessage(error)}; skipping its agents directory`, 'start');
     }
     for (const line of rt.optionErrors) {
       SubNotice(rt, $, 'error', 'option-error', line, 'start');
@@ -918,7 +941,7 @@ function SubStart(rt: SubRuntime, $: EngineInterface): Promise<void> {
       },
       (line) => SubNotice(rt, $, 'error', 'definition-unreadable', line, 'definitionOf'),
     );
-  })().catch((error) => SubNotice(rt, $, 'error', 'start-failed', `auto-effort-control: starting failed: ${SubMessage(error)}; sub-agents run unsteered at the effort they carry`, 'start'));
+  })().catch((error) => SubNotice(rt, $, 'error', 'start-failed', `auto-effort: starting failed: ${SubMessage(error)}; sub-agents run unsteered at the effort they carry`, 'start'));
   return rt.started;
 }
 
@@ -929,7 +952,7 @@ async function SubDefinitionOf(rt: SubRuntime, $: EngineInterface, type: string 
   try {
     return await rt.defs.resolve(type);
   } catch (error) {
-    SubNotice(rt, $, 'error', 'definition-unreadable', `auto-effort-control: reading the definition of ${type} failed: ${SubMessage(error)}; treating it as having none`, 'definitionOf');
+    SubNotice(rt, $, 'error', 'definition-unreadable', `auto-effort: reading the definition of ${type} failed: ${SubMessage(error)}; treating it as having none`, 'definitionOf');
     return SubNO_DEFINITION(rt);
   }
 }
@@ -965,8 +988,8 @@ function SubPerform(rt: SubRuntime, $: EngineInterface, controller: SubControlle
   for (const action of actions) {
     if (action.kind === 'log') {
       const { event, ...rest } = action.row;
-      if (event === 'judge-failed' && rest.reason !== 'model-unavailable') levelLog(rt, $, 'error', 'judge-failed', `auto-effort-control: judge failed for ${controller.id}: ${String(rest.reason)}; effort ${String(rest.from)} -> ${String(rest.to)}`, 'src/subagent/control.ts#failed', { agent: controller.id, error: String(rest.reason) });
-      if (rest.from !== undefined && rest.to !== undefined && rest.from !== rest.to) levelLog(rt, $, 'info', 'effort-steered', `auto-effort-control: ${controller.id}'s effort changed from ${String(rest.from)} to ${String(rest.to)}`, 'hooks/auto-effort-control.ts#perform', { agent: controller.id, from: rest.from, to: rest.to });
+      if (event === 'judge-failed' && rest.reason !== 'model-unavailable') levelLog(rt, $, 'error', 'judge-failed', `auto-effort: judge failed for ${controller.id}: ${String(rest.reason)}; effort ${String(rest.from)} -> ${String(rest.to)}`, 'src/subagent/control.ts#failed', { agent: controller.id, error: String(rest.reason) });
+      if (rest.from !== undefined && rest.to !== undefined && rest.from !== rest.to) levelLog(rt, $, 'info', 'effort-steered', `auto-effort: ${controller.id}'s effort changed from ${String(rest.from)} to ${String(rest.to)}`, 'hooks/auto-effort.ts#perform', { agent: controller.id, from: rest.from, to: rest.to });
       SubRecord(rt, $, controller.id, controller.type, { event, ...rest, ...(rt.config.logPackets ? action.detail : {}) });
     } else {
       SubRunJudge(rt, $, controller, action);
@@ -988,14 +1011,14 @@ async function SubCompleteModel(rt: SubRuntime, $: EngineInterface, request: Mod
     const current = rt.modelFallback ?? await $.session.model();
     if (rt.modelFallback === undefined) {
       rt.modelFallback = current;
-      levelLog(rt, $, 'warning', 'model-fallback', `auto-effort-control: default haiku refused (api-error 403 oauth_org_not_allowed); using current main model ${current} for the default judge`, 'hooks/auto-effort-control.ts#completeModel', { model: current });
+      levelLog(rt, $, 'warning', 'model-fallback', `auto-effort: default haiku refused (api-error 403 oauth_org_not_allowed); using current main model ${current} for the default judge`, 'hooks/auto-effort.ts#completeModel', { model: current });
     }
     if (rt.modelFallback !== request.model) reply = await $.model.complete({ ...request, model: rt.modelFallback });
   }
   if (SubOauthDenied(reply)) {
     if (!rt.modelUnavailable) {
       rt.modelUnavailable = true;
-      SubNotice(rt, $, 'error', 'model-unavailable', 'auto-effort-control: model judgment unavailable for this session (api-error 403 oauth_org_not_allowed); judges use deterministic failure handling', 'completeModel');
+      SubNotice(rt, $, 'error', 'model-unavailable', 'auto-effort: model judgment unavailable for this session (api-error 403 oauth_org_not_allowed); judges use deterministic failure handling', 'completeModel');
     }
     return undefined;
   }
@@ -1023,7 +1046,7 @@ function SubRunJudge(rt: SubRuntime, $: EngineInterface, controller: SubControll
         SubPerform(rt, $, controller, controller.onJudgeFailure(action.epoch, `threw: ${SubMessage(error)}`).actions);
       },
     )
-    .catch((error: unknown) => SubNotice(rt, $, 'error', 'judge-threw', `auto-effort-control: reading the judge's answer for ${controller.id} failed: ${SubMessage(error)}; its effort stays where it is`, 'runJudge'));
+    .catch((error: unknown) => SubNotice(rt, $, 'error', 'judge-threw', `auto-effort: reading the judge's answer for ${controller.id} failed: ${SubMessage(error)}; its effort stays where it is`, 'runJudge'));
 }
 
 // What a spawn starts at: the tag against the definition's own effort, by `parentTag`.
@@ -1047,7 +1070,7 @@ function SubAfterSpawn(rt: SubRuntime, $: EngineInterface, agentId: string, type
       else rt.awaiting.set(agentId, { type, control: definition.control, brief });
     }
   } catch (error) {
-    SubNotice(rt, $, 'error', 'steer-subagent-failed', `auto-effort-control: steering sub-agent ${agentId} failed: ${SubMessage(error)}; it runs unsteered at its pin`, 'afterSpawn');
+    SubNotice(rt, $, 'error', 'steer-subagent-failed', `auto-effort: steering sub-agent ${agentId} failed: ${SubMessage(error)}; it runs unsteered at its pin`, 'afterSpawn');
   }
 }
 
@@ -1058,7 +1081,7 @@ function SubAdoptFirst(rt: SubRuntime, $: EngineInterface, agentId: string, requ
   rt.awaiting.delete(agentId);
   if (!SubIsLevel(requested)) {
     SubRecord(rt, $, agentId, waiting.type, { event: 'not-steered', requested: requested ?? null });
-    SubNotice(rt, $, 'error', 'not-a-level', `auto-effort-control: sub-agent ${agentId} (${waiting.type}) starts at ${String(requested)}, not a level; it is not steered`, 'adoptFirst');
+    SubNotice(rt, $, 'error', 'not-a-level', `auto-effort: sub-agent ${agentId} (${waiting.type}) starts at ${String(requested)}, not a level; it is not steered`, 'adoptFirst');
     return undefined;
   }
   return SubNewController(rt, agentId, waiting.type, waiting.control, requested, waiting.brief);
@@ -1092,19 +1115,19 @@ async function SubMainEffortTool(rt: SubRuntime, $: EngineInterface, signal: Abo
     const deadline = $.clock.sleep(SubTOOL_LIST_WAIT_MS, { signal: waiting.signal }).then(
       () => 'over' as const,
       (error: unknown) => {
-        if (!waiting.signal.aborted) SubNotice(rt, $, 'warning', 'tool-list-wait-failed', `auto-effort-control: the wait for the session's tool list failed: ${SubMessage(error)}; the main chat's refusal names /effort`, 'mainEffortTool');
+        if (!waiting.signal.aborted) SubNotice(rt, $, 'warning', 'tool-list-wait-failed', `auto-effort: the wait for the session's tool list failed: ${SubMessage(error)}; the main chat's refusal names /effort`, 'mainEffortTool');
         return 'failed' as const;
       },
     );
     const listed = await Promise.race([$.tool.list(), deadline]);
     if (listed === 'failed') return undefined;
     if (listed === 'over') {
-      SubNotice(rt, $, 'warning', 'tool-list-timeout', `auto-effort-control: the session's tool list did not answer within ${SubTOOL_LIST_WAIT_MS} ms; the main chat's refusal names /effort`, 'mainEffortTool');
+      SubNotice(rt, $, 'warning', 'tool-list-timeout', `auto-effort: the session's tool list did not answer within ${SubTOOL_LIST_WAIT_MS} ms; the main chat's refusal names /effort`, 'mainEffortTool');
       return undefined;
     }
     return SubMainEffortToolOf(listed.map((tool) => tool.name));
   } catch (error) {
-    SubNotice(rt, $, 'warning', 'tool-list-failed', `auto-effort-control: listing the session's tools failed: ${SubMessage(error)}; the main chat's refusal names /effort`, 'mainEffortTool');
+    SubNotice(rt, $, 'warning', 'tool-list-failed', `auto-effort: listing the session's tools failed: ${SubMessage(error)}; the main chat's refusal names /effort`, 'mainEffortTool');
     return undefined;
   } finally {
     signal.removeEventListener('abort', stop);
@@ -1137,7 +1160,7 @@ async function SubRegisterButtons(rt: SubRuntime, $: EngineInterface): Promise<v
       rt.buttons.set(tool, spec.button);
       SubRecord(rt, $, 'main', 'plugin', { event: 'tool-registered', tool });
     } catch (error) {
-      SubNotice(rt, $, 'error', 'tool-register-failed', `auto-effort-control: registering the ${spec.name} tool failed: ${SubMessage(error)}; agents have no ${spec.name} button`, 'registerButtons');
+      SubNotice(rt, $, 'error', 'tool-register-failed', `auto-effort: registering the ${spec.name} tool failed: ${SubMessage(error)}; agents have no ${spec.name} button`, 'registerButtons');
       SubRecord(rt, $, 'main', 'plugin', { event: 'tool-register-failed', tool: spec.name, error: SubMessage(error) });
     }
   }
@@ -1157,7 +1180,7 @@ function SubFinish(rt: SubRuntime, $: EngineInterface, agentId: string, answer: 
     }
     rt.awaiting.delete(agentId);
   } catch (error) {
-    SubNotice(rt, $, 'error', 'close-steering-failed', `auto-effort-control: closing sub-agent ${agentId}'s steering failed: ${SubMessage(error)}; its pin is cleared as usual`, 'finish');
+    SubNotice(rt, $, 'error', 'close-steering-failed', `auto-effort: closing sub-agent ${agentId}'s steering failed: ${SubMessage(error)}; its pin is cleared as usual`, 'finish');
   }
 }
 
@@ -1169,6 +1192,41 @@ async function readMergedOptions($: EngineInterface, scope: Scope, registered: R
   try { snapshot = { ok: true, value: await $.settings.read() }; }
   catch (error) { snapshot = { ok: false, error: message(error) }; }
   const asked = {
+    'AUTO_EFFORT_FLOOR': attemptEnv($.env.get('AUTO_EFFORT_FLOOR')),
+    'AUTO_EFFORT_CEILING': attemptEnv($.env.get('AUTO_EFFORT_CEILING')),
+    'AUTO_EFFORT_PLAN_LEVEL': attemptEnv($.env.get('AUTO_EFFORT_PLAN_LEVEL')),
+    'AUTO_EFFORT_HINT_PATTERNS': attemptEnv($.env.get('AUTO_EFFORT_HINT_PATTERNS')),
+    'AUTO_EFFORT_PLAN_UPSHIFT_PATTERNS': attemptEnv($.env.get('AUTO_EFFORT_PLAN_UPSHIFT_PATTERNS')),
+    'AUTO_EFFORT_PLAN_UPSHIFT_CHARS': attemptEnv($.env.get('AUTO_EFFORT_PLAN_UPSHIFT_CHARS')),
+    'AUTO_EFFORT_TURN_REMINDER': attemptEnv($.env.get('AUTO_EFFORT_TURN_REMINDER')),
+    'AUTO_EFFORT_ESCALATE_AFTER_FAILURES': attemptEnv($.env.get('AUTO_EFFORT_ESCALATE_AFTER_FAILURES')),
+    'AUTO_EFFORT_LOWER_ON_PASS': attemptEnv($.env.get('AUTO_EFFORT_LOWER_ON_PASS')),
+    'AUTO_EFFORT_FAILURE_PATTERNS': attemptEnv($.env.get('AUTO_EFFORT_FAILURE_PATTERNS')),
+    'AUTO_EFFORT_FAILURE_TOOLS': attemptEnv($.env.get('AUTO_EFFORT_FAILURE_TOOLS')),
+    'AUTO_EFFORT_TEST_COMMAND_PATTERNS': attemptEnv($.env.get('AUTO_EFFORT_TEST_COMMAND_PATTERNS')),
+    'AUTO_EFFORT_USER_EFFORT_PINS': attemptEnv($.env.get('AUTO_EFFORT_USER_EFFORT_PINS')),
+    'AUTO_EFFORT_MODELS': attemptEnv($.env.get('AUTO_EFFORT_MODELS')),
+    'AUTO_EFFORT_UNKNOWN_MODELS': attemptEnv($.env.get('AUTO_EFFORT_UNKNOWN_MODELS')),
+    'AUTO_EFFORT_PROBATION_SWITCHES': attemptEnv($.env.get('AUTO_EFFORT_PROBATION_SWITCHES')),
+    'AUTO_EFFORT_CANARY_THRESHOLD': attemptEnv($.env.get('AUTO_EFFORT_CANARY_THRESHOLD')),
+    'AUTO_EFFORT_CACHE_TTL_SECONDS': attemptEnv($.env.get('AUTO_EFFORT_CACHE_TTL_SECONDS')),
+    'AUTO_EFFORT_STATUS_LINE': attemptEnv($.env.get('AUTO_EFFORT_STATUS_LINE')),
+    'AUTO_EFFORT_STATE_FILE': attemptEnv($.env.get('AUTO_EFFORT_STATE_FILE')),
+    'AUTO_EFFORT_PARENT_TAG': attemptEnv($.env.get('AUTO_EFFORT_PARENT_TAG')),
+    'AUTO_EFFORT_JUDGE': attemptEnv($.env.get('AUTO_EFFORT_JUDGE')),
+    'AUTO_EFFORT_JUDGE_RAISE_AT': attemptEnv($.env.get('AUTO_EFFORT_JUDGE_RAISE_AT')),
+    'AUTO_EFFORT_TRIPWIRES': attemptEnv($.env.get('AUTO_EFFORT_TRIPWIRES')),
+    'AUTO_EFFORT_STRUGGLE_DECAY': attemptEnv($.env.get('AUTO_EFFORT_STRUGGLE_DECAY')),
+    'AUTO_EFFORT_JUDGE_MODEL': attemptEnv($.env.get('AUTO_EFFORT_JUDGE_MODEL')),
+    'AUTO_EFFORT_JUDGE_EFFORT': attemptEnv($.env.get('AUTO_EFFORT_JUDGE_EFFORT')),
+    'AUTO_EFFORT_JUDGE_TIMEOUT_MS': attemptEnv($.env.get('AUTO_EFFORT_JUDGE_TIMEOUT_MS')),
+    'AUTO_EFFORT_BUTTONS': attemptEnv($.env.get('AUTO_EFFORT_BUTTONS')),
+    'AUTO_EFFORT_ANNOUNCE': attemptEnv($.env.get('AUTO_EFFORT_ANNOUNCE')),
+    'AUTO_EFFORT_READ_ONLY_COMMANDS': attemptEnv($.env.get('AUTO_EFFORT_READ_ONLY_COMMANDS')),
+    'AUTO_EFFORT_RED_WORDS': attemptEnv($.env.get('AUTO_EFFORT_RED_WORDS')),
+    'AUTO_EFFORT_GREEN_WORDS': attemptEnv($.env.get('AUTO_EFFORT_GREEN_WORDS')),
+    'AUTO_EFFORT_AGENT_DIRS': attemptEnv($.env.get('AUTO_EFFORT_AGENT_DIRS')),
+    'AUTO_EFFORT_LOG_PACKETS': attemptEnv($.env.get('AUTO_EFFORT_LOG_PACKETS')),
     'AUTO_EFFORT_CONTROL_FLOOR': attemptEnv($.env.get('AUTO_EFFORT_CONTROL_FLOOR')),
     'AUTO_EFFORT_CONTROL_CEILING': attemptEnv($.env.get('AUTO_EFFORT_CONTROL_CEILING')),
     'AUTO_EFFORT_CONTROL_PLAN_LEVEL': attemptEnv($.env.get('AUTO_EFFORT_CONTROL_PLAN_LEVEL')),
@@ -1204,25 +1262,6 @@ async function readMergedOptions($: EngineInterface, scope: Scope, registered: R
     'AUTO_EFFORT_CONTROL_GREEN_WORDS': attemptEnv($.env.get('AUTO_EFFORT_CONTROL_GREEN_WORDS')),
     'AUTO_EFFORT_CONTROL_AGENT_DIRS': attemptEnv($.env.get('AUTO_EFFORT_CONTROL_AGENT_DIRS')),
     'AUTO_EFFORT_CONTROL_LOG_PACKETS': attemptEnv($.env.get('AUTO_EFFORT_CONTROL_LOG_PACKETS')),
-    'AUTO_EFFORT_FLOOR': attemptEnv($.env.get('AUTO_EFFORT_FLOOR')),
-    'AUTO_EFFORT_CEILING': attemptEnv($.env.get('AUTO_EFFORT_CEILING')),
-    'AUTO_EFFORT_PLAN_LEVEL': attemptEnv($.env.get('AUTO_EFFORT_PLAN_LEVEL')),
-    'AUTO_EFFORT_PLAN_UPSHIFT_PATTERNS': attemptEnv($.env.get('AUTO_EFFORT_PLAN_UPSHIFT_PATTERNS')),
-    'AUTO_EFFORT_PLAN_UPSHIFT_CHARS': attemptEnv($.env.get('AUTO_EFFORT_PLAN_UPSHIFT_CHARS')),
-    'AUTO_EFFORT_TURN_REMINDER': attemptEnv($.env.get('AUTO_EFFORT_TURN_REMINDER')),
-    'AUTO_EFFORT_ESCALATE_AFTER_FAILURES': attemptEnv($.env.get('AUTO_EFFORT_ESCALATE_AFTER_FAILURES')),
-    'AUTO_EFFORT_FAILURE_PATTERNS': attemptEnv($.env.get('AUTO_EFFORT_FAILURE_PATTERNS')),
-    'AUTO_EFFORT_FAILURE_TOOLS': attemptEnv($.env.get('AUTO_EFFORT_FAILURE_TOOLS')),
-    'AUTO_EFFORT_USER_EFFORT_PINS': attemptEnv($.env.get('AUTO_EFFORT_USER_EFFORT_PINS')),
-    'AUTO_EFFORT_MODELS': attemptEnv($.env.get('AUTO_EFFORT_MODELS')),
-    'AUTO_EFFORT_UNKNOWN_MODELS': attemptEnv($.env.get('AUTO_EFFORT_UNKNOWN_MODELS')),
-    'AUTO_EFFORT_PROBATION_SWITCHES': attemptEnv($.env.get('AUTO_EFFORT_PROBATION_SWITCHES')),
-    'AUTO_EFFORT_CANARY_THRESHOLD': attemptEnv($.env.get('AUTO_EFFORT_CANARY_THRESHOLD')),
-    'AUTO_EFFORT_CACHE_TTL_SECONDS': attemptEnv($.env.get('AUTO_EFFORT_CACHE_TTL_SECONDS')),
-    'AUTO_EFFORT_STATUS_LINE': attemptEnv($.env.get('AUTO_EFFORT_STATUS_LINE')),
-    'AUTO_EFFORT_STATE_FILE': attemptEnv($.env.get('AUTO_EFFORT_STATE_FILE')),
-    'AUTO_EFFORT_LOWER_ON_PASS': attemptEnv($.env.get('AUTO_EFFORT_LOWER_ON_PASS')),
-    'AUTO_EFFORT_TEST_COMMAND_PATTERNS': attemptEnv($.env.get('AUTO_EFFORT_TEST_COMMAND_PATTERNS')),
     'EFFORT_LIVE_CONTROL_FLOOR': attemptEnv($.env.get('EFFORT_LIVE_CONTROL_FLOOR')),
     'EFFORT_LIVE_CONTROL_CEILING': attemptEnv($.env.get('EFFORT_LIVE_CONTROL_CEILING')),
     'EFFORT_LIVE_CONTROL_PARENT_TAG': attemptEnv($.env.get('EFFORT_LIVE_CONTROL_PARENT_TAG')),
@@ -1325,7 +1364,7 @@ on('prompt.submit', async ($, e, next) => {
       if (st.keeper === 0) void ensureKeeper($, st).then(() => publish($, st));
       if (out.reminder !== undefined) context = [...(e.context ?? []), out.reminder];
     } catch (error) {
-      note($, st, 'error', 'plan-failed', 'hooks/auto-effort-control.ts#prompt.submit', 'planning the turn', error, 'the prompt goes through unchanged');
+      note($, st, 'error', 'plan-failed', 'hooks/auto-effort.ts#prompt.submit', 'planning the turn', error, 'the prompt goes through unchanged');
     }
     return next(context === e.context ? e : { ...e, context });
   });
@@ -1349,13 +1388,13 @@ on('turn.step', async function* ($, e, next) {if (e.agentId !== undefined) {
         if (step.pin !== undefined) await SubWritePin($, agentId, { level: step.pin });
       }
     } catch (error) {
-      SubNotice(rt, $, 'error', 'resolve-effort-failed', `auto-effort-control: resolving sub-agent ${agentId}'s effort failed: ${SubMessage(error)}; this request goes at ${String(e.effort)}`, 'turn.step');
+      SubNotice(rt, $, 'error', 'resolve-effort-failed', `auto-effort: resolving sub-agent ${agentId}'s effort failed: ${SubMessage(error)}; this request goes at ${String(e.effort)}`, 'turn.step');
     }
     const result = yield* next(send === undefined || send === e.effort ? e : { ...e, effort: send });
     try {
       controller?.onAnswer(result.answer);
     } catch (error) {
-      SubNotice(rt, $, 'error', 'subagent-reply-unreadable', `auto-effort-control: reading sub-agent ${agentId}'s reply failed: ${SubMessage(error)}; its last words are not kept`, 'turn.step');
+      SubNotice(rt, $, 'error', 'subagent-reply-unreadable', `auto-effort: reading sub-agent ${agentId}'s reply failed: ${SubMessage(error)}; its last words are not kept`, 'turn.step');
     }
     return result;
    }
@@ -1368,7 +1407,7 @@ on('turn.step', async function* ($, e, next) {if (e.agentId !== undefined) {
       plan = st.ctl.beginStep({ turnId: e.turnId, index: e.index, model: e.model, effort: e.effort, messageCount: e.messageCount });
     } catch (error) {
       st.ctl.failStep();
-      note($, st, 'error', 'choose-effort-failed', 'hooks/auto-effort-control.ts#turn.step', `choosing the effort of request ${e.index}`, error, `it goes at ${String(e.effort)}`);
+      note($, st, 'error', 'choose-effort-failed', 'hooks/auto-effort.ts#turn.step', `choosing the effort of request ${e.index}`, error, `it goes at ${String(e.effort)}`);
     }
     if (plan !== undefined) {
       record($, st, plan.rows);
@@ -1378,7 +1417,7 @@ on('turn.step', async function* ($, e, next) {if (e.agentId !== undefined) {
       publish($, st);
       if (plan.send !== undefined) {
         request = { ...e, effort: plan.send };
-        plog($, st, 'info', 'effort-applied', `effort applied: ${plan.send}`, 'hooks/auto-effort-control.ts#turn.step', { level: plan.send, source: plan.source });
+        plog($, st, 'info', 'effort-applied', `effort applied: ${plan.send}`, 'hooks/auto-effort.ts#turn.step', { level: plan.send, source: plan.source });
       }
     }
     let result;
@@ -1386,7 +1425,7 @@ on('turn.step', async function* ($, e, next) {if (e.agentId !== undefined) {
       result = yield* next(request);
     } catch (error) {
       if (plan !== undefined) st.ctl.failStep();
-      plog($, st, 'error', 'hook-threw', `request failed: ${message(error)}`, 'hooks/auto-effort-control.ts#turn.step', { error: message(error) });
+      plog($, st, 'error', 'hook-threw', `request failed: ${message(error)}`, 'hooks/auto-effort.ts#turn.step', { error: message(error) });
       throw error;
     }
     if (plan !== undefined) await finishStep($, st, result.usage);
@@ -1401,7 +1440,7 @@ if (e.agentId !== undefined || rt.buttons.has(e.tool)) {
       try {
         return await SubAnswerButton(rt, $, e.agentId, button, next.signal);
       } catch (error) {
-        SubNotice(rt, $, 'error', 'answer-tool-failed', `auto-effort-control: answering ${e.tool} failed: ${SubMessage(error)}; nothing changed`, 'answerButton');
+        SubNotice(rt, $, 'error', 'answer-tool-failed', `auto-effort: answering ${e.tool} failed: ${SubMessage(error)}; nothing changed`, 'answerButton');
         return { result: `Nothing changed: ${SubMessage(error)}` };
       }
     }
@@ -1414,7 +1453,7 @@ if (e.agentId !== undefined || rt.buttons.has(e.tool)) {
       const line = controller.takeAnnouncement();
       if (line !== undefined) return { ...result, context: [...(result.context ?? []), line] };
     } catch (error) {
-      SubNotice(rt, $, 'error', 'tool-result-unreadable', `auto-effort-control: reading ${e.agentId}'s ${e.tool} result failed: ${SubMessage(error)}; its effort stays where it is`, 'tool.call');
+      SubNotice(rt, $, 'error', 'tool-result-unreadable', `auto-effort: reading ${e.agentId}'s ${e.tool} result failed: ${SubMessage(error)}; its effort stays where it is`, 'tool.call');
     }
     return result;
    }
@@ -1430,7 +1469,7 @@ if (e.agentId !== undefined || rt.buttons.has(e.tool)) {
       record($, st, seen.rows);
       if (seen.context !== undefined) return { ...result, context: [...(result.context ?? []), seen.context] };
     } catch (error) {
-      note($, st, 'error', 'tool-result-unreadable', 'hooks/auto-effort-control.ts#tool.call', `reading the ${e.tool} result`, error, 'the result goes through unchanged');
+      note($, st, 'error', 'tool-result-unreadable', 'hooks/auto-effort.ts#tool.call', `reading the ${e.tool} result`, error, 'the result goes through unchanged');
     }
     return result;
 
@@ -1444,7 +1483,7 @@ on('turn.complete', async ($, e, next) => {if (e.agentId !== undefined) {
       SubFinish(rt, $, e.agentId, e.answer);
       if ((await SubReadPin(rt, $, e.agentId)) !== undefined) await SubWritePin($, e.agentId, { level: null });
     } catch (error) {
-      SubNotice(rt, $, 'error', 'pin-clear-failed', `auto-effort-control: clearing sub-agent ${e.agentId}'s pin failed: ${SubMessage(error)}; its next run keeps the old pin`, 'turn.complete');
+      SubNotice(rt, $, 'error', 'pin-clear-failed', `auto-effort: clearing sub-agent ${e.agentId}'s pin failed: ${SubMessage(error)}; its next run keeps the old pin`, 'turn.complete');
     }
     return result;
    }
@@ -1456,7 +1495,7 @@ on('turn.complete', async ($, e, next) => {if (e.agentId !== undefined) {
       publish($, st);
       void saveSession($, st);
     } catch (error) {
-      note($, st, 'error', 'turn-record-failed', 'hooks/auto-effort-control.ts#turn.complete', 'recording the turn', error, 'the turn ended as it would have');
+      note($, st, 'error', 'turn-record-failed', 'hooks/auto-effort.ts#turn.complete', 'recording the turn', error, 'the turn ended as it would have');
     }
     return result;
 
@@ -1475,7 +1514,7 @@ on('session.end', async ($, e, next) => {
     await rt.pluginFlushing;
     // The last flush may queue a decision row (a failed append's plugin-log-failed): it is on disk before the session ends.
     // A write failure's notice has queued its level row before a throwing screen rejected the chain; the session still ends.
-    await rt.writing.catch((error) => SubLogFallback($, `auto-effort-control: finishing the decision log failed: ${SubMessage(error)}`));
+    await rt.writing.catch((error) => SubLogFallback($, `auto-effort: finishing the decision log failed: ${SubMessage(error)}`));
     return next(e);
 
 });
@@ -1488,7 +1527,7 @@ on('command.run', { command: 'effort' }, async ($, e, next) => {
       await saveSession($, st);
       publish($, st);
     } catch (error) {
-      note($, st, 'error', 'effort-command-failed', 'hooks/auto-effort-control.ts#command.run', 'reading /effort', error, 'the effort follows the session setting');
+      note($, st, 'error', 'effort-command-failed', 'hooks/auto-effort.ts#command.run', 'reading /effort', error, 'the effort follows the session setting');
     }
     return result;
   });
@@ -1498,7 +1537,7 @@ on('command.run', { command: PLUGIN }, async ($, e) => {
       await followSession($, st);
       return { text: await runCommand($, st, e.args) };
     } catch (error) {
-      note($, st, 'error', 'command-failed', 'hooks/auto-effort-control.ts#command.run', `/${PLUGIN} ${e.args}`, error, 'nothing was changed');
+      note($, st, 'error', 'command-failed', 'hooks/auto-effort.ts#command.run', `/${PLUGIN} ${e.args}`, error, 'nothing was changed');
       return { text: `/${PLUGIN} failed: ${message(error)}\n${USAGE}` };
     }
   });
@@ -1524,7 +1563,7 @@ on('agent.spawn', async ($, e, next) => {
         try {
           await SubWritePin($, result.agentId, { level: SubStartOfSpawn(definition, tagged).level ?? null });
         } catch (error) {
-          SubNotice(rt, $, 'error', 'pin-write-failed', `auto-effort-control: recording sub-agent ${result.agentId}'s pin failed: ${SubMessage(error)}; it runs at the session's effort, unpinned`, 'agent.spawn');
+          SubNotice(rt, $, 'error', 'pin-write-failed', `auto-effort: recording sub-agent ${result.agentId}'s pin failed: ${SubMessage(error)}; it runs at the session's effort, unpinned`, 'agent.spawn');
         }
       }
       return result;

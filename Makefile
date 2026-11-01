@@ -1,9 +1,9 @@
 # Every check the release workflow runs on a develop -> main pull request, run
 # the same way here first. CI's runner has Node 22 already; locally mise gives it.
 RUN := $(if $(CI),,mise exec node@22 --)
-MANIFEST := plugins/auto-effort-control/.claude-plugin/plugin.json
-# The manifest path before the rename to auto-effort-control: the base when main still has only it.
-OLD_MANIFEST := plugins/auto-effort/.claude-plugin/plugin.json
+MANIFEST := plugins/auto-effort/.claude-plugin/plugin.json
+# The manifest path under the plugin's former name: the base when main still has only it.
+OLD_MANIFEST := plugins/auto-effort-control/.claude-plugin/plugin.json
 
 .PHONY: release-check check release
 

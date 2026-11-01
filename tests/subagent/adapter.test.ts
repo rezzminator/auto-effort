@@ -4,9 +4,9 @@ import { promisify } from 'node:util';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { Controller } from '../../plugins/auto-effort-control/src/subagent/control.ts';
-import { register } from '../../plugins/auto-effort-control/hooks/auto-effort-control.ts';
-import { MAIN_REFUSED } from '../../plugins/auto-effort-control/src/subagent/text.ts';
+import { Controller } from '../../plugins/auto-effort/src/subagent/control.ts';
+import { register } from '../../plugins/auto-effort/hooks/auto-effort.ts';
+import { MAIN_REFUSED } from '../../plugins/auto-effort/src/subagent/text.ts';
 
 // A stand-in engine: host state that outlives a re-register, a clock the test
 // fires, and the hooks the module registers, driven the way the engine drives them.
@@ -50,7 +50,7 @@ function engine(state = new Map<string, unknown>(), opts: Opts = {}) {
   let keeperDeadline = false;
   const $ = {
     store: { get: async () => undefined, set: async () => undefined },
-    command: { register: async () => ({ name: 'auto-effort-control' }) },
+    command: { register: async () => ({ name: 'auto-effort' }) },
     state: {
       get: async (ref: { id: string }) => ({ value: state.get(ref.id), version: 0 }),
       set: async (ref: { id: string }, value: unknown) => (state.set(ref.id, value), { isSet: true, version: 1 }),
@@ -93,7 +93,7 @@ function engine(state = new Map<string, unknown>(), opts: Opts = {}) {
     env: { get: async (name: string) => env[name] },
     session: { cwd: async () => '/proj', id: async () => 'sess1', model: async () => 'claude-opus-5-5' },
     tool: {
-      register: async (spec: any) => (registered.push(spec), { tool: `mcp__auto-effort-control__${spec.name}` }),
+      register: async (spec: any) => (registered.push(spec), { tool: `mcp__auto-effort__${spec.name}` }),
       list: opts.toolList ?? (async () => []),
     },
     model: {
@@ -166,7 +166,7 @@ function engine(state = new Map<string, unknown>(), opts: Opts = {}) {
   const rows = async () => {
     await tick();
     await tick();
-    const text = files.get('/fixture-home/t/.local/state/auto-effort-control/logs/decisions.sess1.subagent.jsonl') ?? '';
+    const text = files.get('/fixture-home/t/.local/state/auto-effort/logs/decisions.sess1.subagent.jsonl') ?? '';
     return text.split('\n').filter((line) => line !== '').map((line) => JSON.parse(line) as Record<string, any>);
   };
   const sessionEnd = async (next = async () => ({})) => { if (hooks.has('session.end')) await hooks.get('session.end')!($, {}, next); };
@@ -305,7 +305,7 @@ suite('waiting for a spawn to return', () => {
   });
 });
 
-// ---- auto-effort-control: definitions, steering, the judge, buttons, the log ----
+// ---- auto-effort: definitions, steering, the judge, buttons, the log ----
 
 const OPUS = 'claude-opus-5-5';
 const USAGE = { input_tokens: 100, output_tokens: 20, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 };
@@ -350,8 +350,8 @@ suite('definition effort over the tag', () => {
     await x.step('a2', 'medium');
     await x.tick();
     await x.tick();
-    const old = x.files.get('/fixture-home/t/.local/state/auto-effort-control/logs/decisions.sess1.subagent.jsonl') ?? '';
-    const next = x.files.get('/fixture-home/t/.local/state/auto-effort-control/logs/decisions.sess2.subagent.jsonl') ?? '';
+    const old = x.files.get('/fixture-home/t/.local/state/auto-effort/logs/decisions.sess1.subagent.jsonl') ?? '';
+    const next = x.files.get('/fixture-home/t/.local/state/auto-effort/logs/decisions.sess2.subagent.jsonl') ?? '';
     expect(old).not.toContain('"a2"');
     expect(next).toContain('"a2"');
   });
@@ -392,7 +392,7 @@ suite('definition effort over the tag', () => {
     const x = engine(new Map(), { files, broken: ['/proj/.claude/agents/builder.md'] });
     await x.spawned('[effort: low]\nMap X.', 'a1', { subagentType: 'builder' });
     expect(await x.step('a1', 'high')).toBe('low');
-    expect(x.logs.join('\n')).toContain('auto-effort-control: reading /proj/.claude/agents/builder.md failed: EACCES; treating builder as having no definition');
+    expect(x.logs.join('\n')).toContain('auto-effort: reading /proj/.claude/agents/builder.md failed: EACCES; treating builder as having no definition');
   });
 
   it('finds a definition in the home directory and in CLAUDE_CONFIG_DIR', async () => {
@@ -521,8 +521,8 @@ suite('parentTag', () => {
     await x.sessionStart();
     await x.spawned('[effort: low]\nGo.', 'a1', { subagentType: 'builder' });
     await x.spawned('[effort: low]\nGo.', 'a2', { subagentType: 'odd' });
-    expect(x.logs).toContain('auto-effort-control: option "parentTag" is "maybe", not honor or ignore; using the default "honor"');
-    expect(x.logs).toContain('auto-effort-control: /proj/.claude/agents/odd.md effortControl.parentTag for odd is invalid (not honor or ignore); using honor');
+    expect(x.logs).toContain('auto-effort: option "parentTag" is "maybe", not honor or ignore; using the default "honor"');
+    expect(x.logs).toContain('auto-effort: /proj/.claude/agents/odd.md effortControl.parentTag for odd is invalid (not honor or ignore); using honor');
     expect(await x.step('a1', 'high')).toBe('low');
     expect(await x.step('a2', 'high')).toBe('low');
   });
@@ -568,7 +568,7 @@ suite('steering', () => {
       await x.tool('P1', 'Bash', { command: 'npm test' }, { result: {}, text: 'FAIL a', isError: false });
       expect(x.judgeCalls).toHaveLength(0);
       expect(await x.step('P1', 'low', undefined, OPUS)).toBe('high');
-      const { out, called } = await x.tool('P1', 'mcp__auto-effort-control__effort_up', {});
+      const { out, called } = await x.tool('P1', 'mcp__auto-effort__effort_up', {});
       expect(called).toBe(false);
       expect(out.result).toContain('Not available here');
     }
@@ -577,7 +577,7 @@ suite('steering', () => {
   it('R-3: an invalid effortControl value is logged with its key and the default used', async () => {
     const x = engine(new Map(), { files: agentFile('lead', 'effort: medium\neffortControl:\n  floor: sideways') });
     await x.spawned('Go.', 'L1', { subagentType: 'lead' });
-    expect(x.logs).toContain('auto-effort-control: /proj/.claude/agents/lead.md effortControl.floor for lead is invalid (not a level: low, medium, high, xhigh, max); using medium');
+    expect(x.logs).toContain('auto-effort: /proj/.claude/agents/lead.md effortControl.floor for lead is invalid (not a level: low, medium, high, xhigh, max); using medium');
     expect(await x.step('L1', 'low', undefined, OPUS)).toBe('medium');
   });
 
@@ -862,7 +862,7 @@ suite('tripwires', () => {
     const files = agentFile('lead', 'effort: medium\neffortControl:\n  tripwires: fail1, boom');
     const { x, run } = await withLead(files, { judge: false });
     await run('npm test', 'FAIL a');
-    expect(x.logs).toContain('auto-effort-control: /proj/.claude/agents/lead.md effortControl.tripwires for lead is invalid ("boom" is not a tripwire (fail1, fail2, red, redispatch)); using fail1,fail2,red,redispatch');
+    expect(x.logs).toContain('auto-effort: /proj/.claude/agents/lead.md effortControl.tripwires for lead is invalid ("boom" is not a tripwire (fail1, fail2, red, redispatch)); using fail1,fail2,red,redispatch');
     expect(await x.step('L1', 'low', undefined, OPUS)).toBe('high');
   });
 
@@ -1058,7 +1058,7 @@ suite('struggle decay', () => {
   it('decay: a bad value is reported and the default applies', async () => {
     const option = await withLead(LEAD, { judge: false, struggleDecay: -4 });
     await option.x.step('L1', 'low', undefined, OPUS);
-    expect(option.x.logs).toContain('auto-effort-control: option "struggleDecay" is -4, not a whole number of at least 0; using the default 20');
+    expect(option.x.logs).toContain('auto-effort: option "struggleDecay" is -4, not a whole number of at least 0; using the default 20');
     await option.run('npm test', 'FAIL a');
     for (let i = 0; i < 20; i++) await option.x.step('L1', 'low', undefined, OPUS);
     expect(await option.x.step('L1', 'low', undefined, OPUS)).toBe('medium');
@@ -1079,9 +1079,9 @@ suite('struggle decay', () => {
 });
 
 suite('buttons', () => {
-  const UP = 'mcp__auto-effort-control__effort_up';
-  const DOWN = 'mcp__auto-effort-control__effort_down';
-  const AUTO = 'mcp__auto-effort-control__effort_auto';
+  const UP = 'mcp__auto-effort__effort_up';
+  const DOWN = 'mcp__auto-effort__effort_down';
+  const AUTO = 'mcp__auto-effort__effort_auto';
 
   it('R-12: session.start registers effort_up, effort_down and effort_auto with no parameters and the spec descriptions', async () => {
     const x = engine();
@@ -1158,7 +1158,7 @@ suite('buttons', () => {
     await x.sessionStart();
     const { out } = await x.tool(undefined, UP, {});
     expect(out.result).toContain('the user sets it with /effort');
-    await vi.waitFor(() => expect(log.warnings()).toContain("auto-effort-control: listing the session's tools failed: list denied; the main chat's refusal names /effort"));
+    await vi.waitFor(() => expect(log.warnings()).toContain("auto-effort: listing the session's tools failed: list denied; the main chat's refusal names /effort"));
     expect(x.logs.some((line) => line.includes("listing the session's tools failed: list denied; the main chat's refusal names /effort"))).toBe(false);
   });
 
@@ -1171,7 +1171,7 @@ suite('buttons', () => {
     x.fireTimers();
     const { out } = await pending;
     expect(out.result).toContain('the user sets it with /effort');
-    await vi.waitFor(() => expect(log.warnings()).toContain("auto-effort-control: the session's tool list did not answer within 2000 ms; the main chat's refusal names /effort"));
+    await vi.waitFor(() => expect(log.warnings()).toContain("auto-effort: the session's tool list did not answer within 2000 ms; the main chat's refusal names /effort"));
     expect(x.logs.some((line) => line.includes("the session's tool list did not answer within 2000 ms; the main chat's refusal names /effort"))).toBe(false);
   });
 
@@ -1184,7 +1184,7 @@ suite('buttons', () => {
     await x.sessionStart();
     const { out } = await x.tool(undefined, UP, {});
     expect(out.result).toBe(MAIN_REFUSED(undefined));
-    await vi.waitFor(() => expect(log.warnings()).toContain("auto-effort-control: listing the session's tools failed: no clock; the main chat's refusal names /effort"));
+    await vi.waitFor(() => expect(log.warnings()).toContain("auto-effort: listing the session's tools failed: no clock; the main chat's refusal names /effort"));
     expect(x.logs.some((line) => line.includes("listing the session's tools failed: no clock; the main chat's refusal names /effort"))).toBe(false);
   });
 
@@ -1221,10 +1221,10 @@ suite('buttons', () => {
     const x = engine();
     (x as any).registered.push = undefined;
     await expect(x.sessionStart()).resolves.toBeDefined();
-    expect(x.logs.filter((line) => line.startsWith('auto-effort-control: registering the effort_')).map((line) => line.slice(0, 55))).toEqual([
-      'auto-effort-control: registering the effort_up tool fai',
-      'auto-effort-control: registering the effort_down tool f',
-      'auto-effort-control: registering the effort_auto tool f',
+    expect(x.logs.filter((line) => line.startsWith('auto-effort: registering the effort_')).map((line) => line.slice(0, 47))).toEqual([
+      'auto-effort: registering the effort_up tool fai',
+      'auto-effort: registering the effort_down tool f',
+      'auto-effort: registering the effort_auto tool f',
     ]);
   });
 });
@@ -1235,7 +1235,7 @@ suite('announcing a change', () => {
     await failTwice();
     await answer('80 - same failure after the fix');
     const first = await x.tool('L1', 'Bash', { command: 'ls' }, { result: {}, text: 'a b', context: ['earlier'] });
-    expect(first.out.context).toEqual(['earlier', 'auto-effort-control: your reasoning effort is now high — judge: same failure after the fix.']);
+    expect(first.out.context).toEqual(['earlier', 'auto-effort: your reasoning effort is now high — judge: same failure after the fix.']);
     const second = await x.tool('L1', 'Bash', { command: 'ls' }, { result: {}, text: 'a b' });
     expect(second.out.context).toBeUndefined();
   });
@@ -1243,9 +1243,9 @@ suite('announcing a change', () => {
   it('a mechanical raise is told in the same tool result that caused it', async () => {
     const { x, run } = await withLead(LEAD, { judge: false });
     const first = await run('npm test', 'FAIL a');
-    expect(first.out.context).toEqual(['auto-effort-control: your reasoning effort is now high — a failing test run.']);
+    expect(first.out.context).toEqual(['auto-effort: your reasoning effort is now high — a failing test run.']);
     const second = await run('npm test', 'FAIL a');
-    expect(second.out.context).toEqual(['auto-effort-control: your reasoning effort is now xhigh — 2nd failing test run in a row.']);
+    expect(second.out.context).toEqual(['auto-effort: your reasoning effort is now xhigh — 2nd failing test run in a row.']);
   });
 
   it('a deny carries nothing and the line waits for the next result', async () => {
@@ -1313,7 +1313,7 @@ suite('the decision log', () => {
   });
 
   it('R-16: the decision log lives in the plugin log directory, and no option or variable moves it', async () => {
-    const env = { AUTO_EFFORT_CONTROL_LOG_FILE: '/elsewhere/env.jsonl', EFFORT_LIVE_CONTROL_LOG_FILE: '/elsewhere/old.jsonl' };
+    const env = { AUTO_EFFORT_LOG_FILE: '/elsewhere/env.jsonl', EFFORT_LIVE_CONTROL_LOG_FILE: '/elsewhere/old.jsonl' };
     const set = engine(new Map(), { files: LEAD, env: { ...env, PLUGIN_LOG_DIR: '/plog' }, options: { logFile: '/elsewhere/option.jsonl' } });
     const unset = engine(new Map(), { files: LEAD, env, options: { logFile: '/elsewhere/option.jsonl' } });
     for (const x of [set, unset]) {
@@ -1323,15 +1323,15 @@ suite('the decision log', () => {
       await x.tick();
     }
     const decisions = (x: ReturnType<typeof engine>) => [...x.files.keys()].filter((path) => path.endsWith('.subagent.jsonl'));
-    expect(decisions(set)).toEqual(['/plog/auto-effort-control/decisions.sess1.subagent.jsonl']);
-    expect(decisions(unset)).toEqual(['/fixture-home/t/.local/state/auto-effort-control/logs/decisions.sess1.subagent.jsonl']);
+    expect(decisions(set)).toEqual(['/plog/auto-effort/decisions.sess1.subagent.jsonl']);
+    expect(decisions(unset)).toEqual(['/fixture-home/t/.local/state/auto-effort/logs/decisions.sess1.subagent.jsonl']);
   });
 
   it('option errors are reported once at the first hook, and the defaults apply', async () => {
     const x = engine(new Map(), { options: { floor: 'sideways' } });
     await x.spawned('Map X.', 'a1');
     await x.spawned('Map Y.', 'a2');
-    expect(x.logs.filter((line) => line.includes('option "floor"'))).toEqual(['auto-effort-control: option "floor" is "sideways", not a level (low, medium, high, xhigh, max); using the default "medium"']);
+    expect(x.logs.filter((line) => line.includes('option "floor"'))).toEqual(['auto-effort: option "floor" is "sideways", not a level (low, medium, high, xhigh, max); using the default "medium"']);
   });
 });
 
@@ -1444,8 +1444,8 @@ suite('plugin log adapter', () => {
   it('screen policy: a recoverable warning stays off screen with an active log', async () => {
     const dir = await fresh();
     const x = engine(new Map(), { env: { PLUGIN_LOG_DIR: dir }, run: realRun, options: {}, toolList: async () => { throw new Error('list denied'); } });
-    await x.sessionStart(); await x.tool(undefined, 'mcp__auto-effort-control__effort_up', {}); await x.sessionEnd();
-    expect(await readRows(join(dir, 'auto-effort-control'), 'warnings.jsonl')).toContainEqual(expect.objectContaining({ event: 'tool-list-failed' }));
+    await x.sessionStart(); await x.tool(undefined, 'mcp__auto-effort__effort_up', {}); await x.sessionEnd();
+    expect(await readRows(join(dir, 'auto-effort'), 'warnings.jsonl')).toContainEqual(expect.objectContaining({ event: 'tool-list-failed' }));
     expect(x.logs).toEqual([]);
   });
 
@@ -1467,7 +1467,7 @@ suite('plugin log adapter', () => {
     x.$.tool.register = async () => { throw new Error('registration denied'); };
     await x.sessionStart(); await x.sessionEnd();
     expect(x.logs.filter((line) => line.includes('registration denied'))).toHaveLength(4);
-    expect(await readRows(join(dir, 'auto-effort-control'), 'errors.jsonl')).toEqual([
+    expect(await readRows(join(dir, 'auto-effort'), 'errors.jsonl')).toEqual([
       expect.objectContaining({ event: 'tool-register-failed', level: 'error', msg: expect.stringContaining('set_effort') }),
       expect.objectContaining({ event: 'tool-register-failed', level: 'error', msg: expect.stringContaining('effort_up') }),
       expect.objectContaining({ event: 'tool-register-failed', level: 'error', msg: expect.stringContaining('effort_down') }),
@@ -1481,16 +1481,16 @@ suite('plugin log adapter', () => {
     await x.sessionStart(); await x.sessionStart();
     await x.spawned('Build X.', 'L1', { subagentType: 'lead' });
     expect(await x.mainStep('medium')).toBe('medium');
-    expect((await x.tool(undefined, 'mcp__auto-effort-control__effort_up', {})).out.result).toContain('the user sets it with /effort');
+    expect((await x.tool(undefined, 'mcp__auto-effort__effort_up', {})).out.result).toContain('the user sets it with /effort');
     vi.spyOn(Controller.prototype, 'onButton').mockImplementation(() => { throw new Error('unknown level'); });
-    const result = await x.tool('L1', 'mcp__auto-effort-control__effort_up', {});
+    const result = await x.tool('L1', 'mcp__auto-effort__effort_up', {});
     expect(result.out.result).toBe('Nothing changed: unknown level');
     expect(result.called).toBe(false);
     await x.sessionEnd();
-    const target = source === 'PLUGIN_LOG_DIR' ? join(dir, 'levels/auto-effort-control') : join(dir, '.local/state/auto-effort-control/logs');
-    expect(await readRows(target, 'errors.jsonl')).toEqual([expect.objectContaining({ ts: '2026-10-14T15:20:31.123Z', plugin: 'auto-effort-control', level: 'error', event: 'answer-tool-failed', where: 'hooks/auto-effort-control.ts#answerButton', session: 'sess1' })]);
-    expect(await readRows(target, 'warnings.jsonl')).toContainEqual(expect.objectContaining({ level: 'warning', event: 'tool-list-failed', where: 'hooks/auto-effort-control.ts#mainEffortTool' }));
-    expect(x.logs).toContain('auto-effort-control: answering mcp__auto-effort-control__effort_up failed: unknown level; nothing changed');
+    const target = source === 'PLUGIN_LOG_DIR' ? join(dir, 'levels/auto-effort') : join(dir, '.local/state/auto-effort/logs');
+    expect(await readRows(target, 'errors.jsonl')).toEqual([expect.objectContaining({ ts: '2026-10-14T15:20:31.123Z', plugin: 'auto-effort', level: 'error', event: 'answer-tool-failed', where: 'hooks/auto-effort.ts#answerButton', session: 'sess1' })]);
+    expect(await readRows(target, 'warnings.jsonl')).toContainEqual(expect.objectContaining({ level: 'warning', event: 'tool-list-failed', where: 'hooks/auto-effort.ts#mainEffortTool' }));
+    expect(x.logs).toContain('auto-effort: answering mcp__auto-effort__effort_up failed: unknown level; nothing changed');
   });
 
   it.each([
@@ -1503,10 +1503,10 @@ suite('plugin log adapter', () => {
     x.$.ui.log = () => { throw new Error('screen offline'); };
     if (event === 'answer-tool-failed') vi.spyOn(Controller.prototype, 'onButton').mockImplementation(() => { throw new Error(cause); });
     else x.$.state.get = async () => { throw new Error(cause); };
-    await expect(event === 'answer-tool-failed' ? x.tool('L1', 'mcp__auto-effort-control__effort_up', {}) : x.step('unknown', 'medium')).rejects.toThrow('screen offline');
+    await expect(event === 'answer-tool-failed' ? x.tool('L1', 'mcp__auto-effort__effort_up', {}) : x.step('unknown', 'medium')).rejects.toThrow('screen offline');
     await x.sessionEnd();
-    expect(await readRows(join(dir, 'auto-effort-control'), file)).toContainEqual(expect.objectContaining({
-      plugin: 'auto-effort-control', level, event, where: `hooks/auto-effort-control.ts#${component}`, session: 'sess1', msg: expect.stringContaining(cause),
+    expect(await readRows(join(dir, 'auto-effort'), file)).toContainEqual(expect.objectContaining({
+      plugin: 'auto-effort', level, event, where: `hooks/auto-effort.ts#${component}`, session: 'sess1', msg: expect.stringContaining(cause),
     }));
   });
 
@@ -1517,15 +1517,15 @@ suite('plugin log adapter', () => {
     await x.sessionStart(); await x.sessionEnd();
     vi.spyOn(Controller.prototype, 'onButton').mockImplementation(() => { throw new Error('unknown level'); });
     await x.spawned('Build X.', 'L1', { subagentType: 'lead' });
-    await x.tool('L1', 'mcp__auto-effort-control__effort_up', {}); await x.sessionEnd();
+    await x.tool('L1', 'mcp__auto-effort__effort_up', {}); await x.sessionEnd();
     const notices = () => x.logs.filter((line) => line.includes('plugin log'));
-    expect(notices()).toHaveLength(1); expect(notices()[0]).toContain(join(dir, 'auto-effort-control')); expect(notices()[0]).toContain('spawn denied');
+    expect(notices()).toHaveLength(1); expect(notices()[0]).toContain(join(dir, 'auto-effort')); expect(notices()[0]).toContain('spawn denied');
     broken = false;
-    await x.tool('L1', 'mcp__auto-effort-control__effort_up', {}); await x.sessionEnd();
+    await x.tool('L1', 'mcp__auto-effort__effort_up', {}); await x.sessionEnd();
     // The row the outage held is written with the next one: a failed write loses nothing.
-    expect(await readRows(join(dir, 'auto-effort-control'), 'errors.jsonl')).toHaveLength(2);
+    expect(await readRows(join(dir, 'auto-effort'), 'errors.jsonl')).toHaveLength(2);
     broken = true;
-    await x.tool('L1', 'mcp__auto-effort-control__effort_up', {}); await x.sessionEnd();
+    await x.tool('L1', 'mcp__auto-effort__effort_up', {}); await x.sessionEnd();
     expect(notices()).toHaveLength(2);
   });
 
@@ -1534,7 +1534,7 @@ suite('plugin log adapter', () => {
     const x = engine(undefined, { slowWrite: true, env: { PLUGIN_LOG_DIR: '/fixture-logs' }, options: { floor: 'invalid' }, run: async () => ({ exitCode: 1, stdout: '', stderr: 'chmod: --: No such file or directory' }) });
     await x.sessionStart(); await x.sessionEnd();
     // No tick after session.end: the row the final flush queues is on disk when the session ends.
-    const text = x.files.get('/fixture-logs/auto-effort-control/decisions.sess1.subagent.jsonl') ?? '';
+    const text = x.files.get('/fixture-logs/auto-effort/decisions.sess1.subagent.jsonl') ?? '';
     const failed = text.split('\n').filter(Boolean).map((line) => JSON.parse(line)).filter((row) => row.event === 'plugin-log-failed');
     expect(failed).toHaveLength(1);
     expect(failed[0].error).toContain('chmod: --: No such file or directory');
@@ -1543,7 +1543,7 @@ suite('plugin log adapter', () => {
   });
 
   it('session.end still ends when the decision-log write fails and the screen door throws', async () => {
-    const path = '/fixture-logs/auto-effort-control/decisions.sess1.subagent.jsonl';
+    const path = '/fixture-logs/auto-effort/decisions.sess1.subagent.jsonl';
     const x = engine(undefined, { uiThrows: true, broken: [path], files: { [path]: '' }, env: { PLUGIN_LOG_DIR: '/fixture-logs' } });
     await x.sessionStart();
     let ended = false;
@@ -1558,7 +1558,7 @@ suite('plugin log adapter', () => {
     const notice = x.logs.filter((line) => line.includes('plugin log'));
     // Both scopes write through one queue: one failing streak, one line.
     expect(notice).toHaveLength(1);
-    expect(notice[0]).toContain(mode === 'no-home' ? 'plugin log off: no PLUGIN_LOG_DIR and no HOME' : join(dir, 'auto-effort-control'));
+    expect(notice[0]).toContain(mode === 'no-home' ? 'plugin log off: no PLUGIN_LOG_DIR and no HOME' : join(dir, 'auto-effort'));
     if (mode === 'no-process') expect(notice.some((line) => line.includes('process'))).toBe(true);
   });
 
@@ -1568,7 +1568,7 @@ suite('plugin log adapter', () => {
     const x = engine(undefined, { env, run: realRun, options: {} });
     x.$.env.get = async (key) => { if (key === name) throw undefined; return env[key]; };
     await x.sessionStart(); await x.sessionEnd();
-    const target = name === 'HOME' ? join(dir, 'levels/auto-effort-control') : join(dir, '.local/state/auto-effort-control/logs');
+    const target = name === 'HOME' ? join(dir, 'levels/auto-effort') : join(dir, '.local/state/auto-effort/logs');
     expect(await readRows(target, name === 'HOME' ? 'errors.jsonl' : 'warnings.jsonl')).toContainEqual(expect.objectContaining({ event: name === 'HOME' ? 'home-missing' : 'plugin-log-dir-unreadable', msg: expect.stringContaining('failed: undefined') }));
   });
 
@@ -1586,7 +1586,7 @@ suite('plugin log adapter', () => {
     x.$.state.get = async () => { throw new Error('pin store offline'); };
     expect(await x.step('unknown', 'medium')).toBe('medium');
     await x.sessionEnd();
-    const target = join(dir, 'auto-effort-control');
+    const target = join(dir, 'auto-effort');
     expect(await readRows(target, 'errors.jsonl')).toContainEqual(expect.objectContaining({ event: 'pin-unreadable', level: 'error' }));
     expect(await readRows(target, 'errors.jsonl')).toContainEqual(expect.objectContaining({ event: 'judge-failed', level: 'error', where: 'src/subagent/control.ts#failed' }));
     expect(await readRows(target, 'info.jsonl')).toContainEqual(expect.objectContaining({ event: 'effort-steered', detail: { agent: 'L1', from: 'medium', to: 'high' } }));
@@ -1596,42 +1596,42 @@ suite('plugin log adapter', () => {
 });
 
 suite('environment variables', () => {
-  // Every option has its own AUTO_EFFORT_CONTROL_{OPTION} variable; a bad value names it in the first hook's report.
+  // Every option has its own AUTO_EFFORT_{OPTION} variable; a bad value names it in the first hook's report.
   const BAD: Array<[name: string, bad: string]> = [
-    ['AUTO_EFFORT_CONTROL_FLOOR', 'sideways'],
-    ['AUTO_EFFORT_CONTROL_CEILING', 'sideways'],
-    ['AUTO_EFFORT_CONTROL_PARENT_TAG', 'maybe'],
-    ['AUTO_EFFORT_CONTROL_MODELS', 'not json'],
-    ['AUTO_EFFORT_CONTROL_JUDGE', 'maybe'],
-    ['AUTO_EFFORT_CONTROL_JUDGE_RAISE_AT', '101'],
-    ['AUTO_EFFORT_CONTROL_TRIPWIRES', 'bogus'],
-    ['AUTO_EFFORT_CONTROL_STRUGGLE_DECAY', '-1'],
-    ['AUTO_EFFORT_CONTROL_JUDGE_MODEL', 'two words'],
-    ['AUTO_EFFORT_CONTROL_JUDGE_EFFORT', 'ultra'],
-    ['AUTO_EFFORT_CONTROL_JUDGE_TIMEOUT_MS', '0'],
-    ['AUTO_EFFORT_CONTROL_BUTTONS', 'yes'],
-    ['AUTO_EFFORT_CONTROL_ANNOUNCE', 'yes'],
-    ['AUTO_EFFORT_CONTROL_TEST_COMMAND_PATTERNS', '["(unclosed"]'],
-    ['AUTO_EFFORT_CONTROL_READ_ONLY_COMMANDS', '["two words"]'],
-    ['AUTO_EFFORT_CONTROL_FAILURE_PATTERNS', '["(unclosed"]'],
-    ['AUTO_EFFORT_CONTROL_RED_WORDS', '["OK now"]'],
-    ['AUTO_EFFORT_CONTROL_GREEN_WORDS', '[1]'],
-    ['AUTO_EFFORT_CONTROL_AGENT_DIRS', '{"dir":"/x"}'],
-    ['AUTO_EFFORT_CONTROL_LOG_PACKETS', 'yes'],
+    ['AUTO_EFFORT_FLOOR', 'sideways'],
+    ['AUTO_EFFORT_CEILING', 'sideways'],
+    ['AUTO_EFFORT_PARENT_TAG', 'maybe'],
+    ['AUTO_EFFORT_MODELS', 'not json'],
+    ['AUTO_EFFORT_JUDGE', 'maybe'],
+    ['AUTO_EFFORT_JUDGE_RAISE_AT', '101'],
+    ['AUTO_EFFORT_TRIPWIRES', 'bogus'],
+    ['AUTO_EFFORT_STRUGGLE_DECAY', '-1'],
+    ['AUTO_EFFORT_JUDGE_MODEL', 'two words'],
+    ['AUTO_EFFORT_JUDGE_EFFORT', 'ultra'],
+    ['AUTO_EFFORT_JUDGE_TIMEOUT_MS', '0'],
+    ['AUTO_EFFORT_BUTTONS', 'yes'],
+    ['AUTO_EFFORT_ANNOUNCE', 'yes'],
+    ['AUTO_EFFORT_TEST_COMMAND_PATTERNS', '["(unclosed"]'],
+    ['AUTO_EFFORT_READ_ONLY_COMMANDS', '["two words"]'],
+    ['AUTO_EFFORT_FAILURE_PATTERNS', '["(unclosed"]'],
+    ['AUTO_EFFORT_RED_WORDS', '["OK now"]'],
+    ['AUTO_EFFORT_GREEN_WORDS', '[1]'],
+    ['AUTO_EFFORT_AGENT_DIRS', '{"dir":"/x"}'],
+    ['AUTO_EFFORT_LOG_PACKETS', 'yes'],
   ];
 
   it.each(BAD)('%s is read, and a bad value is reported by name with the default used', async (name, bad) => {
     const x = engine(new Map(), { env: { [name]: bad } });
     await x.sessionStart();
-    expect(x.logs.filter((line) => line.includes(`environment variable ${name} is ${JSON.stringify(bad)}`))).toHaveLength(name === 'AUTO_EFFORT_CONTROL_MODELS' ? 2 : 1);
+    expect(x.logs.filter((line) => line.includes(`environment variable ${name} is ${JSON.stringify(bad)}`))).toHaveLength(name === 'AUTO_EFFORT_MODELS' ? 2 : 1);
     expect(x.logs.filter((line) => line.includes('option "')).every((line) => line.includes(name))).toBe(true);
   });
 
-  it('AUTO_EFFORT_CONTROL_BUTTONS decides whether the three tools register, over the buttons option', async () => {
-    const off = engine(new Map(), { env: { AUTO_EFFORT_CONTROL_BUTTONS: '0' }, options: { buttons: true } });
+  it('AUTO_EFFORT_BUTTONS decides whether the three tools register, over the buttons option', async () => {
+    const off = engine(new Map(), { env: { AUTO_EFFORT_BUTTONS: '0' }, options: { buttons: true } });
     await off.sessionStart();
     expect(off.registered.filter((spec) => spec.name !== 'set_effort')).toEqual([]);
-    const on = engine(new Map(), { env: { AUTO_EFFORT_CONTROL_BUTTONS: ' ' }, options: { buttons: true } });
+    const on = engine(new Map(), { env: { AUTO_EFFORT_BUTTONS: ' ' }, options: { buttons: true } });
     await on.sessionStart();
     expect(on.registered.filter((spec) => spec.name !== 'set_effort').map((spec) => spec.name)).toEqual(['effort_up', 'effort_down', 'effort_auto']);
     const unset = engine(new Map(), { options: { buttons: false } });
@@ -1639,9 +1639,9 @@ suite('environment variables', () => {
     expect(unset.registered.filter((spec) => spec.name !== 'set_effort')).toEqual([]);
   });
 
-  it('AUTO_EFFORT_CONTROL_PARENT_TAG shapes the Agent tool description before any session start', async () => {
-    const honor = await engine(new Map(), { env: { AUTO_EFFORT_CONTROL_PARENT_TAG: 'honor' }, options: { parentTag: 'ignore' } }).describeTool('Agent', 'Spawns.');
-    const ignore = await engine(new Map(), { env: { AUTO_EFFORT_CONTROL_PARENT_TAG: 'ignore' } }).describeTool('Agent', 'Spawns.');
+  it('AUTO_EFFORT_PARENT_TAG shapes the Agent tool description before any session start', async () => {
+    const honor = await engine(new Map(), { env: { AUTO_EFFORT_PARENT_TAG: 'honor' }, options: { parentTag: 'ignore' } }).describeTool('Agent', 'Spawns.');
+    const ignore = await engine(new Map(), { env: { AUTO_EFFORT_PARENT_TAG: 'ignore' } }).describeTool('Agent', 'Spawns.');
     expect(honor.description).not.toBe(ignore.description);
     expect((await engine(new Map(), { options: { parentTag: 'ignore' } }).describeTool('Agent', 'Spawns.')).description).toBe(ignore.description);
   });
@@ -1650,22 +1650,22 @@ suite('environment variables', () => {
     const x = engine(new Map(), { options: { buttons: false } });
     const read = x.$.env.get;
     x.$.env.get = async (name: string) => {
-      if (name === 'AUTO_EFFORT_CONTROL_BUTTONS') throw new Error('env denied');
+      if (name === 'AUTO_EFFORT_BUTTONS') throw new Error('env denied');
       return read(name);
     };
     await x.sessionStart();
     expect(x.registered.filter((spec) => spec.name !== 'set_effort')).toEqual([]);
-    expect(x.logs.join('\n')).toContain('auto-effort-control: reading AUTO_EFFORT_CONTROL_BUTTONS failed: env denied; using the option or its default');
+    expect(x.logs.join('\n')).toContain('auto-effort: reading AUTO_EFFORT_BUTTONS failed: env denied; using the option or its default');
   });
 });
 
 
 suite('legacy sub-agent configuration migration', () => {
   it.each([
-    { name: 'legacy environment', options: {}, env: { EFFORT_LIVE_CONTROL_BUTTONS: '0' }, snapshot: {}, buttons: false, message: 'EFFORT_LIVE_CONTROL_BUTTONS -> AUTO_EFFORT_CONTROL_BUTTONS: honored' },
-    { name: 'legacy plugin options', options: {}, env: {}, snapshot: { pluginConfigs: { 'effort-live-control@old': { options: { buttons: false } } } }, buttons: false, message: 'pluginConfigs["effort-live-control@old"].options.buttons -> pluginConfigs["auto-effort-control@…"].options.buttons: honored' },
-    { name: 'canonical value displaces legacy', options: {}, env: { AUTO_EFFORT_CONTROL_BUTTONS: '1', EFFORT_LIVE_CONTROL_BUTTONS: '0' }, snapshot: {}, buttons: true, message: 'EFFORT_LIVE_CONTROL_BUTTONS -> AUTO_EFFORT_CONTROL_BUTTONS: displaced' },
-    { name: 'canonical scoped models keep the tag home', options: { models: ['claude-haiku-5-5'] }, env: {}, snapshot: { pluginConfigs: { 'effort-live-control@old': { options: { models: ['claude-opus-5-5'] } } } }, buttons: true, message: 'options.models -> pluginConfigs["auto-effort-control@…"].options.models: displaced' },
+    { name: 'legacy environment', options: {}, env: { EFFORT_LIVE_CONTROL_BUTTONS: '0' }, snapshot: {}, buttons: false, message: 'EFFORT_LIVE_CONTROL_BUTTONS -> AUTO_EFFORT_BUTTONS: honored' },
+    { name: 'legacy plugin options', options: {}, env: {}, snapshot: { pluginConfigs: { 'effort-live-control@old': { options: { buttons: false } } } }, buttons: false, message: 'pluginConfigs["effort-live-control@old"].options.buttons -> pluginConfigs["auto-effort@…"].options.buttons: honored' },
+    { name: 'canonical value displaces legacy', options: {}, env: { AUTO_EFFORT_BUTTONS: '1', EFFORT_LIVE_CONTROL_BUTTONS: '0' }, snapshot: {}, buttons: true, message: 'EFFORT_LIVE_CONTROL_BUTTONS -> AUTO_EFFORT_BUTTONS: displaced' },
+    { name: 'canonical scoped models keep the tag home', options: { models: ['claude-haiku-5-5'] }, env: {}, snapshot: { pluginConfigs: { 'effort-live-control@old': { options: { models: ['claude-opus-5-5'] } } } }, buttons: true, message: 'options.models -> pluginConfigs["auto-effort@…"].options.models: displaced' },
   ])('$name applies or reports its exact migration', async ({ options, env, snapshot, buttons, message }) => {
     const x = engine(undefined, { options, env });
     x.$.settings.read = async () => snapshot;

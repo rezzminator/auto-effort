@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { planFor } from '../plugins/auto-effort-control/src/plan.ts';
-import { compile, resolveSettings } from '../plugins/auto-effort-control/src/settings.ts';
+import { planFor } from '../plugins/auto-effort/src/plan.ts';
+import { compile, resolveSettings } from '../plugins/auto-effort/src/settings.ts';
 
 const plan = (text: string, raw: Record<string, unknown> = {}) => {
   const { settings } = resolveSettings(raw);

@@ -60,17 +60,17 @@ export function handBackText(input: { held: boolean; level: Effort | null; outra
 
 /** The one line a rise adds to the tool result that caused it. */
 export function escalationLine(failures: number, from: Effort, to: Effort): string {
-  return `auto-effort-control: ${failures} failing test runs this turn, so your reasoning effort rises from ${from} to ${to} for the requests that follow.`;
+  return `auto-effort: ${failures} failing test runs this turn, so your reasoning effort rises from ${from} to ${to} for the requests that follow.`;
 }
 
 /** The one line the rise's threshold adds while the main chat's own level holds: no rise, and the way up. */
 export function heldLine(failures: number, level: Effort, tool: string): string {
-  return `auto-effort-control: ${failures} failing test runs this turn; your reasoning effort stays at ${level}, the level you set. Call ${tool} with a higher level if the work needs more, or with auto to let failing tests raise it.`;
+  return `auto-effort: ${failures} failing test runs this turn; your reasoning effort stays at ${level}, the level you set. Call ${tool} with a higher level if the work needs more, or with auto to let failing tests raise it.`;
 }
 
 /** The one line a passing test run adds when it undoes the rises of the failing streak before it. */
 export function deescalationLine(from: Effort, to: Effort): string {
-  return `auto-effort-control: the tests pass again, so your reasoning effort is back to ${to} from ${from} for the requests that follow.`;
+  return `auto-effort: the tests pass again, so your reasoning effort is back to ${to} from ${from} for the requests that follow.`;
 }
 
 const REASON_MAX = 60;

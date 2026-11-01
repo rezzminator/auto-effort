@@ -7,6 +7,12 @@ export type Usage = {
   cache_creation_input_tokens: number;
 };
 
+/** The cached prefix a request left behind: what it read from the cache plus what it wrote. Its uncached input sat after the
+ * last cache breakpoint, so no later request can read it. */
+export function cachedPrompt(usage: Usage): number {
+  return usage.cache_read_input_tokens + usage.cache_creation_input_tokens;
+}
+
 /** The whole prompt a request carried: uncached input, cache read and cache write. */
 export function wholePrompt(usage: Usage): number {
   return usage.input_tokens + usage.cache_read_input_tokens + usage.cache_creation_input_tokens;
@@ -38,8 +44,8 @@ export function judgeSwitch(check: SwitchCheck): Verdict {
   if (check.compacted) return { verdict: 'skip', why: 'compaction' };
   if (check.curMessages < check.prevMessages) return { verdict: 'skip', why: 'shrunk' };
   if (check.gapMs > check.ttlMs) return { verdict: 'skip', why: 'ttl' };
-  const whole = wholePrompt(prev);
-  if (whole <= 0) return { verdict: 'skip', why: 'empty-prev' };
-  const ratio = cur.cache_read_input_tokens / whole;
+  const cached = cachedPrompt(prev);
+  if (cached <= 0) return { verdict: 'skip', why: 'empty-prev' };
+  const ratio = cur.cache_read_input_tokens / cached;
   return { verdict: ratio >= check.threshold ? 'ok' : 'fail', ratio };
 }

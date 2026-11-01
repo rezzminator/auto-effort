@@ -4,7 +4,7 @@
 
 /** The session's sub-agent log: the id and scope go before the extension, apart from the main chat's numbered files. */
 export function sessionLogPath(base: string, sessionId: string): string {
-  if (sessionId === '') throw new Error('auto-effort-control: empty session id; cannot name the log file');
+  if (sessionId === '') throw new Error('auto-effort: empty session id; cannot name the log file');
   const safe = sessionId.replace(/[^A-Za-z0-9_-]/g, '_');
   const slash = base.lastIndexOf('/');
   const dir = base.slice(0, slash + 1);

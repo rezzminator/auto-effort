@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { DEFAULTS } from '../../plugins/auto-effort-control/src/subagent/settings.ts';
-import { runSegments } from '../../plugins/auto-effort-control/src/subagent/shell.ts';
+import { DEFAULTS } from '../../plugins/auto-effort/src/subagent/settings.ts';
+import { runSegments } from '../../plugins/auto-effort/src/subagent/shell.ts';
 
 const READ_ONLY = new Set(DEFAULTS.readOnlyCommands);
 const segments = (command: string, readOnly: ReadonlySet<string> = READ_ONLY) => runSegments(command, readOnly);

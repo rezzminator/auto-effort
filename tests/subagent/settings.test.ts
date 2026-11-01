@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { parseTripwires } from '../../plugins/auto-effort-control/src/subagent/judge.ts';
-import { compile, DEFAULTS, resolveSettings, SETTING_KEYS } from '../../plugins/auto-effort-control/src/subagent/settings.ts';
+import { parseTripwires } from '../../plugins/auto-effort/src/subagent/judge.ts';
+import { compile, DEFAULTS, resolveSettings, SETTING_KEYS } from '../../plugins/auto-effort/src/subagent/settings.ts';
 
 describe('resolveSettings', () => {
   it('uses the defaults for no options, with no errors', () => {
@@ -47,7 +47,7 @@ describe('resolveSettings', () => {
     const { settings, errors } = resolveSettings({ floor: 'sideways', judgeTimeoutMs: 0, buttons: 'maybe', judgeEffort: 'ultra' });
     expect(settings).toMatchObject({ floor: 'medium', judgeTimeoutMs: 45000, buttons: true, judgeEffort: 'xhigh' });
     expect(errors).toHaveLength(4);
-    expect(errors[0]).toBe('auto-effort-control: option "floor" is "sideways", not a level (low, medium, high, xhigh, max); using the default "medium"');
+    expect(errors[0]).toBe('auto-effort: option "floor" is "sideways", not a level (low, medium, high, xhigh, max); using the default "medium"');
   });
 
   it('judgeRaiseAt takes a number from 0 to 100 and reports anything else', () => {
@@ -109,7 +109,7 @@ describe('tripwires option', () => {
   it('tripwires: an unknown name is reported and the default applies', () => {
     const { settings, errors } = resolveSettings({ tripwires: 'fail1,boom' });
     expect(settings.tripwires).toBe('fail1,fail2,red,redispatch');
-    expect(errors).toEqual(['auto-effort-control: option "tripwires" is "fail1,boom", "boom" is not a tripwire (fail1, fail2, red, redispatch); using the default "fail1,fail2,red,redispatch"']);
+    expect(errors).toEqual(['auto-effort: option "tripwires" is "fail1,boom", "boom" is not a tripwire (fail1, fail2, red, redispatch); using the default "fail1,fail2,red,redispatch"']);
     expect(resolveSettings({ tripwires: 7 }).errors).toHaveLength(1);
   });
 });
@@ -125,7 +125,7 @@ describe('parentTag option', () => {
     for (const raw of ['sometimes', 'Honor', '', true, 7]) {
       const { settings, errors } = resolveSettings({ parentTag: raw });
       expect(settings.parentTag, String(raw)).toBe('honor');
-      expect(errors, String(raw)).toEqual([`auto-effort-control: option "parentTag" is ${JSON.stringify(raw)}, not honor or ignore; using the default "honor"`]);
+      expect(errors, String(raw)).toEqual([`auto-effort: option "parentTag" is ${JSON.stringify(raw)}, not honor or ignore; using the default "honor"`]);
     }
   });
 });
@@ -181,30 +181,30 @@ describe('compile', () => {
   });
 });
 
-// Every option is also read from AUTO_EFFORT_CONTROL_{OPTION}: the variable wins over the plugin option, a bad one
+// Every option is also read from AUTO_EFFORT_{OPTION}: the variable wins over the plugin option, a bad one
 // is reported by its name and the default applies, a blank one is no variable.
 type EnvRow = { key: keyof typeof DEFAULTS; name: string; env: string; expected: unknown; option: unknown; bad?: string };
 const ENV_ROWS: EnvRow[] = [
-  { key: 'floor', name: 'AUTO_EFFORT_CONTROL_FLOOR', env: 'high', expected: 'high', option: 'low', bad: 'sideways' },
-  { key: 'ceiling', name: 'AUTO_EFFORT_CONTROL_CEILING', env: 'high', expected: 'high', option: 'max', bad: 'sideways' },
-  { key: 'parentTag', name: 'AUTO_EFFORT_CONTROL_PARENT_TAG', env: 'ignore', expected: 'ignore', option: 'honor', bad: 'maybe' },
-  { key: 'models', name: 'AUTO_EFFORT_CONTROL_MODELS', env: '["claude-x"]', expected: ['claude-x'], option: ['claude-y'], bad: 'claude-x' },
-  { key: 'judge', name: 'AUTO_EFFORT_CONTROL_JUDGE', env: ' TRUE ', expected: true, option: false, bad: 'maybe' },
-  { key: 'judgeRaiseAt', name: 'AUTO_EFFORT_CONTROL_JUDGE_RAISE_AT', env: '40', expected: 40, option: 50, bad: '101' },
-  { key: 'tripwires', name: 'AUTO_EFFORT_CONTROL_TRIPWIRES', env: 'red', expected: 'red', option: 'fail1', bad: 'bogus' },
-  { key: 'struggleDecay', name: 'AUTO_EFFORT_CONTROL_STRUGGLE_DECAY', env: '0', expected: 0, option: 5, bad: '-1' },
-  { key: 'judgeModel', name: 'AUTO_EFFORT_CONTROL_JUDGE_MODEL', env: 'sonnet', expected: 'sonnet', option: 'opus', bad: 'two words' },
-  { key: 'judgeEffort', name: 'AUTO_EFFORT_CONTROL_JUDGE_EFFORT', env: 'high', expected: 'high', option: 'low', bad: 'ultra' },
-  { key: 'judgeTimeoutMs', name: 'AUTO_EFFORT_CONTROL_JUDGE_TIMEOUT_MS', env: '9000', expected: 9000, option: 8000, bad: '0' },
-  { key: 'buttons', name: 'AUTO_EFFORT_CONTROL_BUTTONS', env: '0', expected: false, option: true, bad: 'yes' },
-  { key: 'announce', name: 'AUTO_EFFORT_CONTROL_ANNOUNCE', env: 'False', expected: false, option: true, bad: 'no' },
-  { key: 'testCommandPatterns', name: 'AUTO_EFFORT_CONTROL_TEST_COMMAND_PATTERNS', env: '["^make$"]', expected: ['^make$'], option: ['^ci$'], bad: '["(unclosed"]' },
-  { key: 'readOnlyCommands', name: 'AUTO_EFFORT_CONTROL_READ_ONLY_COMMANDS', env: '["ls"]', expected: ['ls'], option: ['cat'], bad: '["two words"]' },
-  { key: 'failurePatterns', name: 'AUTO_EFFORT_CONTROL_FAILURE_PATTERNS', env: '["boom"]', expected: ['boom'], option: ['bang'], bad: '["(unclosed"]' },
-  { key: 'redWords', name: 'AUTO_EFFORT_CONTROL_RED_WORDS', env: '["NO"]', expected: ['NO'], option: ['NOPE'], bad: '["OK now"]' },
-  { key: 'greenWords', name: 'AUTO_EFFORT_CONTROL_GREEN_WORDS', env: '["YES"]', expected: ['YES'], option: ['OK'], bad: '[1]' },
-  { key: 'agentDirs', name: 'AUTO_EFFORT_CONTROL_AGENT_DIRS', env: '["/x"]', expected: ['/x'], option: ['/y'], bad: '{"dir":"/x"}' },
-  { key: 'logPackets', name: 'AUTO_EFFORT_CONTROL_LOG_PACKETS', env: '1', expected: true, option: false, bad: 'yes' },
+  { key: 'floor', name: 'AUTO_EFFORT_FLOOR', env: 'high', expected: 'high', option: 'low', bad: 'sideways' },
+  { key: 'ceiling', name: 'AUTO_EFFORT_CEILING', env: 'high', expected: 'high', option: 'max', bad: 'sideways' },
+  { key: 'parentTag', name: 'AUTO_EFFORT_PARENT_TAG', env: 'ignore', expected: 'ignore', option: 'honor', bad: 'maybe' },
+  { key: 'models', name: 'AUTO_EFFORT_MODELS', env: '["claude-x"]', expected: ['claude-x'], option: ['claude-y'], bad: 'claude-x' },
+  { key: 'judge', name: 'AUTO_EFFORT_JUDGE', env: ' TRUE ', expected: true, option: false, bad: 'maybe' },
+  { key: 'judgeRaiseAt', name: 'AUTO_EFFORT_JUDGE_RAISE_AT', env: '40', expected: 40, option: 50, bad: '101' },
+  { key: 'tripwires', name: 'AUTO_EFFORT_TRIPWIRES', env: 'red', expected: 'red', option: 'fail1', bad: 'bogus' },
+  { key: 'struggleDecay', name: 'AUTO_EFFORT_STRUGGLE_DECAY', env: '0', expected: 0, option: 5, bad: '-1' },
+  { key: 'judgeModel', name: 'AUTO_EFFORT_JUDGE_MODEL', env: 'sonnet', expected: 'sonnet', option: 'opus', bad: 'two words' },
+  { key: 'judgeEffort', name: 'AUTO_EFFORT_JUDGE_EFFORT', env: 'high', expected: 'high', option: 'low', bad: 'ultra' },
+  { key: 'judgeTimeoutMs', name: 'AUTO_EFFORT_JUDGE_TIMEOUT_MS', env: '9000', expected: 9000, option: 8000, bad: '0' },
+  { key: 'buttons', name: 'AUTO_EFFORT_BUTTONS', env: '0', expected: false, option: true, bad: 'yes' },
+  { key: 'announce', name: 'AUTO_EFFORT_ANNOUNCE', env: 'False', expected: false, option: true, bad: 'no' },
+  { key: 'testCommandPatterns', name: 'AUTO_EFFORT_TEST_COMMAND_PATTERNS', env: '["^make$"]', expected: ['^make$'], option: ['^ci$'], bad: '["(unclosed"]' },
+  { key: 'readOnlyCommands', name: 'AUTO_EFFORT_READ_ONLY_COMMANDS', env: '["ls"]', expected: ['ls'], option: ['cat'], bad: '["two words"]' },
+  { key: 'failurePatterns', name: 'AUTO_EFFORT_FAILURE_PATTERNS', env: '["boom"]', expected: ['boom'], option: ['bang'], bad: '["(unclosed"]' },
+  { key: 'redWords', name: 'AUTO_EFFORT_RED_WORDS', env: '["NO"]', expected: ['NO'], option: ['NOPE'], bad: '["OK now"]' },
+  { key: 'greenWords', name: 'AUTO_EFFORT_GREEN_WORDS', env: '["YES"]', expected: ['YES'], option: ['OK'], bad: '[1]' },
+  { key: 'agentDirs', name: 'AUTO_EFFORT_AGENT_DIRS', env: '["/x"]', expected: ['/x'], option: ['/y'], bad: '{"dir":"/x"}' },
+  { key: 'logPackets', name: 'AUTO_EFFORT_LOG_PACKETS', env: '1', expected: true, option: false, bad: 'yes' },
 ];
 
 describe('resolveSettings: environment variables', () => {
@@ -237,7 +237,7 @@ describe('resolveSettings: environment variables', () => {
 
   it('words a bad value like a bad option, naming the variable', () => {
     const { errors } = resolveSettings({}, { floor: 'sideways' });
-    expect(errors).toEqual(['auto-effort-control: environment variable AUTO_EFFORT_CONTROL_FLOOR is "sideways", not a level (low, medium, high, xhigh, max); using the default "medium"']);
+    expect(errors).toEqual(['auto-effort: environment variable AUTO_EFFORT_FLOOR is "sideways", not a level (low, medium, high, xhigh, max); using the default "medium"']);
   });
 
   it('reads an empty JSON array as the empty list, over a list option', () => {
@@ -252,12 +252,12 @@ describe('resolveSettings: environment variables', () => {
   it('checks the floor against the ceiling across the layers', () => {
     const { settings, errors } = resolveSettings({ ceiling: 'low' }, { floor: 'max' });
     expect(settings).toMatchObject({ floor: 'medium', ceiling: 'xhigh' });
-    expect(errors[0]).toContain('environment variable AUTO_EFFORT_CONTROL_FLOOR ("max") is above option "ceiling" ("low")');
-    expect(resolveSettings({ floor: 'high' }, { ceiling: 'low' }).errors[0]).toContain('option "floor" ("high") is above environment variable AUTO_EFFORT_CONTROL_CEILING ("low")');
+    expect(errors[0]).toContain('environment variable AUTO_EFFORT_FLOOR ("max") is above option "ceiling" ("low")');
+    expect(resolveSettings({ floor: 'high' }, { ceiling: 'low' }).errors[0]).toContain('option "floor" ("high") is above environment variable AUTO_EFFORT_CEILING ("low")');
     expect(resolveSettings({ floor: 'high', ceiling: 'low' }).errors[0]).toContain('option "floor" ("high") is above option "ceiling" ("low")');
   });
 
   it('names where a list variable stopped being JSON', () => {
-    expect(resolveSettings({}, { models: '["a",]' }).errors[0]).toMatch(/AUTO_EFFORT_CONTROL_MODELS is .*not a JSON array of strings \(.+\)/);
+    expect(resolveSettings({}, { models: '["a",]' }).errors[0]).toMatch(/AUTO_EFFORT_MODELS is .*not a JSON array of strings \(.+\)/);
   });
 });

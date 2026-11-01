@@ -1,5 +1,5 @@
 import { describe as suite, expect, it } from 'vitest';
-import { DESCRIBE_LINE, LEVELS, denyText, describe, isStillRunning, parseTag, stepEffort, stripTag } from '../../plugins/auto-effort-control/src/subagent/effort.ts';
+import { DESCRIBE_LINE, LEVELS, denyText, describe, isStillRunning, parseTag, stepEffort, stripTag } from '../../plugins/auto-effort/src/subagent/effort.ts';
 
 suite('parseTag', () => {
   it.each(LEVELS)('reads [effort: %s] at the start of the prompt', (level) => {

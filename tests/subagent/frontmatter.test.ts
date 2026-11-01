@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseFrontmatter } from '../../plugins/auto-effort-control/src/subagent/frontmatter.ts';
+import { parseFrontmatter } from '../../plugins/auto-effort/src/subagent/frontmatter.ts';
 
 describe('parseFrontmatter', () => {
   it('reads top-level scalars between the fences', () => {

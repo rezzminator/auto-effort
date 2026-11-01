@@ -2,6 +2,25 @@
 
 All notable changes to this plugin are recorded here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the plugin follows [semantic versioning](https://semver.org/).
 
+## [3.0.0] — 2026-11-01
+
+The plugin is `auto-effort` again, the name of its repository: a renamed plugin, so the release is a major one. README § Migrating says how to move.
+
+### Added
+
+- This repository is its own marketplace, named `professor`: `/plugin marketplace add rezzminator/auto-effort`, then `/plugin install auto-effort@professor`.
+
+### Changed
+
+- **Migration:** the plugin installs as `auto-effort@professor` (was `auto-effort-control@professor`): uninstall the old id and install the new one. The MCP tools keep their names under the server prefix `mcp__auto-effort__` (was `mcp__auto-effort-control__`), the command is `/auto-effort` (was `/auto-effort-control`), and every option's variable is `AUTO_EFFORT_{OPTION}` (was `AUTO_EFFORT_CONTROL_{OPTION}`). No alias of an old tool or command remains: an agent that lists `mcp__auto-effort-control__…` in `tools:` names the new prefix.
+- Options under `pluginConfigs["auto-effort-control@…"]` and `AUTO_EFFORT_CONTROL_*` variables are read as the new name's own, below them, and each is reported by old and new key.
+- The state file, the decision logs and the plugin logs live under `auto-effort/` (`~/.local/state/auto-effort/`, `$PLUGIN_LOG_DIR/auto-effort/`). At start the plugin moves each `auto-effort-control/` directory there once, while the new place is free, and logs the move (`former-dir-moved`) or the directory it kept (`former-dir-kept`); nothing is overwritten or deleted.
+- The state file is `version` 3: the keeper's last argument is `auto-effort-keeper` (was `auto-effort-control-keeper`).
+
+### Fixed
+
+- **The cache check no longer turns a model off when its cache works.** After an effort change it measured the switched request's cache read against the previous request's whole prompt, including input sent after the last cache breakpoint that no request can ever read back, so a healthy switch could read as a cache break and mark the model unsafe. It now measures against what the previous request actually cached. `/auto-effort status` words the ratio the same way; `/auto-effort clear {model}` turns a model wrongly marked by an earlier version back on.
+
 ## [2.0.0] — 2026-10-30
 
 A major release: the plugin installs as `auto-effort-control@professor` only, and the `logFile` option is removed. § Changed and § Removed say how to move.
