@@ -672,7 +672,7 @@ describe('cache canary (R9)', () => {
     expect(out.end.persisted).toBeUndefined();
     expect(out.end.warning?.msg).toBeUndefined();
     expect(r.rows.find((row) => row.event === 'canary')).toMatchObject({ verdict: 'ok', from: 'high', to: 'medium' });
-    expect(r.rows.find((row) => row.event === 'canary')?.ratio).toBeCloseTo(4990 / 5010, 4);
+    expect(r.rows.find((row) => row.event === 'canary')?.ratio).toBeCloseTo(4990 / 5000, 4);
   });
 
   it('marks the model unsafe below the threshold, warns once and stops switching on that model', () => {

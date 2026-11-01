@@ -66,7 +66,7 @@ export function statusText(input: { view: View; settings: Settings; errors: read
   if (view.model !== undefined && view.gate !== undefined) {
     let gate = `model: ${view.model} · ${view.gate.status}`;
     if (view.gate.status === 'probation') gate += ` (${view.probation ?? 0} of ${settings.probationSwitches} clean switches)`;
-    if (view.unsafe !== undefined) gate += ` · cache read ${(view.unsafe.ratio * 100).toFixed(1)}% of the previous prompt at ${view.unsafe.at}; /auto-effort clear ${view.model} turns it back on`;
+    if (view.unsafe !== undefined) gate += ` · cache read ${(view.unsafe.ratio * 100).toFixed(1)}% of what the previous request cached at ${view.unsafe.at}; /auto-effort clear ${view.model} turns it back on`;
     lines.push(gate);
   }
   if (errors.length > 0) lines.push('option errors:', ...errors.map((line) => `  ${line}`));
