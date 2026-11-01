@@ -134,9 +134,9 @@ You coordinate the build. Spawn builders, check their returns, run the tests, th
 | Key | Meaning |
 | --- | --- |
 | `effortControl.floor`, `effortControl.ceiling` | The range of levels the agent is ever sent (default: the options). |
-| `effortControl.landing` | Agent types, separated by spaces or commas: spawning one lowers the agent one step below its home level. |
+| `effortControl.landing` | Agent types, separated by spaces or commas or given as a YAML list (`- lander` lines): spawning one lowers the agent one step below its home level. |
 | `effortControl.judge` | `on` or `off`: ask the judge at a tripwire, or raise one step mechanically (default: the option). |
-| `effortControl.tripwires` | The armed tripwires for this agent, comma-separated (`fail1`, `fail2`, `red`, `redispatch`; empty arms none), e.g. `red, redispatch` for an agent that writes its tests first (default: the option). |
+| `effortControl.tripwires` | The armed tripwires for this agent, comma-separated or a YAML list (`fail1`, `fail2`, `red`, `redispatch`; empty arms none), e.g. `red, redispatch` for an agent that writes its tests first (default: the option). |
 | `effortControl.struggleDecay` | Requests without a new tripwire after which this agent's raised level comes home; `0` turns it off (default: the option). |
 | `effortControl.parentTag` | `honor` or `ignore`: whether a tag beats this type's `effort:` (default: the option). Read even when steering is off, and it alone never turns steering on, so `effortControl:` holding only `parentTag: ignore` pins a type at its own `effort:` without steering it. |
 | `effortControl.enabled` | `on` or `off`; on by default when any nested key other than `parentTag` is present. |
@@ -185,7 +185,7 @@ The plugin was named `auto-effort-control` from 1.0.0 to 2.0.0; it is `auto-effo
 
 - **Install it under its name.** Run `claude plugin uninstall auto-effort-control@professor`, then `claude plugin install auto-effort@professor`.
 - **Settings carry over, honoured and named.** An option under `pluginConfigs["auto-effort-control@…"]` and a variable `AUTO_EFFORT_CONTROL_*` are read as this name's own, below them, in both scopes, and each is reported by old and new key ([Precedence](#precedence)); move them to `pluginConfigs["auto-effort@…"]` and `AUTO_EFFORT_*`.
-- **State and logs move once.** At start, `~/.local/state/auto-effort-control/`, and `$PLUGIN_LOG_DIR/auto-effort-control/` when `PLUGIN_LOG_DIR` is set, move to the same place under `auto-effort/` while that place is free, said as `former-dir-moved` in `info.jsonl`. When it is taken, both stay as they are, said as `former-dir-kept` in `warnings.jsonl`; a move that fails is an error on the screen. Nothing is overwritten or deleted.
+- **State and logs move once.** At start, `~/.local/state/auto-effort-control/`, and `$PLUGIN_LOG_DIR/auto-effort-control/` when `PLUGIN_LOG_DIR` is set, move to the same place under `auto-effort/` while that place is free, said as `former-dir-moved` in `info.jsonl`. When it is taken, both stay as they are, said as `former-dir-kept` in `warnings.jsonl`; a move that fails is an error on the screen naming that directory, and the other moves go on. Nothing is overwritten or deleted.
 - **The tools and the command follow the name.** The tools keep their names (`set_effort`, `effort_up`, `effort_down`, `effort_auto`) under the server prefix `mcp__auto-effort__` (was `mcp__auto-effort-control__`), and the command is `/auto-effort`; an agent that listed `mcp__auto-effort-control__…` in `tools:` names the new prefix. No alias of the old tools or command remains.
 - **The state file is `version` 3.** Its keeper's last argument is `auto-effort-keeper` ([The state file](#the-state-file)).
 
@@ -326,7 +326,7 @@ The sub-agents write `decisions.<session>.subagent.jsonl`, the newest 5,000 rows
 | `step` | Each steered sub-agent request: `model`, `requested`, `sent`, `struggle`. |
 | `tag` | A spawn tag read: `tag`, `effort`; `home` and `clamped` for a steered agent. `tag-ignored` when `parentTag: ignore` kept the definition's effort. |
 | `tripwire` | A tripwire: `tripwire`, `level`, `held` (a tripwire under a held level). |
-| `judge`, `judge-failed`, `judge-stale`, `judge-busy` | The judge's answer (`tripwire`, `p`, `from`, `to`, `reason`, `ms`, `usage`), its failure, a late answer for a closed struggle, a call already in flight. |
+| `judge`, `judge-failed`, `judge-stale`, `judge-busy` | The judge's answer (`tripwire`, `p`, `from`, `to`, `reason`, `ms`, `usage`), its failure, a late answer for a closed struggle, a call already in flight. `tripwire` is `unknown` for an answer or failure with no call in flight. |
 | `mechanical` | A one-step rise without the judge (`tripwire`, `from`, `to`; `busy` when it replaced a stale judge call). |
 | `resolved` | A struggle ending (`from`, `to`, `requests`, `why`: `resolved` or `decay`). |
 | `landing` | A `landing` type spawned. |

@@ -98,10 +98,12 @@ function note($: EngineInterface, st: State, level: PluginLogLevel, event: strin
 function toUsage(raw: unknown): Usage | null {
   if (typeof raw !== 'object' || raw === null) return null;
   const u = raw as Record<string, unknown>;
-  if (typeof u.input_tokens !== 'number') return null;
+  const keys = ['input_tokens', 'output_tokens', 'cache_read_input_tokens', 'cache_creation_input_tokens'];
+  // A missing count reads as 0, except the cache read the canary judges on: without it the usage is unknown, never a 0% read.
+  if (typeof u.cache_read_input_tokens !== 'number') return null;
   const count = (key: string): number => (typeof u[key] === 'number' ? u[key] : 0);
   return {
-    input_tokens: u.input_tokens,
+    input_tokens: count('input_tokens'),
     output_tokens: count('output_tokens'),
     cache_read_input_tokens: count('cache_read_input_tokens'),
     cache_creation_input_tokens: count('cache_creation_input_tokens'),
@@ -384,8 +386,13 @@ async function restoreSession($: EngineInterface, st: State): Promise<void> {
       if (saved === undefined) {
         note($, st, 'error', 'saved-switch-unreadable', 'hooks/auto-effort.ts#restoreSession', 'reading the saved on/off, the pin and the set_effort level', new Error(`${quote(value)} is not in the expected form`), 'this session is on and unpinned, with no set_effort level');
       } else {
-        st.ctl.restoreSession(saved);
-        st.savedSession = JSON.stringify(st.ctl.sessionState());
+        st.ctl.restoreSession(saved.state);
+        // A partly read value stays unsaved, so the next save writes the whole state back.
+        if (saved.unreadable.length === 0) st.savedSession = JSON.stringify(st.ctl.sessionState());
+        else {
+          const names = saved.unreadable.join(', ');
+          note($, st, 'error', 'saved-switch-unreadable', 'hooks/auto-effort.ts#restoreSession', 'reading the saved on/off, the pin and the set_effort level', new Error(`${quote(value)} is not in the expected form: ${names}`), `${names} ${saved.unreadable.length === 1 ? 'starts at its default' : 'start at their defaults'}, the rest is restored`);
+        }
       }
     }
   } catch (error) {
@@ -423,7 +430,9 @@ async function start($: EngineInterface, st: State): Promise<void> {
     note($, st, 'error', 'session-id-unreadable', 'hooks/auto-effort.ts#start', 'reading the session id', error, 'the log file is named at the first row');
   }
   try {
-    st.ctl.loadPersisted(readPersisted(await $.store.get(STORE_KEY)));
+    const unreadable: string[] = [];
+    st.ctl.loadPersisted(readPersisted(await $.store.get(STORE_KEY), unreadable));
+    if (unreadable.length > 0) note($, st, 'error', 'saved-marks-unreadable', 'hooks/auto-effort.ts#start', 'reading the saved model marks', new Error(`${unreadable.join(', ')} ${unreadable.length === 1 ? 'is' : 'are'} not in the expected form`), 'those entries start over');
   } catch (error) {
     note($, st, 'error', 'saved-marks-unreadable', 'hooks/auto-effort.ts#start', 'reading the saved model marks', error, 'starting with none');
     st.ctl.loadPersisted(EMPTY_PERSISTED);
@@ -789,6 +798,7 @@ function SubSetupPlugin(rt: SubRuntime, $: EngineInterface): Promise<string | un
       if (why !== undefined) SubNotice(rt, $, 'warning', 'plugin-log-dir-failed', `auto-effort: creating the plugin log directory ${rt.pluginDir} failed: ${why}; the decision log may create it with the host's modes`, 'start');
     }
     if (homeError !== undefined) SubNotice(rt, $, 'error', 'home-missing', `auto-effort: reading HOME failed: ${SubMessage(homeError.cause)}; skipping ~/.claude/agents, and the logs need PLUGIN_LOG_DIR`, 'start');
+    else if (!home) SubNotice(rt, $, 'warning', 'home-missing', 'auto-effort: HOME is not set; skipping ~/.claude/agents', 'start');
     if (dirError !== undefined) SubNotice(rt, $, 'warning', 'plugin-log-dir-unreadable', `auto-effort: reading PLUGIN_LOG_DIR failed: ${SubMessage(dirError.cause)}; using the HOME fallback when available`, 'start');
     if (rt.pluginDir === undefined && homeError === undefined && dirError === undefined) SubNotice(rt, $, 'error', 'decision-log-off', 'auto-effort: no PLUGIN_LOG_DIR and no HOME; the decision log is off', 'start');
     return home;
@@ -809,6 +819,7 @@ async function SubMoveFormerDirs(rt: SubRuntime, $: EngineInterface, configured:
     const moved = await $.process.run(['/bin/sh', '-c', MOVE_SCRIPT, 'move-former-dirs', ...moves], { timeoutMs: PLUGIN_LOG_TIMEOUT_MS });
     for (const line of moved.stdout.split('\n').filter((text) => text !== '')) {
       if (line.startsWith('kept ')) SubNotice(rt, $, 'warning', 'former-dir-kept', `auto-effort: ${line}, so the ${FORMER} directory stays where it is`, 'moveFormerDirs');
+      else if (line.startsWith('failed ')) SubNotice(rt, $, 'error', 'former-dir-move-failed', `auto-effort: ${line}, so the ${FORMER} directory stays where it is`, 'moveFormerDirs');
       else SubNotice(rt, $, 'info', 'former-dir-moved', `auto-effort: ${line}, from the former name ${FORMER}`, 'moveFormerDirs');
     }
     if (moved.exitCode !== 0) why = `exited ${String(moved.exitCode)}: ${moved.stderr.trim()}`;
@@ -945,7 +956,7 @@ function SubStart(rt: SubRuntime, $: EngineInterface): Promise<void> {
   return rt.started;
 }
 
-const SubNO_DEFINITION = (rt: SubRuntime): SubDefinition => ({ path: undefined, effort: undefined, control: undefined, parentTag: rt.config.parentTag, errors: [] });
+const SubNO_DEFINITION = (rt: SubRuntime): SubDefinition => ({ effort: undefined, control: undefined, parentTag: rt.config.parentTag });
 
 async function SubDefinitionOf(rt: SubRuntime, $: EngineInterface, type: string | undefined): Promise<SubDefinition> {
   if (!type || !rt.defs) return SubNO_DEFINITION(rt);

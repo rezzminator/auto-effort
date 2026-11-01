@@ -1572,6 +1572,13 @@ suite('plugin log adapter', () => {
     expect(await readRows(target, name === 'HOME' ? 'errors.jsonl' : 'warnings.jsonl')).toContainEqual(expect.objectContaining({ event: name === 'HOME' ? 'home-missing' : 'plugin-log-dir-unreadable', msg: expect.stringContaining('failed: undefined') }));
   });
 
+  it('says that an unset HOME leaves the user agents directory out', async () => {
+    const dir = await fresh();
+    const x = engine(undefined, { env: { HOME: undefined, PLUGIN_LOG_DIR: dir }, run: realRun, options: {} });
+    await x.sessionStart(); await x.sessionEnd();
+    expect((await readRows(join(dir, 'auto-effort'), 'warnings.jsonl')).filter((row) => row.event === 'home-missing').map((row) => row.msg)).toEqual(['auto-effort: HOME is not set; skipping ~/.claude/agents']);
+  });
+
   it('logs unreadable pins, judge fallback and actual effort changes without decision packets', async () => {
     const dir = await fresh();
     const x = engine(undefined, { env: { PLUGIN_LOG_DIR: dir }, run: realRun, options: { judge: true, logPackets: true }, files: LEAD });

@@ -27,7 +27,8 @@ describe('Definitions.resolve', () => {
   it('finds <dir>/<type>.md and reads its effort, case-insensitively', async () => {
     const x = standIn({ '/p/.claude/agents/builder.md': '---\nname: builder\neffort: XHigh\n---\nBody' });
     const found = await x.defs(['/p/.claude/agents']).resolve('builder');
-    expect(found).toMatchObject({ path: '/p/.claude/agents/builder.md', effort: 'xhigh', control: undefined, parentTag: 'honor', errors: [] });
+    expect(found).toEqual({ effort: 'xhigh', control: undefined, parentTag: 'honor' });
+    expect(x.logs).toEqual([]);
   });
 
   it('takes the first directory that holds the type, in order', async () => {
@@ -37,29 +38,40 @@ describe('Definitions.resolve', () => {
 
   it('finds a file whose name: is the type when no <type>.md exists', async () => {
     const x = standIn({ '/a/other-file.md': '---\nname: reviewer\neffort: high\n---\n' });
-    expect(await x.defs(['/a']).resolve('reviewer')).toMatchObject({ path: '/a/other-file.md', effort: 'high' });
+    expect(await x.defs(['/a']).resolve('reviewer')).toMatchObject({ effort: 'high' });
   });
 
   it('skips a <type>.md whose name: is another type', async () => {
     const x = standIn({ '/a/t.md': '---\nname: someone-else\neffort: low\n---\n' });
-    expect(await x.defs(['/a']).resolve('t')).toMatchObject({ path: undefined, effort: undefined, control: undefined });
+    expect(await x.defs(['/a']).resolve('t')).toMatchObject({ effort: undefined, control: undefined });
   });
 
   it('reports no definition for an unknown type, with no errors', async () => {
     const x = standIn({});
-    expect(await x.defs(['/a']).resolve('general-purpose')).toEqual({ path: undefined, effort: undefined, control: undefined, parentTag: 'honor', errors: [] });
+    expect(await x.defs(['/a']).resolve('general-purpose')).toEqual({ effort: undefined, control: undefined, parentTag: 'honor' });
+    expect(x.logs).toEqual([]);
   });
 
-  it('reads a numeric or unknown effort as no effort level', async () => {
+  it('reads a numeric or unknown effort as no effort level, and says so', async () => {
     const x = standIn({ '/a/t.md': '---\neffort: 5\n---\n', '/a/u.md': '---\neffort: turbo\n---\n' });
     expect((await x.defs(['/a']).resolve('t')).effort).toBeUndefined();
     expect((await x.defs(['/a']).resolve('u')).effort).toBeUndefined();
+    expect(x.logs).toEqual([
+      'auto-effort: /a/t.md effort for t is invalid (not a level: low, medium, high, xhigh, max); using none',
+      'auto-effort: /a/u.md effort for u is invalid (not a level: low, medium, high, xhigh, max); using none',
+    ]);
+  });
+
+  it('keeps the fields of a frontmatter with no closing fence, and says so', async () => {
+    const x = standIn({ '/a/t.md': '---\nname: t\neffort: low\n' });
+    expect(await x.defs(['/a']).resolve('t')).toMatchObject({ effort: 'low' });
+    expect(x.logs).toEqual(['auto-effort: /a/t.md frontmatter has no closing ---; reading t from the fields up to the end of the file']);
   });
 
   it('R-15: a definition that cannot be read is treated as no definition and logged with its context', async () => {
     const x = standIn({ '/a/t.md': '---\neffort: low\n---\n' }, ['/a/t.md']);
     const found = await x.defs(['/a']).resolve('t');
-    expect(found).toMatchObject({ path: undefined, effort: undefined, control: undefined });
+    expect(found).toMatchObject({ effort: undefined, control: undefined });
     expect(x.logs.join('\n')).toContain('auto-effort: reading /a/t.md failed: EACCES; treating t as having no definition');
   });
 
@@ -80,6 +92,12 @@ describe('effortControl.tripwires', () => {
 
   it('tripwires: the key reads a comma list for that agent', async () => {
     expect((await control('effortControl:\n  tripwires: fail2, red')).found.control?.tripwires).toEqual(['fail2', 'red']);
+  });
+
+  it('tripwires: a block list reads like the comma list', async () => {
+    const { found, logs } = await control('effortControl:\n  tripwires:\n    - fail2\n    - red');
+    expect(found.control?.tripwires).toEqual(['fail2', 'red']);
+    expect(logs).toEqual([]);
   });
 
   it('tripwires: an empty key arms none', async () => {
@@ -158,7 +176,6 @@ describe('effortControl', () => {
     expect(found.control).toEqual({ floor: 'medium', ceiling: 'max', landing: [], judge: true, tripwires: [...ALL], struggleDecay: 20 });
     const line = 'auto-effort: /a/t.md effortControl.floor for t is invalid (not a level: low, medium, high, xhigh, max); using medium';
     expect(logs).toEqual([line]);
-    expect(found.errors).toEqual([line]);
   });
 
   it('R-3: an invalid bare value is logged and leaves the agent unsteered', async () => {
@@ -211,6 +228,5 @@ describe('effortControl.parentTag', () => {
     expect(found.parentTag).toBe('ignore');
     const line = 'auto-effort: /a/t.md effortControl.parentTag for t is invalid (not honor or ignore); using ignore';
     expect(logs).toEqual([line]);
-    expect(found.errors).toEqual([line]);
   });
 });
