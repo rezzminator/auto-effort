@@ -2,6 +2,22 @@
 
 All notable changes to this plugin are recorded here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the plugin follows [semantic versioning](https://semver.org/).
 
+## [3.0.1] — 2026-11-01
+
+### Changed
+
+- The README is rewritten from the code: it opens with the launch video and the model setting its own effort through `set_effort`, and every option, tool and log row it names is checked against the plugin; the plugin's own README carries the same options table.
+
+### Fixed
+
+- A stored cache mark without its ratio keeps its model off; `/auto-effort status` shows the ratio as unknown. A probation count or graduated name the store holds in an unreadable form is named in an error and starts over.
+- A saved session with one unreadable field (on/off, the pin, the `set_effort` level or its reason or turn) keeps the others; the error names the field that starts at its default.
+- An agent definition's `effortControl.tripwires` or `effortControl.landing` given as a YAML list (`- item` lines) is read, no longer as an empty list; a frontmatter with no closing `---` keeps its fields and is reported; an `effort:` that is not a level is reported.
+- A request whose usage lacks `input_tokens` is judged by the cache check on the counts it carries.
+- An unset `HOME` is reported (`home-missing` warning) as leaving the home agents directory out of the definition lookup.
+- A failed move of one former `auto-effort-control` directory no longer stops the others; each failure is an error naming it.
+- A judge answer or failure with no call in flight is logged with `tripwire: unknown`, no longer `fail2`.
+
 ## [3.0.0] — 2026-11-01
 
 The plugin is `auto-effort` again, the name of its repository: a renamed plugin, so the release is a major one. README § Migrating says how to move.

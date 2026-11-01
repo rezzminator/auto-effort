@@ -218,6 +218,16 @@ suite('plugin reload', () => {
     expect(e.logs.filter((line) => line.includes('not in the expected form'))).toHaveLength(1);
   });
 
+  it('restores the readable part of a saved state and names the field it could not read', async () => {
+    const e = engine();
+    await e.start();
+    e.state.set('auto-effort/session/sess1', { enabled: false, pin: 'ultra' });
+    e.reload();
+    await e.prompt();
+    expect(await e.step({})).toMatchObject({ effort: 'xhigh' });
+    expect(e.logs).toContain('auto-effort: reading the saved on/off, the pin and the set_effort level failed: {"enabled":false,"pin":"ultra"} is not in the expected form: pin; pin starts at its default, the rest is restored');
+  });
+
   it('keeps going and says so when the state cannot be written', async () => {
     const e = engine();
     await e.start();
@@ -432,6 +442,34 @@ suite('turn.step', () => {
     expect((e.store.get('state') as any).unsafe[OPUS]).toMatchObject({ from: 'high', to: 'medium' });
     expect(await e.step({ index: 2 })).toMatchObject({ effort: 'xhigh' });
     expect(e.toasts).toEqual([]);
+  });
+
+  it('judges a switch whose usage carries no input_tokens on the counts it does carry', async () => {
+    const e = engine({ statusLine: false });
+    await e.start();
+    await e.prompt();
+    await e.step({}, { usage: { cache_read_input_tokens: 0, cache_creation_input_tokens: 5000 } });
+    await e.tool({ tool: TOOL, level: 'medium', reason: 'rename' });
+    await e.step({ index: 1 }, { usage: { cache_read_input_tokens: 100, cache_creation_input_tokens: 900 } });
+    await e.end();
+    expect((e.store.get('state') as any).unsafe[OPUS]).toMatchObject({ ratio: 0.02, prevPrompt: 5000, cacheRead: 100, from: 'high', to: 'medium' });
+  });
+
+  it('judges nothing on a usage that carries no cache_read_input_tokens, a manufactured 0% read', async () => {
+    const e = engine({ statusLine: false });
+    await e.start();
+    await e.prompt();
+    await e.step({}, { usage: usage(10, 0, 5000) });
+    await e.tool({ tool: TOOL, level: 'medium', reason: 'rename' });
+    await e.step({ index: 1 }, { usage: { input_tokens: 4000, output_tokens: 100, cache_creation_input_tokens: 900 } });
+    await e.end();
+    expect((e.store.get('state') as any)?.unsafe ?? {}).toEqual({});
+  });
+
+  it('names the saved model marks it cannot read and keeps the rest', async () => {
+    const e = engine({}, { storeValue: { unsafe: {}, probation: { [OPUS]: 'two', 'claude-haiku-5-5': 1 }, graduated: [] } });
+    await e.start();
+    expect(e.logs).toEqual(['auto-effort: reading the saved model marks failed: probation.claude-opus-5-5 is not in the expected form; those entries start over']);
   });
 
   it('starts off on a model the store marked unsafe, without a diagnostic toast', async () => {
@@ -1597,6 +1635,15 @@ suite('the former name auto-effort-control', () => {
       expect(existsSync(join(state, 'auto-effort', 'auto-effort-control'))).toBe(false);
       await again.end();
     } finally { await rm(home, { recursive: true, force: true }); }
+  });
+
+  it('reports each pair whose move failed as an error', async () => {
+    const e = engine({}, { env: { HOME: '/fake-home/u' } });
+    e.$.fs.exists = async (path: string) => path.endsWith('/auto-effort-control');
+    const run = e.$.process.run;
+    e.$.process.run = async (argv, options) => (argv[3] === 'move-former-dirs' ? { exitCode: 0, stdout: 'failed /fake-home/u/.local/state/auto-effort-control -> /fake-home/u/.local/state/auto-effort: mv: permission denied\n', stderr: '' } : run(argv, options));
+    await e.start(); await e.prompt(); await e.end();
+    expect(e.logs).toContain('auto-effort: failed /fake-home/u/.local/state/auto-effort-control -> /fake-home/u/.local/state/auto-effort: mv: permission denied, so the auto-effort-control directory stays where it is');
   });
 
   it('runs no move when no former directory exists', async () => {

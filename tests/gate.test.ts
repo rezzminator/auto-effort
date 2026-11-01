@@ -59,6 +59,25 @@ describe('readPersisted', () => {
     expect(readPersisted(JSON.parse(JSON.stringify(stored)))).toEqual(stored);
     for (const junk of [undefined, null, 7, 'x', [], { unsafe: 3, probation: 'x', graduated: 9 }]) expect(readPersisted(junk)).toEqual(EMPTY_PERSISTED);
   });
+
+  it('keeps an unsafe mark whatever its fields hold, its ratio unknown when it is no number', () => {
+    const stored = readPersisted({ unsafe: { 'claude-opus-5-5': { at: 'x', ratio: 'low', from: 'high', to: 'medium' }, 'claude-fable-5-1': true } });
+    expect(stored.unsafe).toEqual({
+      'claude-opus-5-5': { at: 'x', ratio: null, prevPrompt: 0, cacheRead: 0, from: 'high', to: 'medium' },
+      'claude-fable-5-1': { at: '', ratio: null, prevPrompt: 0, cacheRead: 0, from: '', to: '' },
+    });
+    expect(gate('claude-opus-5-5', stored)).toMatchObject({ status: 'unsafe', active: false });
+    expect(gate('claude-fable-5-1', stored)).toMatchObject({ status: 'unsafe', active: false });
+  });
+
+  it('names each stored entry it cannot read, and keeps the readable ones', () => {
+    const unreadable: string[] = [];
+    expect(readPersisted({ probation: { 'claude-haiku-5-5': 2, 'claude-sonnet-5-5': 'three', b: -1 }, graduated: ['claude-haiku-5-5', 7] }, unreadable)).toEqual({ unsafe: {}, probation: { 'claude-haiku-5-5': 2 }, graduated: ['claude-haiku-5-5'] });
+    expect(unreadable).toEqual(['probation.claude-sonnet-5-5', 'probation.b', 'graduated[1]']);
+    const whole: string[] = [];
+    readPersisted({ unsafe: 3, probation: 'x', graduated: 9 }, whole);
+    expect(whole).toEqual(['unsafe', 'probation', 'graduated']);
+  });
 });
 
 // R9 across sessions: a save keeps what another session stored for the models this one did not change.

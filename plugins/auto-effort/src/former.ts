@@ -19,6 +19,7 @@ export function formerDirs(configured: string | undefined, home: string | undefi
 
 /**
  * Moves each argument pair `from to` while `to` is free, printing `moved {from} -> {to}`, or `kept {from}: {to} exists`
- * when it is not. A move that fails while `from` is still there exits 1; one another chat finished first is no failure.
+ * when it is not. A move that fails while `from` is still there prints `failed {from} -> {to}: {mv's error}` and the next
+ * pair goes on; one another chat finished first is no failure.
  */
-export const MOVE_SCRIPT = 'while [ "$#" -ge 2 ]; do if [ -e "$1" ] && [ ! -e "$2" ]; then if mv -- "$1" "$2"; then echo "moved $1 -> $2"; elif [ -e "$1" ]; then exit 1; fi; elif [ -e "$1" ]; then echo "kept $1: $2 exists"; fi; shift 2; done';
+export const MOVE_SCRIPT = 'while [ "$#" -ge 2 ]; do if [ -e "$1" ] && [ ! -e "$2" ]; then if why=$(mv -- "$1" "$2" 2>&1); then echo "moved $1 -> $2"; elif [ -e "$1" ]; then echo "failed $1 -> $2: $why"; fi; elif [ -e "$1" ]; then echo "kept $1: $2 exists"; fi; shift 2; done';

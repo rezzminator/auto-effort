@@ -93,17 +93,28 @@ function testRunOf(settings: Settings, compiled: Compiled, input: { tool: string
 /** What the host keeps per session so a plugin reload does not lose it. */
 export type SessionState = { enabled: boolean; pin: Effort | null; override: Override | null };
 
-/** The saved state as it was written, a value saved before `override` existed holding none; undefined for anything else. */
-export function readSessionState(raw: unknown): SessionState | undefined {
+/**
+ * The saved state, a value saved before `override` existed holding none; undefined when it is no object. Each field
+ * it cannot read takes its default (on, unpinned, no override; a reason `unknown`, a turn of none) and is named in
+ * `unreadable`, the rest kept.
+ */
+export function readSessionState(raw: unknown): { state: SessionState; unreadable: string[] } | undefined {
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return undefined;
   const { enabled, pin, override } = raw as Record<string, unknown>;
-  if (typeof enabled !== 'boolean') return undefined;
-  if (pin !== null && !isEffort(pin)) return undefined;
-  if (override === undefined || override === null) return { enabled, pin, override: null };
-  if (typeof override !== 'object' || Array.isArray(override)) return undefined;
-  const { level, reason, turnId } = override as Record<string, unknown>;
-  if (!isEffort(level) || typeof reason !== 'string' || (turnId !== undefined && turnId !== null && typeof turnId !== 'string')) return undefined;
-  return { enabled, pin, override: { level, reason, turnId: turnId ?? null } };
+  const unreadable: string[] = [];
+  const state: SessionState = { enabled: true, pin: null, override: null };
+  if (typeof enabled === 'boolean') state.enabled = enabled;
+  else unreadable.push('enabled');
+  if (pin === null || isEffort(pin)) state.pin = pin;
+  else unreadable.push('pin');
+  if (override === undefined || override === null) return { state, unreadable };
+  const fields = typeof override === 'object' && !Array.isArray(override) ? (override as Record<string, unknown>) : {};
+  const { level, reason, turnId } = fields;
+  if (!isEffort(level)) return { state, unreadable: [...unreadable, 'override'] };
+  if (typeof reason !== 'string') unreadable.push('override.reason');
+  if (turnId !== undefined && turnId !== null && typeof turnId !== 'string') unreadable.push('override.turnId');
+  state.override = { level, reason: typeof reason === 'string' ? reason : 'unknown', turnId: typeof turnId === 'string' ? turnId : null };
+  return { state, unreadable };
 }
 
 export class Controller {

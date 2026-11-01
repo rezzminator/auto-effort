@@ -883,13 +883,26 @@ describe('session state', () => {
     expect(after.step('t1', 0).plan).toMatchObject({ send: 'medium', source: 'model', reason: 'rename' });
   });
 
-  it('reads what it wrote and nothing else; a value saved before the override existed has none', () => {
-    expect(readSessionState({ enabled: false, pin: 'max' })).toEqual({ enabled: false, pin: 'max', override: null });
-    expect(readSessionState({ enabled: true, pin: null, override: null })).toEqual({ enabled: true, pin: null, override: null });
-    expect(readSessionState({ enabled: true, pin: null, override: { level: 'high', reason: 'design' } })).toEqual({ enabled: true, pin: null, override: { level: 'high', reason: 'design', turnId: null } });
-    for (const bad of [undefined, null, 'off', [], {}, { enabled: 'no', pin: null }, { enabled: true }, { enabled: true, pin: 'ultra' }, { enabled: true, pin: 3 }, { enabled: true, pin: null, override: 'high' }, { enabled: true, pin: null, override: { level: 'ultra', reason: 'x' } }, { enabled: true, pin: null, override: { level: 'high' } }]) {
-      expect(readSessionState(bad)).toBeUndefined();
-    }
+  it('reads what it wrote; a value saved before the override existed has none', () => {
+    expect(readSessionState({ enabled: false, pin: 'max' })).toEqual({ state: { enabled: false, pin: 'max', override: null }, unreadable: [] });
+    expect(readSessionState({ enabled: true, pin: null, override: null })).toEqual({ state: { enabled: true, pin: null, override: null }, unreadable: [] });
+    expect(readSessionState({ enabled: true, pin: null, override: { level: 'high', reason: 'design' } })).toEqual({ state: { enabled: true, pin: null, override: { level: 'high', reason: 'design', turnId: null } }, unreadable: [] });
+    for (const bad of [undefined, null, 'off', []]) expect(readSessionState(bad)).toBeUndefined();
+  });
+
+  it('keeps every readable field of a saved state and names each one it cannot read, which starts at its default', () => {
+    const cases: Array<[unknown, unknown]> = [
+      [{}, { state: { enabled: true, pin: null, override: null }, unreadable: ['enabled', 'pin'] }],
+      [{ enabled: 'no', pin: null }, { state: { enabled: true, pin: null, override: null }, unreadable: ['enabled'] }],
+      [{ enabled: false }, { state: { enabled: false, pin: null, override: null }, unreadable: ['pin'] }],
+      [{ enabled: false, pin: 'ultra' }, { state: { enabled: false, pin: null, override: null }, unreadable: ['pin'] }],
+      [{ enabled: true, pin: 3, override: { level: 'high', reason: 'design', turnId: 't1' } }, { state: { enabled: true, pin: null, override: { level: 'high', reason: 'design', turnId: 't1' } }, unreadable: ['pin'] }],
+      [{ enabled: false, pin: 'max', override: 'high' }, { state: { enabled: false, pin: 'max', override: null }, unreadable: ['override'] }],
+      [{ enabled: false, pin: 'max', override: { level: 'ultra', reason: 'x' } }, { state: { enabled: false, pin: 'max', override: null }, unreadable: ['override'] }],
+      [{ enabled: false, pin: 'max', override: { level: 'high' } }, { state: { enabled: false, pin: 'max', override: { level: 'high', reason: 'unknown', turnId: null } }, unreadable: ['override.reason'] }],
+      [{ enabled: false, pin: 'max', override: { level: 'high', reason: 'design', turnId: 7 } }, { state: { enabled: false, pin: 'max', override: { level: 'high', reason: 'design', turnId: null } }, unreadable: ['override.turnId'] }],
+    ];
+    for (const [saved, read] of cases) expect(readSessionState(saved), JSON.stringify(saved)).toEqual(read);
   });
 });
 
@@ -967,7 +980,7 @@ describe('hand control', () => {
     const after = rig(); after.ctl.restoreSession(r.ctl.sessionState());
     expect(after.step('t1', 1).plan).toMatchObject({ level: 'medium', source: 'model' });
     expect(after.step('t2', 0).plan).toMatchObject({ level: 'high', source: 'plan' });
-    after.ctl.restoreSession(readSessionState({ enabled: true, pin: null, override: { level: 'medium', reason: 'legacy' } })!);
+    after.ctl.restoreSession(readSessionState({ enabled: true, pin: null, override: { level: 'medium', reason: 'legacy' } })!.state);
     expect(after.step('t3', 0).plan).toMatchObject({ level: 'high', source: 'plan' });
   });
   it('reminds from the plan, clamps the hint level, and logs only pattern sources', () => {

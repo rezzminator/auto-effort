@@ -427,6 +427,14 @@ describe('a judge that gives no level', () => {
     expect(rows(out, 'judge-failed')).toHaveLength(1);
   });
 
+  it('R-9: a failure or answer with no call in flight logs its tripwire as unknown', () => {
+    const c = make();
+    fail2(c);
+    c.onJudgeFailure(1, 'aborted');
+    expect(rows(c.onJudgeFailure(1, 'late'), 'judge-failed')).toEqual([{ event: 'judge-failed', tripwire: 'unknown', reason: 'late', from: 'high', to: 'xhigh' }]);
+    expect(rows(c.onJudgeAnswer(1, '10 - late', 5, USAGE), 'judge')).toEqual([{ event: 'judge', tripwire: 'unknown', p: 10, from: 'xhigh', to: 'xhigh', reason: 'late', ms: 5, usage: USAGE }]);
+  });
+
   it('R-9: after a failure the next tripwire may start a new call', () => {
     const c = make();
     fail2(c);

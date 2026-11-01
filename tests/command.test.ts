@@ -92,4 +92,9 @@ describe('statusText', () => {
     expect(text).toContain('model: claude-opus-5-5 · unsafe');
     expect(text).toContain('/auto-effort clear claude-opus-5-5');
   });
+
+  it('shows a cache mark whose ratio was not kept as unknown', () => {
+    const marked = markUnsafe(EMPTY_PERSISTED, 'claude-opus-5-5', { at: '2026-10-11T12:00:00Z', ratio: null, prevPrompt: 0, cacheRead: 0, from: 'high', to: 'medium' });
+    expect(view({}, marked).split('\n')).toContain('model: claude-opus-5-5 · unsafe · cache read unknown of what the previous request cached at 2026-10-11T12:00:00Z; /auto-effort clear claude-opus-5-5 turns it back on');
+  });
 });

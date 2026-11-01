@@ -50,6 +50,17 @@ describe('MOVE_SCRIPT', () => {
     expect(existsSync(join(root, 'new', 'old'))).toBe(false);
   });
 
+  it('names a pair whose move failed and goes on with the next', () => {
+    root = mkdtempSync(join(tmpdir(), 'former-'));
+    mkdirSync(join(root, 'a'));
+    mkdirSync(join(root, 'b'));
+    const lines = run(join(root, 'a'), join(root, 'missing', 'a2'), join(root, 'b'), join(root, 'b2')).split('\n');
+    expect(lines[0]?.startsWith(`failed ${join(root, 'a')} -> ${join(root, 'missing', 'a2')}: `), lines[0]).toBe(true);
+    expect(lines.slice(1)).toEqual([`moved ${join(root, 'b')} -> ${join(root, 'b2')}`, '']);
+    expect(existsSync(join(root, 'a'))).toBe(true);
+    expect(existsSync(join(root, 'b2'))).toBe(true);
+  });
+
   it('says nothing when there is nothing to move, and handles every pair', () => {
     root = mkdtempSync(join(tmpdir(), 'former-'));
     mkdirSync(join(root, 'b'));

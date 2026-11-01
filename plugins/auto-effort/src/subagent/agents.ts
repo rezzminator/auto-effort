@@ -28,16 +28,12 @@ export type ControlConfig = {
 export type ControlDefaults = { floor: Effort; ceiling: Effort; judge: boolean; tripwires: readonly Tripwire[]; parentTag: ParentTag; struggleDecay: number };
 
 export type Definition = {
-  /** The definition file, or undefined when the type has none (or it could not be read). */
-  path: string | undefined;
   /** The definition's `effort:` when it is a level. */
   effort: Effort | undefined;
   /** Undefined when steering is off, absent or unreadable. */
   control: ControlConfig | undefined;
   /** Whether a tag wins over this type's `effort:`: its `effortControl.parentTag`, else the option; read even when steering is off. */
   parentTag: ParentTag;
-  /** Every line logged while resolving this type. */
-  errors: string[];
 };
 
 function join(dir: string, name: string): string {
@@ -81,11 +77,7 @@ export class Definitions {
   }
 
   private async lookup(type: string): Promise<Definition> {
-    const errors: string[] = [];
-    const report = (line: string) => {
-      errors.push(line);
-      this.log(line);
-    };
+    const report = this.log;
     for (const dir of this.dirs) {
       const path = join(dir, `${type}.md`);
       let found = false;
@@ -96,25 +88,26 @@ export class Definitions {
       }
       if (!found) continue;
       const fields = await this.fields(path, type, report);
-      if (fields === 'failed') return this.none(errors);
-      if (!fields.name || fields.name === type) return this.fromFields(type, path, fields, errors, report);
+      if (fields === 'failed') return this.none();
+      if (!fields.name || fields.name === type) return this.fromFields(type, path, fields, report);
     }
     const byName = (await this.index(report)).get(type);
     if (byName) {
       const fields = await this.fields(byName, type, report);
-      if (fields !== 'failed') return this.fromFields(type, byName, fields, errors, report);
+      if (fields !== 'failed') return this.fromFields(type, byName, fields, report);
     }
-    return this.none(errors);
+    return this.none();
   }
 
-  private none(errors: string[]): Definition {
-    return { path: undefined, effort: undefined, control: undefined, parentTag: this.defaults.parentTag, errors };
+  private none(): Definition {
+    return { effort: undefined, control: undefined, parentTag: this.defaults.parentTag };
   }
 
-  private fromFields(type: string, path: string, fields: Record<string, string>, errors: string[], report: (line: string) => void): Definition {
+  private fromFields(type: string, path: string, fields: Record<string, string>, report: (line: string) => void): Definition {
     const level = (fields.effort ?? '').trim().toLowerCase();
     const effort = isEffort(level) ? level : undefined;
-    return { path, effort, control: this.control(type, path, fields, report), parentTag: this.parentTag(type, path, fields, report), errors };
+    if (level !== '' && effort === undefined) report(`auto-effort: ${path} effort for ${type} is invalid (not a level: ${LEVELS.join(', ')}); using none`);
+    return { effort, control: this.control(type, path, fields, report), parentTag: this.parentTag(type, path, fields, report) };
   }
 
   /** `effortControl.parentTag` over the option; read whether or not the type is steered. */
@@ -189,7 +182,9 @@ export class Definitions {
 
   private async fields(path: string, type: string, report: (line: string) => void): Promise<Record<string, string> | 'failed'> {
     try {
-      return parseFrontmatter(await this.fs.read(path));
+      const { fields, unterminated } = parseFrontmatter(await this.fs.read(path));
+      if (unterminated) report(`auto-effort: ${path} frontmatter has no closing ---; reading ${type} from the fields up to the end of the file`);
+      return fields;
     } catch (error) {
       report(`auto-effort: reading ${path} failed: ${message(error)}; treating ${type} as having no definition`);
       return 'failed';
@@ -212,7 +207,7 @@ export class Definitions {
           const path = join(dir, file);
           let name: string | undefined;
           try {
-            name = parseFrontmatter(await this.fs.read(path)).name;
+            name = parseFrontmatter(await this.fs.read(path)).fields.name;
           } catch (error) {
             this.log(`auto-effort: reading ${path} failed: ${message(error)}; skipping it in the name index`);
           }

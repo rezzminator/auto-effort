@@ -194,7 +194,7 @@ export class Controller {
     this.addUsage(usage);
     const actions: Action[] = [];
     const detail = { packet: call?.packet ?? null, answer: text };
-    const tripwire = call?.tripwire ?? 'fail2';
+    const tripwire = call?.tripwire ?? 'unknown';
     if (!this.current(epoch)) {
       actions.push(log('judge-stale', { tripwire, epoch }, detail));
       return { actions };
@@ -215,7 +215,7 @@ export class Controller {
     this.inFlight = undefined;
     if (usage) this.addUsage(usage);
     const actions: Action[] = [];
-    this.failed(epoch, call?.tripwire ?? 'fail2', reason, actions, { packet: call?.packet ?? null, answer: null });
+    this.failed(epoch, call?.tripwire ?? 'unknown', reason, actions, { packet: call?.packet ?? null, answer: null });
     return { actions };
   }
 
@@ -375,7 +375,7 @@ export class Controller {
   }
 
   // The judge gave no level: one step up, if the struggle it was asked about is still the open one.
-  private failed(epoch: number, tripwire: Tripwire, reason: string, actions: Action[], detail: Row): void {
+  private failed(epoch: number, tripwire: Tripwire | 'unknown', reason: string, actions: Action[], detail: Row): void {
     const from = this.level;
     if (this.current(epoch)) this.setLevel(step(this.level, +1, this.setup.floor, this.setup.ceiling), WHY_JUDGE_FAILED);
     actions.push(log('judge-failed', { tripwire, reason, from, to: this.level, ...this.heldMark() }, detail));
