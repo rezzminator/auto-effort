@@ -1,0 +1,28 @@
+{
+  "name": "professor",
+  "description": "Tune reasoning levels — automatic main-chat tuning; set_effort, effort_up, effort_down and effort_auto choices; /effort pins; [effort: low|medium|high|xhigh|max] sub-agent launches with bounded failure escalation.",
+  "owner": {
+    "name": "rezzminator",
+    "url": "https://github.com/rezzminator/auto-effort"
+  },
+  "plugins": [
+    {
+      "name": "auto-effort",
+      "source": "./plugins/auto-effort",
+      "description": "Tune reasoning levels — automatic main-chat tuning; set_effort, effort_up, effort_down and effort_auto choices; /effort pins; [effort: low|medium|high|xhigh|max] sub-agent launches with bounded failure escalation.",
+      "homepage": "https://github.com/rezzminator/auto-effort",
+      "license": "MIT",
+      "keywords": [
+        "claude-code",
+        "claude-code-plugin",
+        "effort",
+        "reasoning-effort",
+        "thinking",
+        "function-hooks",
+        "claude-mods",
+        "token-cost",
+        "prompt-cache"
+      ]
+    }
+  ]
+}
