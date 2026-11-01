@@ -2,7 +2,11 @@
 
 All notable changes to this plugin are recorded here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the plugin follows [semantic versioning](https://semver.org/).
 
-## [Unreleased]
+## [3.0.1] — 2026-11-01
+
+### Changed
+
+- The README is rewritten from the code: it opens with the launch video and the model setting its own effort through `set_effort`, and every option, tool and log row it names is checked against the plugin; the plugin's own README carries the same options table.
 
 ### Fixed
 

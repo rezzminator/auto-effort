@@ -5,7 +5,7 @@
 **Claude sets its own reasoning effort. The Claude Code main chat gets a `set_effort` tool: the model raises its effort when the work turns hard and lowers it when only mechanical steps remain. A sub-agent's effort is set per spawn, and an agent that opts in steps its own effort with its trouble.**
 
 [![Claude Code plugin](https://img.shields.io/badge/Claude%20Code-plugin-D97757)](https://docs.claude.com/en/docs/claude-code/plugins)
-[![Version](https://img.shields.io/badge/version-3.0.0-blue)](./CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-3.0.1-blue)](./CHANGELOG.md)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](./LICENSE)
 
 </div>
