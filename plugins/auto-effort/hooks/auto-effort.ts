@@ -951,6 +951,8 @@ function SubStart(rt: SubRuntime, $: EngineInterface): Promise<void> {
         listMarkdown: async (dir) => (await $.fs.list(dir)).filter((entry) => entry.kind === 'file' && entry.name.endsWith('.md')).map((entry) => entry.name),
       },
       (line) => SubNotice(rt, $, 'error', 'definition-unreadable', line, 'definitionOf'),
+      // Plugin records live under CLAUDE_CONFIG_DIR, else ~/.claude (the plugin agents `P:N`).
+      configDir ? configDir : home ? `${home}/.claude` : undefined,
     );
   })().catch((error) => SubNotice(rt, $, 'error', 'start-failed', `auto-effort: starting failed: ${SubMessage(error)}; sub-agents run unsteered at the effort they carry`, 'start'));
   return rt.started;

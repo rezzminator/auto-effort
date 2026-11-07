@@ -19,7 +19,7 @@ function standIn(files: Record<string, string>, broken: string[] = []) {
     },
     listMarkdown: async (dir) => Object.keys(files).filter((file) => file.startsWith(dir + '/') && file.endsWith('.md')).map((file) => file.slice(dir.length + 1)),
   };
-  const defs = (dirs: string[]) => new Definitions(dirs, DEFAULTS, fs, (line) => logs.push(line));
+  const defs = (dirs: string[], pluginConfigDir?: string) => new Definitions(dirs, DEFAULTS, fs, (line) => logs.push(line), pluginConfigDir);
   return { defs, logs, reads };
 }
 
@@ -81,6 +81,121 @@ describe('Definitions.resolve', () => {
     await defs.resolve('t');
     await defs.resolve('t');
     expect(x.reads).toEqual(['/a/t.md']);
+  });
+});
+
+// The records Claude Code keeps under its config directory for a plugin `flights` of the marketplace `professor`.
+const FOREMAN = '---\nname: foreman\neffort: high\neffortControl:\n  floor: low\n  ceiling: high\n  landing: flights:lander\n---\nBody';
+const FOREMAN_CONTROL = { floor: 'low', ceiling: 'high', landing: ['flights:lander'], judge: true, tripwires: [...ALL], struggleDecay: 20 };
+const ENABLED = JSON.stringify({ enabledPlugins: { 'flights@professor': true, 'other@professor': true } });
+const DIRECTORY_MARKETPLACES = JSON.stringify({ professor: { source: { source: 'directory', path: '/mk' }, installLocation: '/mk' } });
+const LISTING = JSON.stringify({ plugins: [{ name: 'other', source: './plugins/other' }, { name: 'flights', source: './plugins/flights' }] });
+const INSTALLED = JSON.stringify({ plugins: { 'flights@professor': [{ scope: 'user', installPath: '/cache/flights/0.2.0' }] } });
+const DIRECTORY_FIXTURE = {
+  '/cfg/settings.json': ENABLED,
+  '/cfg/plugins/known_marketplaces.json': DIRECTORY_MARKETPLACES,
+  '/mk/.claude-plugin/marketplace.json': LISTING,
+  '/mk/plugins/flights/agents/foreman.md': FOREMAN,
+  '/mk/plugins/flights/agents/file-of-hunter.md': '---\nname: hunter\neffort: low\n---\n',
+};
+
+describe('Definitions.resolve of a plugin agent P:N', () => {
+  it('finds N in the agents of the plugin a directory marketplace lists, by file name', async () => {
+    const x = standIn(DIRECTORY_FIXTURE);
+    const found = await x.defs(['/p/.claude/agents'], '/cfg').resolve('flights:foreman');
+    expect(found).toEqual({ effort: 'high', control: FOREMAN_CONTROL, parentTag: 'honor' });
+    expect(x.reads).toEqual(['/cfg/settings.json', '/cfg/plugins/known_marketplaces.json', '/mk/.claude-plugin/marketplace.json', '/mk/plugins/flights/agents/foreman.md']);
+    expect(x.logs).toEqual([]);
+  });
+
+  it('finds N by the name: of a file that is not N.md', async () => {
+    const x = standIn(DIRECTORY_FIXTURE);
+    const found = await x.defs([], '/cfg').resolve('flights:hunter');
+    expect(found).toEqual({ effort: 'low', control: undefined, parentTag: 'honor' });
+    expect(x.logs).toEqual([]);
+  });
+
+  it('falls back to the installPath of installed_plugins.json for a marketplace that is not a directory', async () => {
+    const x = standIn({
+      '/cfg/settings.json': ENABLED,
+      '/cfg/plugins/known_marketplaces.json': JSON.stringify({ professor: { source: { source: 'github', repo: 'o/r' }, installLocation: '/mk' } }),
+      '/cfg/plugins/installed_plugins.json': INSTALLED,
+      '/cache/flights/0.2.0/agents/foreman.md': FOREMAN,
+    });
+    expect(await x.defs([], '/cfg').resolve('flights:foreman')).toEqual({ effort: 'high', control: FOREMAN_CONTROL, parentTag: 'honor' });
+    expect(x.logs).toEqual([]);
+  });
+
+  it('falls back to installPath when the directory marketplace does not list the plugin', async () => {
+    const x = standIn({
+      ...DIRECTORY_FIXTURE,
+      '/mk/.claude-plugin/marketplace.json': JSON.stringify({ plugins: [{ name: 'other', source: './plugins/other' }] }),
+      '/cfg/plugins/installed_plugins.json': INSTALLED,
+      '/cache/flights/0.2.0/agents/foreman.md': '---\nname: foreman\neffort: max\n---\n',
+    });
+    expect(await x.defs([], '/cfg').resolve('flights:foreman')).toEqual({ effort: 'max', control: undefined, parentTag: 'honor' });
+    expect(x.logs).toEqual([]);
+  });
+
+  it.each([
+    ['the plugin is set to false', JSON.stringify({ enabledPlugins: { 'flights@professor': false } })],
+    ['only another plugin is enabled', JSON.stringify({ enabledPlugins: { 'flightsx@professor': true, 'other@professor': true } })],
+    ['settings.json lists no plugins', '{}'],
+  ])('is no definition, silently, when %s', async (_why, settings) => {
+    const x = standIn({ ...DIRECTORY_FIXTURE, '/cfg/settings.json': settings });
+    expect(await x.defs([], '/cfg').resolve('flights:foreman')).toEqual({ effort: undefined, control: undefined, parentTag: 'honor' });
+    expect(x.reads).toEqual(['/cfg/settings.json']);
+    expect(x.logs).toEqual([]);
+  });
+
+  it('is no definition, silently, when the plugin has no agent N or there is no config directory', async () => {
+    const x = standIn(DIRECTORY_FIXTURE);
+    expect(await x.defs([], '/cfg').resolve('flights:nobody')).toEqual({ effort: undefined, control: undefined, parentTag: 'honor' });
+    expect(await x.defs([], undefined).resolve('flights:foreman')).toEqual({ effort: undefined, control: undefined, parentTag: 'honor' });
+    expect(x.logs).toEqual([]);
+  });
+
+  it.each([['/cfg/plugins/known_marketplaces.json'], ['/mk/.claude-plugin/marketplace.json']])(
+    'logs %s it cannot read with its path and error and never falls through to the installed copy',
+    async (broken) => {
+      const x = standIn(
+        { ...DIRECTORY_FIXTURE, '/cfg/plugins/installed_plugins.json': INSTALLED, '/cache/flights/0.2.0/agents/foreman.md': '---\nname: foreman\neffort: max\n---\n' },
+        [broken],
+      );
+      expect(await x.defs([], '/cfg').resolve('flights:foreman')).toEqual({ effort: undefined, control: undefined, parentTag: 'honor' });
+      expect(x.logs).toEqual([`auto-effort: reading plugin record ${broken} failed: EACCES; the agents of plugin flights could not be looked up through it`]);
+    },
+  );
+
+  it('logs an unreadable settings.json and reads the plugin as having no definition', async () => {
+    const x = standIn(DIRECTORY_FIXTURE, ['/cfg/settings.json']);
+    expect(await x.defs([], '/cfg').resolve('flights:foreman')).toEqual({ effort: undefined, control: undefined, parentTag: 'honor' });
+    expect(x.logs).toEqual(['auto-effort: reading plugin record /cfg/settings.json failed: EACCES; the agents of plugin flights could not be looked up through it']);
+  });
+
+  it('logs a record that is not a JSON object', async () => {
+    const x = standIn({ ...DIRECTORY_FIXTURE, '/cfg/settings.json': '[]' });
+    expect((await x.defs([], '/cfg').resolve('flights:foreman')).effort).toBeUndefined();
+    expect(x.logs).toEqual(['auto-effort: reading plugin record /cfg/settings.json failed: not a JSON object; the agents of plugin flights could not be looked up through it']);
+  });
+
+  it('reads each record once across the plugin agents it resolves', async () => {
+    const x = standIn(DIRECTORY_FIXTURE);
+    const defs = x.defs([], '/cfg');
+    await defs.resolve('flights:foreman');
+    await defs.resolve('flights:hunter');
+    await defs.resolve('flights:foreman');
+    for (const record of ['/cfg/settings.json', '/cfg/plugins/known_marketplaces.json', '/mk/.claude-plugin/marketplace.json']) {
+      expect(x.reads.filter((path) => path === record)).toEqual([record]);
+    }
+  });
+
+  it('leaves a plain type, and a type with more than one colon, on the directory order alone', async () => {
+    const x = standIn({ ...DIRECTORY_FIXTURE, '/p/builder.md': '---\nname: builder\neffort: xhigh\n---\n', '/p/a:b:c.md': '---\neffort: low\n---\n' });
+    const defs = x.defs(['/p'], '/cfg');
+    expect(await defs.resolve('builder')).toEqual({ effort: 'xhigh', control: undefined, parentTag: 'honor' });
+    expect(await defs.resolve('a:b:c')).toEqual({ effort: 'low', control: undefined, parentTag: 'honor' });
+    expect(x.reads).toEqual(['/p/builder.md', '/p/a:b:c.md']);
   });
 });
 

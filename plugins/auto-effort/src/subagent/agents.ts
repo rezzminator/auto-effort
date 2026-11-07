@@ -2,6 +2,7 @@ import { isEffort, isParentTag, LEVELS, type Effort, type ParentTag } from './ef
 import { parseFrontmatter } from './frontmatter.ts';
 import { parseTripwires, type Tripwire } from './judge.ts';
 import { rank } from './ladder.ts';
+import { PluginRoots } from './plugin-root.ts';
 import { parseDecay } from './settings.ts';
 
 export type AgentFs = {
@@ -54,18 +55,26 @@ function parseSwitch(raw: string): boolean | undefined {
  * Resolves an agent type to its definition's effort and effortControl: `<dir>/<type>.md`
  * in each directory in order (its `name:` absent or the type), then any file whose
  * frontmatter `name:` is the type (the directories scanned once), else no definition.
+ * A type `P:N` is a plugin agent: the same search for `N` in `<root>/agents` of each
+ * enabled plugin `P` under `pluginConfigDir` (see `PluginRoots`); a plugin that is not
+ * enabled is no definition, like an unknown type.
  * Every failure is logged and read as no definition; results are cached per type.
  */
 export class Definitions {
   private readonly byType = new Map<string, Promise<Definition>>();
-  private nameIndex: Promise<Map<string, string>> | undefined;
+  private readonly indexes = new Map<string, Promise<Map<string, string>>>();
+  private readonly plugins: PluginRoots | undefined;
 
   constructor(
     private readonly dirs: readonly string[],
     private readonly defaults: ControlDefaults,
     private readonly fs: AgentFs,
     private readonly log: (line: string) => void,
-  ) {}
+    /** The Claude Code config directory holding the plugin records; undefined: plugin agents resolve to none. */
+    pluginConfigDir?: string,
+  ) {
+    this.plugins = pluginConfigDir ? new PluginRoots(pluginConfigDir, fs, log) : undefined;
+  }
 
   resolve(type: string): Promise<Definition> {
     let hit = this.byType.get(type);
@@ -77,9 +86,21 @@ export class Definitions {
   }
 
   private async lookup(type: string): Promise<Definition> {
+    const parts = type.split(':');
+    if (parts.length !== 2 || parts[0] === '' || parts[1] === '') return (await this.search(type, type, this.dirs)) ?? this.none();
+    const [plugin, name] = parts as [string, string];
+    for (const root of (await this.plugins?.roots(plugin)) ?? []) {
+      const found = await this.search(type, name, [`${root}/agents`]);
+      if (found) return found;
+    }
+    return this.none();
+  }
+
+  /** The definition of `type` in `dirs`, where a file declares itself by `name` (a plugin agent's part after the colon); undefined when none holds it. */
+  private async search(type: string, name: string, dirs: readonly string[]): Promise<Definition | undefined> {
     const report = this.log;
-    for (const dir of this.dirs) {
-      const path = join(dir, `${type}.md`);
+    for (const dir of dirs) {
+      const path = join(dir, `${name}.md`);
       let found = false;
       try {
         found = await this.fs.exists(path);
@@ -89,14 +110,14 @@ export class Definitions {
       if (!found) continue;
       const fields = await this.fields(path, type, report);
       if (fields === 'failed') return this.none();
-      if (!fields.name || fields.name === type) return this.fromFields(type, path, fields, report);
+      if (!fields.name || fields.name === name) return this.fromFields(type, path, fields, report);
     }
-    const byName = (await this.index(report)).get(type);
+    const byName = (await this.index(dirs, report)).get(name);
     if (byName) {
       const fields = await this.fields(byName, type, report);
       if (fields !== 'failed') return this.fromFields(type, byName, fields, report);
     }
-    return this.none();
+    return undefined;
   }
 
   private none(): Definition {
@@ -191,31 +212,38 @@ export class Definitions {
     }
   }
 
-  private index(report: (line: string) => void): Promise<Map<string, string>> {
-    this.nameIndex ??= (async () => {
-      const names = new Map<string, string>();
-      for (const dir of this.dirs) {
-        let files: string[] = [];
-        try {
-          if (!(await this.fs.exists(dir))) continue;
-          files = await this.fs.listMarkdown(dir);
-        } catch (error) {
-          this.log(`auto-effort: listing ${dir} failed: ${message(error)}; its agents are found by file name only`);
-          continue;
-        }
-        for (const file of files) {
-          const path = join(dir, file);
-          let name: string | undefined;
-          try {
-            name = parseFrontmatter(await this.fs.read(path)).fields.name;
-          } catch (error) {
-            this.log(`auto-effort: reading ${path} failed: ${message(error)}; skipping it in the name index`);
-          }
-          if (name && !names.has(name)) names.set(name, path);
-        }
+  private index(dirs: readonly string[], report: (line: string) => void): Promise<Map<string, string>> {
+    const key = dirs.join('\n');
+    let hit = this.indexes.get(key);
+    if (!hit) {
+      hit = this.buildIndex(dirs, report);
+      this.indexes.set(key, hit);
+    }
+    return hit;
+  }
+
+  private async buildIndex(dirs: readonly string[], report: (line: string) => void): Promise<Map<string, string>> {
+    const names = new Map<string, string>();
+    for (const dir of dirs) {
+      let files: string[] = [];
+      try {
+        if (!(await this.fs.exists(dir))) continue;
+        files = await this.fs.listMarkdown(dir);
+      } catch (error) {
+        report(`auto-effort: listing ${dir} failed: ${message(error)}; its agents are found by file name only`);
+        continue;
       }
-      return names;
-    })();
-    return this.nameIndex;
+      for (const file of files) {
+        const path = join(dir, file);
+        let name: string | undefined;
+        try {
+          name = parseFrontmatter(await this.fs.read(path)).fields.name;
+        } catch (error) {
+          report(`auto-effort: reading ${path} failed: ${message(error)}; skipping it in the name index`);
+        }
+        if (name && !names.has(name)) names.set(name, path);
+      }
+    }
+    return names;
   }
 }

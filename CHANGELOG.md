@@ -2,6 +2,12 @@
 
 All notable changes to this plugin are recorded here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the plugin follows [semantic versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- A plugin agent type `plugin:name`, which Claude Code reports for the agents a plugin ships, finds its definition (`effort`, `effortControl`) in the `agents` directory of the enabled plugin, located through the plugin records under `CLAUDE_CONFIG_DIR` (else `~/.claude`). Until now such an agent ran as if it had no definition. A plugin record that exists but cannot be read is logged with its path and the error.
+
 ## [3.0.1] — 2026-11-01
 
 ### Changed
