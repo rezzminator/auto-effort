@@ -96,7 +96,7 @@ const DIRECTORY_FIXTURE = {
   '/cfg/plugins/known_marketplaces.json': DIRECTORY_MARKETPLACES,
   '/mk/.claude-plugin/marketplace.json': LISTING,
   '/mk/plugins/flights/agents/foreman.md': FOREMAN,
-  '/mk/plugins/flights/agents/file-of-hunter.md': '---\nname: hunter\neffort: low\n---\n',
+  '/mk/plugins/flights/agents/file-of-diff-checker.md': '---\nname: diff-checker\neffort: low\n---\n',
 };
 
 describe('Definitions.resolve of a plugin agent P:N', () => {
@@ -110,7 +110,7 @@ describe('Definitions.resolve of a plugin agent P:N', () => {
 
   it('finds N by the name: of a file that is not N.md', async () => {
     const x = standIn(DIRECTORY_FIXTURE);
-    const found = await x.defs([], '/cfg').resolve('flights:hunter');
+    const found = await x.defs([], '/cfg').resolve('flights:diff-checker');
     expect(found).toEqual({ effort: 'low', control: undefined, parentTag: 'honor' });
     expect(x.logs).toEqual([]);
   });
@@ -183,7 +183,7 @@ describe('Definitions.resolve of a plugin agent P:N', () => {
     const x = standIn(DIRECTORY_FIXTURE);
     const defs = x.defs([], '/cfg');
     await defs.resolve('flights:foreman');
-    await defs.resolve('flights:hunter');
+    await defs.resolve('flights:diff-checker');
     await defs.resolve('flights:foreman');
     for (const record of ['/cfg/settings.json', '/cfg/plugins/known_marketplaces.json', '/mk/.claude-plugin/marketplace.json']) {
       expect(x.reads.filter((path) => path === record)).toEqual([record]);
