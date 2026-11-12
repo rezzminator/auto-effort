@@ -1,15 +1,16 @@
 // The model gate (allow / probation / deny, `unknownModels` for the rest) and the marks that persist across sessions.
 
-import { normalizeModel } from './model.ts';
+import { modelVariant, normalizeModel } from './model.ts';
 import type { Compiled, Settings } from './settings.ts';
 
-export { normalizeModel };
+export { modelVariant, normalizeModel };
 
 /** The cache canary's finding: the model's cache did not survive an effort change. */
 /** `ratio` is null when a stored mark no longer holds it: the mark gates by its presence, the ratio is only shown. */
 export type Unsafe = { at: string; ratio: number | null; prevPrompt: number; cacheRead: number; from: string; to: string };
 
 export type Persisted = {
+  /** The marks, per model and context window (`modelVariant`): a mark on `claude-x[1m]` leaves `claude-x` steered. */
   unsafe: Record<string, Unsafe>;
   /** Clean switches counted so far, per probation model. */
   probation: Record<string, number>;
@@ -27,7 +28,7 @@ export function gateOf(model: string, settings: Settings, compiled: Compiled, pe
   const configured = compiled.models[name] ?? settings.unknownModels;
   if (configured === 'deny') return { model: name, status: 'deny', active: false };
   if (configured === 'off') return { model: name, status: 'off', active: false };
-  if (persisted.unsafe[name] !== undefined) return { model: name, status: 'unsafe', active: false };
+  if (persisted.unsafe[modelVariant(model)] !== undefined) return { model: name, status: 'unsafe', active: false };
   if (configured === 'probation' && persisted.graduated.includes(name)) return { model: name, status: 'allow', active: true };
   return { model: name, status: configured, active: true };
 }
@@ -44,18 +45,24 @@ export function cleanSwitch(persisted: Persisted, model: string, needed: number)
 }
 
 export function markUnsafe(persisted: Persisted, model: string, mark: Unsafe): Persisted {
-  return { ...persisted, unsafe: { ...persisted.unsafe, [normalizeModel(model)]: mark } };
+  return { ...persisted, unsafe: { ...persisted.unsafe, [modelVariant(model)]: mark } };
 }
 
-/** The stored marks with this session's entries laid over them for the models it changed, an absent entry included; every other model keeps what is stored. */
+/**
+ * The stored marks with this session's entries laid over them for the models it changed, an absent entry included; every
+ * other model keeps what is stored. A cache mark is laid over the context window named, a probation count and a graduation
+ * over the model whatever its window.
+ */
 export function mergeModels(stored: Persisted, mine: Persisted, models: readonly string[]): Persisted {
   const unsafe = { ...stored.unsafe };
   const probation = { ...stored.probation };
   const graduated = new Set(stored.graduated);
+  for (const variant of new Set(models.map(modelVariant))) {
+    const mark = mine.unsafe[variant];
+    if (mark === undefined) delete unsafe[variant];
+    else unsafe[variant] = mark;
+  }
   for (const name of new Set(models.map(normalizeModel))) {
-    const mark = mine.unsafe[name];
-    if (mark === undefined) delete unsafe[name];
-    else unsafe[name] = mark;
     const count = mine.probation[name];
     if (count === undefined) delete probation[name];
     else probation[name] = count;
@@ -65,11 +72,18 @@ export function mergeModels(stored: Persisted, mine: Persisted, models: readonly
   return { unsafe, probation, graduated: [...graduated] };
 }
 
-/** Lifts the mark from one model, or from every model when none is named. */
+/** The marked names a model name covers: that context window alone when it names one (`claude-x[1m]`), else every window of the model. */
+export function marksOf(persisted: Persisted, model: string): string[] {
+  const variant = modelVariant(model);
+  const name = normalizeModel(model);
+  return Object.keys(persisted.unsafe).filter((marked) => (variant === name ? normalizeModel(marked) === name : marked === variant));
+}
+
+/** Lifts the marks a model name covers (`marksOf`), or every mark when none is named. */
 export function clearUnsafe(persisted: Persisted, model: string | undefined): Persisted {
   if (model === undefined) return { ...persisted, unsafe: {} };
-  const { [normalizeModel(model)]: _gone, ...rest } = persisted.unsafe;
-  return { ...persisted, unsafe: rest };
+  const gone = new Set(marksOf(persisted, model));
+  return { ...persisted, unsafe: Object.fromEntries(Object.entries(persisted.unsafe).filter(([marked]) => !gone.has(marked))) };
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);

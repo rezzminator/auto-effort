@@ -429,18 +429,19 @@ suite('turn.step', () => {
   });
 
   // R9 through the adapter: the diagnostic and the mark in the store. statusLine off keeps the reason notices out, so any toast would be the gate's.
-  it('logs the cache guard without a toast and stores the unsafe mark after a switch', async () => {
+  it.each([OPUS, `${OPUS}[1m]`])('logs the cache guard without a toast and stores the unsafe mark of %s after a switch', async (model) => {
     const e = engine({ statusLine: false });
     await e.start();
     await e.prompt();
-    await e.step({}, { usage: usage(10, 0, 5000) });
+    await e.step({ model }, { usage: usage(10, 0, 5000) });
     await e.tool({ tool: TOOL, level: 'medium', reason: 'rename' });
-    await e.step({ index: 1 }, { usage: usage(4000, 100, 900) });
+    await e.step({ model, index: 1 }, { usage: usage(4000, 100, 900) });
     await e.end();
     expect(e.toasts).toEqual([]);
     expect(e.logs).toEqual([]);
-    expect((e.store.get('state') as any).unsafe[OPUS]).toMatchObject({ from: 'high', to: 'medium' });
-    expect(await e.step({ index: 2 })).toMatchObject({ effort: 'xhigh' });
+    expect(Object.keys((e.store.get('state') as any).unsafe)).toEqual([model]);
+    expect((e.store.get('state') as any).unsafe[model]).toMatchObject({ from: 'high', to: 'medium' });
+    expect(await e.step({ model, index: 2 })).toMatchObject({ effort: 'xhigh' });
     expect(e.toasts).toEqual([]);
   });
 
@@ -1344,10 +1345,14 @@ suite('/auto-effort', () => {
   });
 
   it('clears a cache mark', async () => {
-    const e = engine({}, { storeValue: { unsafe: { [OPUS]: { at: 'x', ratio: 0.1, prevPrompt: 1, cacheRead: 0, from: 'high', to: 'medium' } }, probation: {}, graduated: [] } });
+    const stored = { at: 'x', ratio: 0.1, prevPrompt: 1, cacheRead: 0, from: 'high', to: 'medium' };
+    const e = engine({}, { storeValue: { unsafe: { [OPUS]: stored, [`${OPUS}[1m]`]: stored, 'claude-haiku-5-5[1m]': stored }, probation: {}, graduated: [] } });
     await e.start();
     expect((await e.command('clear claude-fable-5-1')).text).toBe('Nothing to clear: claude-fable-5-1 has no cache mark.');
-    expect((e.store.get('state') as any).unsafe[OPUS]).toBeDefined();
+    expect(Object.keys((e.store.get('state') as any).unsafe)).toEqual([OPUS, `${OPUS}[1m]`, 'claude-haiku-5-5[1m]']);
+    // A name with a context window clears that window's mark alone; a bare name, every window of the model.
+    expect((await e.command('clear claude-haiku-5-5[1m]')).text).toBe('Cache mark cleared for claude-haiku-5-5[1m]; automatic effort applies to it again.');
+    expect(Object.keys((e.store.get('state') as any).unsafe)).toEqual([OPUS, `${OPUS}[1m]`]);
     expect((await e.command('clear claude-opus-5-5')).text).toContain('cleared');
     expect((e.store.get('state') as any).unsafe).toEqual({});
   });

@@ -3,11 +3,11 @@ import type { ConfigRow, EngineInterface, Register, ModelCompleteRequest, ModelC
 import type { Usage } from '../src/canary.ts';
 import { parseCommand, statusText, USAGE } from '../src/command.ts';
 import { Controller, readSessionState, type Row, type StepPlan } from '../src/controller.ts';
-import { EMPTY_PERSISTED, mergeModels, readPersisted } from '../src/gate.ts';
+import { EMPTY_PERSISTED, marksOf, mergeModels, readPersisted } from '../src/gate.ts';
 import { levelsWithin } from '../src/levels.ts';
 import { formerDirs, MOVE_SCRIPT } from '../src/former.ts';
 import { expandHome, fillSegments, SEGMENT_ROWS, sessionLogPath } from '../src/log.ts';
-import { normalizeModel } from '../src/model.ts';
+import { modelVariant } from '../src/model.ts';
 import { envName, FORMER, PLUGIN, resolveSettings, SETTING_KEYS, type EnvValues } from '../src/settings.ts';
 import { KEEPER_ARGV, stateText, type EffortState } from '../src/state.ts';
 import { quote, toolDescription } from '../src/text.ts';
@@ -492,7 +492,7 @@ async function followSession($: EngineInterface, st: State): Promise<void> {
 // The marks as the store holds them, with this session's unsaved changes laid over them and saved:
 // another chat's marks for other models survive the save, and a failed save is tried again at the next prompt.
 async function syncMarks($: EngineInterface, st: State, changed: readonly string[]): Promise<void> {
-  for (const model of changed) st.unsaved.add(normalizeModel(model));
+  for (const model of changed) st.unsaved.add(modelVariant(model));
   const merged = mergeModels(readPersisted(await $.store.get(STORE_KEY)), st.ctl.persisted, [...st.unsaved]);
   st.ctl.loadPersisted(merged);
   // Only the models this save carries are done: one marked while it was in flight stays for its own save.
@@ -596,8 +596,8 @@ async function runCommand($: EngineInterface, st: State, args: string): Promise<
     case 'clear': {
       const stored = readPersisted(await $.store.get(STORE_KEY));
       const mine = st.ctl.persisted;
-      const named = command.model === undefined ? [...Object.keys(stored.unsafe), ...Object.keys(mine.unsafe)] : [normalizeModel(command.model)];
-      if (!named.some((model) => stored.unsafe[model] !== undefined || mine.unsafe[model] !== undefined)) {
+      const named = command.model === undefined ? [...Object.keys(stored.unsafe), ...Object.keys(mine.unsafe)] : [...marksOf(stored, command.model), ...marksOf(mine, command.model)];
+      if (named.length === 0) {
         return command.model === undefined ? 'Nothing to clear: no model has a cache mark.' : `Nothing to clear: ${command.model} has no cache mark.`;
       }
       st.ctl.clear(command.model);

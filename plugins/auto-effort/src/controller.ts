@@ -3,9 +3,9 @@
 
 import { judgeSwitch, wholePrompt, type Usage } from './canary.ts';
 import type { View } from './command.ts';
-import { cleanSwitch, clearUnsafe, gateOf, markUnsafe, type Gate, type Persisted } from './gate.ts';
+import { cleanSwitch, clearUnsafe, gateOf, marksOf, markUnsafe, type Gate, type Persisted } from './gate.ts';
 import { clamp, isEffort, levelsWithin, stepUp, type Effort } from './levels.ts';
-import { normalizeModel } from './model.ts';
+import { modelVariant, normalizeModel } from './model.ts';
 import { planFor } from './plan.ts';
 import { compile, type Compiled, type Settings } from './settings.ts';
 import { stateOf, type EffortState } from './state.ts';
@@ -197,11 +197,11 @@ export class Controller {
     this.override = state.override === null ? null : { ...state.override };
   }
 
-  /** Lifts the cache mark from one model, or every model when none is named. */
+  /** Lifts the cache marks a model name covers, or every mark when none is named. */
   clear(model: string | undefined): void {
-    this.store = clearUnsafe(this.store, model);
     if (model === undefined) this.told.clear();
-    else this.told.delete(normalizeModel(model));
+    else for (const marked of marksOf(this.store, model)) this.told.delete(marked);
+    this.store = clearUnsafe(this.store, model);
   }
 
   /** A new session in the same process (after /clear): on again, the user pin kept, no level of the main chat's, no turn, nothing to compare with; the marks stay. */
@@ -281,6 +281,7 @@ export class Controller {
     const s = this.settingsNow;
     const rows: Row[] = [];
     const name = normalizeModel(input.model);
+    const variant = modelVariant(input.model);
     const newTurn = this.turnId !== input.turnId;
     if (newTurn && this.override?.turnId !== input.turnId) this.override = null;
     this.turnId = input.turnId;
@@ -310,8 +311,8 @@ export class Controller {
 
     if (!this.enabled) return this.inactive(input, effort, 'auto-effort is off for this session', gate, newTurn, rows);
     if (!gate.active) {
-      const notice = gate.status === 'unsafe' && !this.told.has(name) ? `auto-effort is off for ${input.model}: a cache check failed on it earlier. /auto-effort clear ${name} turns it back on.` : undefined;
-      if (notice !== undefined) this.told.add(name);
+      const notice = gate.status === 'unsafe' && !this.told.has(variant) ? `auto-effort is off for ${input.model}: a cache check failed on it earlier. /auto-effort clear ${variant} turns it back on.` : undefined;
+      if (notice !== undefined) this.told.add(variant);
       const inactive = this.inactive(input, effort, `auto-effort does not change effort on ${input.model} (${gate.status})`, gate, newTurn, rows);
       return { ...inactive, ...(notice === undefined ? {} : { warning: { event: 'gate-unsafe', msg: notice, where: 'src/controller.ts#beginStep' } as PluginWarning }) };
     }
@@ -345,7 +346,7 @@ export class Controller {
     const level = clamp(turn.level, s.floor, s.ceiling);
     const send = level === effort ? undefined : level;
     const prev = this.last;
-    const switched = prev !== undefined && prev.model === name && prev.wire !== level;
+    const switched = prev !== undefined && prev.model === variant && prev.wire !== level;
     if (switched && prev !== undefined) {
       turn.switches += 1;
       rows.push({ event: 'switch', turnId: input.turnId, index: input.index, model: input.model, from: prev.wire ?? null, to: level, source: turn.source, reason: turn.reason });
@@ -379,7 +380,7 @@ export class Controller {
     ];
     let notice: string | undefined;
     let persisted: Persisted | undefined;
-    const model = normalizeModel(inf.model);
+    const model = modelVariant(inf.model);
     if (inf.switched && inf.active && inf.prev !== undefined) {
       const prev = inf.prev;
       const verdict = judgeSwitch({
@@ -389,7 +390,7 @@ export class Controller {
         ttlMs: s.cacheTtlSeconds * 1000,
         threshold: s.canaryThreshold,
         compacted: inf.compacted,
-        sameModel: prev.model === normalizeModel(inf.model),
+        sameModel: prev.model === model,
         prevMessages: prev.messages,
         curMessages: inf.messages,
       });
@@ -410,12 +411,12 @@ export class Controller {
           to: String(inf.wire),
         });
         persisted = this.store;
-        this.told.add(normalizeModel(inf.model));
+        this.told.add(model);
         rows.push({ event: 'gate', model: inf.model, status: 'unsafe', why: 'cache canary', ratio: verdict.ratio });
-        notice = `auto-effort stopped changing effort on ${inf.model}: after the change from ${String(prev.wire)} to ${String(inf.wire)} the cache read was ${(verdict.ratio * 100).toFixed(1)}% of what the previous request cached (the check wants ${(s.canaryThreshold * 100).toFixed(0)}%). /auto-effort clear ${normalizeModel(inf.model)} turns it back on.`;
+        notice = `auto-effort stopped changing effort on ${inf.model}: after the change from ${String(prev.wire)} to ${String(inf.wire)} the cache read was ${(verdict.ratio * 100).toFixed(1)}% of what the previous request cached (the check wants ${(s.canaryThreshold * 100).toFixed(0)}%). /auto-effort clear ${model} turns it back on.`;
       }
     }
-    this.last = usage === null ? undefined : { model: normalizeModel(inf.model), wire: inf.wire, usage, endedAt, messages: inf.messages };
+    this.last = usage === null ? undefined : { model, wire: inf.wire, usage, endedAt, messages: inf.messages };
     return { rows, ...(notice === undefined ? {} : { warning: { event: 'canary-failed', msg: notice, where: 'src/controller.ts#endStep' } as PluginWarning }), ...(persisted === undefined ? {} : { persisted, model }) };
   }
 
@@ -573,7 +574,7 @@ export class Controller {
       gate,
       turn: this.turn === null ? null : { level: this.turn.level, source: this.turn.source, reason: this.turn.reason },
       probation: name === undefined ? undefined : this.store.probation[name],
-      unsafe: name === undefined ? undefined : this.store.unsafe[name],
+      unsafe: model === undefined ? undefined : this.store.unsafe[modelVariant(model)],
     };
   }
 }

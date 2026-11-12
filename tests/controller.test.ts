@@ -700,6 +700,27 @@ describe('cache canary (R9)', () => {
     expect(later.step('t10', 0).plan).toMatchObject({ send: 'high', source: 'plan' });
   });
 
+  it('marks only the context window the check failed on, and tells that window again after a clear by the bare name', () => {
+    const WIDE = `${OPUS}[1m]`;
+    const { out } = switched(200, { model: WIDE });
+    expect(Object.keys(out.end.persisted?.unsafe ?? {})).toEqual([WIDE]);
+    expect(out.end.model).toBe(WIDE);
+    expect(out.end.warning?.msg).toContain(`/auto-effort clear ${WIDE} turns it back on.`);
+    const later = rig({}, out.end.persisted);
+    later.prompt();
+    expect(later.step('t9', 0).plan).toMatchObject({ send: 'high', source: 'plan' });
+    later.prompt('x', WIDE);
+    const wide = later.step('t10', 0, { model: WIDE });
+    expect(wide.plan).toMatchObject({ send: undefined, source: 'off' });
+    expect(wide.plan.warning?.msg).toBe(`auto-effort is off for ${WIDE}: a cache check failed on it earlier. /auto-effort clear ${WIDE} turns it back on.`);
+    expect(later.ctl.view()).toMatchObject({ model: WIDE, gate: { status: 'unsafe' }, unsafe: { from: 'high', to: 'medium' } });
+    later.ctl.clear(OPUS);
+    later.prompt('x', WIDE);
+    expect(later.step('t11', 0, { model: WIDE }).plan).toMatchObject({ send: 'high', source: 'plan' });
+    later.ctl.loadPersisted(out.end.persisted ?? EMPTY_PERSISTED);
+    expect(later.step('t11', 1, { model: WIDE }).plan.warning?.msg).toContain(`auto-effort is off for ${WIDE}`);
+  });
+
   it.each([
     ['past the cache TTL', { gapMs: 301_000 }, 'ttl'],
     ['across a compaction', { compact: true }, 'compaction'],
@@ -721,6 +742,14 @@ describe('cache canary (R9)', () => {
     r.set({ level: 'medium', reason: 'x' });
     r.step('t2', 1, { model: 'claude-fable-5-1', u: usage(10, 200, 100) });
     expect(r.rows.filter((row) => row.event === 'canary')).toHaveLength(1);
+    // Another context window of the same model is a model change too.
+    r.set({ level: 'high', reason: 'x' });
+    const wide = r.step('t2', 2, { model: 'claude-fable-5-1[1m]', u: usage(10, 20, 100) });
+    expect(r.rows.filter((row) => row.event === 'canary')).toHaveLength(1);
+    expect(wide.end.persisted).toBeUndefined();
+    r.set({ level: 'medium', reason: 'x' });
+    r.step('t2', 3, { model: 'claude-fable-5-1[1m]', u: usage(10, 130, 100) });
+    expect(r.rows.filter((row) => row.event === 'canary')).toHaveLength(2);
   });
 
   it('graduates a probation model after `probationSwitches` clean switches', () => {

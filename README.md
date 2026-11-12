@@ -93,7 +93,7 @@ With `userEffortPins` on, `/effort <level>` pins the session: the plugin stops s
 
 ### The cache check
 
-Changing effort mid-turn must not cost the prompt cache. After each switch, the switched request must read from the cache at least `canaryThreshold` (0.9) of what the previous request cached (its cache reads plus cache writes). Below that, the plugin marks the model unsafe, stops changing effort on it, writes one warning to `warnings.jsonl` and remembers the mark across sessions; `/auto-effort clear <model>` lifts it. The check judges nothing when it cannot hold: no token usage, a different model, a compaction in between, fewer messages than before, more than `cacheTtlSeconds` (300) between the two requests, or nothing cached before.
+Changing effort mid-turn must not cost the prompt cache. After each switch, the switched request must read from the cache at least `canaryThreshold` (0.9) of what the previous request cached (its cache reads plus cache writes). Below that, the plugin marks the model unsafe, stops changing effort on it, writes one warning to `warnings.jsonl` and remembers the mark across sessions; `/auto-effort clear <model>` lifts it. A mark holds for the context window it was found on: one on `claude-opus-5-5[1m]` leaves `claude-opus-5-5` steered, and the other way round, because one model's windows can carry effort differently in a request. The check judges nothing when it cannot hold: no token usage, a different model or context window, a compaction in between, fewer messages than before, more than `cacheTtlSeconds` (300) between the two requests, or nothing cached before.
 
 ## Sub-agents
 
@@ -181,7 +181,7 @@ A steered agent starts at its **home** level: its tag, else its definition's `ef
 | `/auto-effort` or `/auto-effort status` | The level held and what decided it, the gate state of the current model, option errors and the settings in effect. |
 | `/auto-effort off` / `on` | Stops or resumes steering for this session. `on` also releases a `/effort` pin. |
 | `/auto-effort set <key> <value>` | Saves one of the main chat's single-valued options through `/config`'s own writer: `floor`, `ceiling`, `planLevel`, `planUpshiftChars`, `turnReminder`, `escalateAfterFailures`, `lowerOnPass`, `userEffortPins`, `unknownModels`, `probationSwitches`, `canaryThreshold`, `cacheTtlSeconds`, `statusLine`, `stateFile`. An environment variable of that option still overrides it. The lists and the sub-agent options are edited in `/config` or `settings.json`. |
-| `/auto-effort clear [model]` | Lifts the cache check's mark from one model, or from every model. |
+| `/auto-effort clear [model]` | Lifts the cache check's mark from one model, or from every model. A name with a context window (`claude-opus-5-5[1m]`) lifts that window's mark alone; a bare name lifts the mark of every window of that model. |
 
 ## Options
 
