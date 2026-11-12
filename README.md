@@ -37,6 +37,7 @@ It ends with when to move: *"Raise it the moment the work turns harder than plan
 
 - **Arguments.** `level` (a level within the range, or `auto`; `effort` is the same field) and `reason`, a few words that go to the state file and the decision log.
 - **Lifetime.** A level applies from the next request until the turn ends, over the planned level and the test rules. The next turn starts at its planned level again. `auto` drops the model's level and hands the rest of the turn back to the automatic rules.
+- **Inside a turn.** Claude Code moves a running turn to a new level only behind a user message that holds text, so a change after a tool result alone would wait for the next prompt. After a change inside a turn (`set_effort`, a failing-test rise, a passing run's return) the plugin appends one short line behind that tool result, `auto-effort: effort is {level} from this request on.`, which the model reads and the person does not see as typed; the next request then goes at the new level.
 - **What outranks it.** Your `/effort` pin, `/auto-effort off`, a model the gate leaves alone and a model that takes no effort level. In each case the call is refused and the answer says why. A sub-agent's call is refused: `set_effort` is the main chat's.
 
 ## Quick start

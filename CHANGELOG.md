@@ -11,6 +11,7 @@ All notable changes to this plugin are recorded here. The format follows [Keep a
 ### Fixed
 
 - A failed cache check on one context window of a model no longer switches automatic effort off on its other windows. The mark was stored under the model's name without the window, so one failure on `claude-opus-5-5[1m]` also stopped every `claude-opus-5-5` chat, where the cache survives an effort change, and clearing the mark lasted only until the next change in a `[1m]` chat. A mark is now kept per model and context window, the cache check treats a change of window as a change of model, and `/auto-effort clear` lifts one window's mark when the name carries the window and every window's when it does not. A mark an older version stored under the bare name keeps that model's default window off until `/auto-effort clear <model>` lifts it once.
+- A level changed inside a running turn now reaches the next request. Where Claude Code carries the effort inside the conversation, it moves a running turn to a new level only behind a user message that holds text: after `set_effort`, a failing-test rise or a passing run's return, the requests kept the old level until the next prompt, while the decision log recorded the new one and the cache check judged switches that never happened. The plugin now appends one short line behind the tool result that carried the change, and the next request goes at the new level with the prompt cache intact.
 
 ## [3.0.1] — 2026-11-01
 

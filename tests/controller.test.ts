@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { Controller, readSessionState, type Row } from '../plugins/auto-effort/src/controller.ts';
 import { EMPTY_PERSISTED, markUnsafe, type Persisted } from '../plugins/auto-effort/src/gate.ts';
 import { resolveSettings } from '../plugins/auto-effort/src/settings.ts';
-import { deescalationLine, escalationLine, handBackText, heldLine, setText } from '../plugins/auto-effort/src/text.ts';
+import { deescalationLine, escalationLine, handBackText, heldLine, levelNote, setText } from '../plugins/auto-effort/src/text.ts';
 
 const OPUS = 'claude-opus-5-5';
 const TOOL = 'mcp__auto-effort__set_effort';
@@ -29,6 +29,7 @@ function rig(raw: Record<string, unknown> = {}, persisted: Persisted = EMPTY_PER
     set: (input: Record<string, unknown>, agent = false) => keep(ctl.setEffort({ input, agent })),
     // A tool result; `command` is the call's command, a test run unless a test names another, and null for a call without one.
     tool: (tool: string, text: string, command: string | null = 'npm test') => keep(ctl.onToolResult({ tool, command: command ?? undefined, text })),
+    note: () => ctl.takeLevelNote(),
   };
 }
 
@@ -305,6 +306,52 @@ describe("the main chat's own level (A)", () => {
 });
 
 // The state a reader outside the plugin is given: the mode the main chat's effort is in, its level and the reason.
+// Claude Code carries a level change into a running turn only behind a user row that holds text: a tool result alone
+// leaves the request at the old level. A change made after a request of the turn went out is due one note, taken once.
+describe('level note for a change inside a turn', () => {
+  function running(raw: Record<string, unknown> = {}) {
+    const r = rig({ planLevel: 'medium', ...raw });
+    r.prompt();
+    r.step('t1', 0);
+    return r;
+  }
+
+  it.each([
+    ['set_effort', (r: ReturnType<typeof rig>): void => void r.set({ level: 'high' }), 'high'],
+    ['a failing-test rise', (r: ReturnType<typeof rig>): void => { r.tool('Bash', 'FAILED'); r.tool('Bash', 'FAILED'); }, 'high'],
+    ['a hand-back', (r: ReturnType<typeof rig>) => { r.set({ level: 'xhigh' }); r.note(); r.step('t1', 1); r.set({ level: 'auto' }); }, 'medium'],
+  ] as const)('is due once after %s, naming the level the next request goes at', (_name, change, level) => {
+    const r = running();
+    change(r);
+    expect(r.note()).toBe(levelNote(level));
+    expect(r.note()).toBeUndefined();
+    r.step('t1', 2);
+    expect(r.note()).toBeUndefined();
+  });
+
+  it('is due again for a second change before the next request, and not for one back to the level that went out', () => {
+    const r = running();
+    r.set({ level: 'high' });
+    expect(r.note()).toBe(levelNote('high'));
+    r.set({ level: 'xhigh' });
+    expect(r.note()).toBe(levelNote('xhigh'));
+    r.set({ level: 'medium' });
+    expect(r.note()).toBeUndefined();
+  });
+
+  it.each([
+    ['no request of the turn went out yet', (r: ReturnType<typeof rig>): void => { r.prompt(); r.set({ level: 'high' }); }],
+    ['the level asked for is the one that went out', (r: ReturnType<typeof rig>): void => { r.prompt(); r.step('t1', 0); r.set({ level: 'medium' }); }],
+    ['auto-effort is off', (r: ReturnType<typeof rig>): void => { r.prompt(); r.step('t1', 0); r.set({ level: 'high' }); r.ctl.setEnabled(false); }],
+    ['the user pinned the effort', (r: ReturnType<typeof rig>): void => { r.prompt(); r.step('t1', 0); r.set({ level: 'high' }); r.ctl.onEffortCommand('low'); }],
+    ['the model gate went unsafe', (r: ReturnType<typeof rig>): void => { r.prompt(); r.step('t1', 0); r.set({ level: 'high' }); r.ctl.loadPersisted(markUnsafe(EMPTY_PERSISTED, OPUS, { at: '2026-01-01T00:00:00.000Z', ratio: 0.1, prevPrompt: 1000, cacheRead: 100, from: 'medium', to: 'high' })); }],
+  ] as const)('is not due when %s', (_name, arrange) => {
+    const r = rig({ planLevel: 'medium' });
+    arrange(r);
+    expect(r.note()).toBeUndefined();
+  });
+});
+
 describe('stateNow', () => {
   it('names the rules, the main chat, the pin and off, each with the level and reason in effect', () => {
     const r = rig();

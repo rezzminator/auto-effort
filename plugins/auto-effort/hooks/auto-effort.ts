@@ -1445,6 +1445,22 @@ on('turn.step', async function* ($, e, next) {if (e.agentId !== undefined) {
     return result;
 
 });
+// A level changed inside a turn reaches the next request only behind a user row with text (Controller.takeLevelNote):
+// the note follows the tool result that carried the change, once that row is kept.
+on('session.append', { door: 'tool-result' }, async ($, e, next) => {
+    const kept = await next(e);
+    if (e.agentId !== undefined) return kept;
+    try {
+      const text = st.ctl.takeLevelNote();
+      if (text !== undefined) {
+        const out = await $.session.append({ message: { type: 'user', content: [{ type: 'text', text }] } });
+        if (out.deny !== undefined) plog($, st, 'warning', 'level-note-refused', `the level note was refused: ${out.deny}; the new level applies from the next prompt`, 'hooks/auto-effort.ts#session.append', { reason: out.deny });
+      }
+    } catch (error) {
+      note($, st, 'error', 'level-note-failed', 'hooks/auto-effort.ts#session.append', 'appending the level note', error, 'the new level applies from the next prompt');
+    }
+    return kept;
+});
 on('tool.call', async ($, e, next) => {const name = st.ctl.toolName;
     if (name !== undefined && e.tool === name) return answerSetEffort($, st, e as Record<string, unknown>);
 if (e.agentId !== undefined || rt.buttons.has(e.tool)) {

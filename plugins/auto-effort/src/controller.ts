@@ -9,7 +9,7 @@ import { modelVariant, normalizeModel } from './model.ts';
 import { planFor } from './plan.ts';
 import { compile, type Compiled, type Settings } from './settings.ts';
 import { stateOf, type EffortState } from './state.ts';
-import { deescalationLine, escalationLine, handBackText, heldLine, quote, reminderLine, setText, shortReason } from './text.ts';
+import { deescalationLine, escalationLine, handBackText, heldLine, levelNote, quote, reminderLine, setText, shortReason } from './text.ts';
 
 export type Row = Record<string, unknown>;
 /** What decided a turn's level: the planning level, the main chat's own set_effort level, a failing-test rise, the user's /effort. */
@@ -55,6 +55,10 @@ type Turn = {
   beforeRise: { level: Effort; source: Source; reason: string } | null;
   escalations: number;
   setEffortCalls: number;
+  /** The level the turn's latest request went out at; null before its first. */
+  wire: Effort | null;
+  /** The level the turn's last note named, so one change is noted once; null when none is owed. */
+  noted: Effort | null;
 };
 
 type Sample = { model: string; wire: Carried; usage: Usage | null; endedAt: number; messages: number };
@@ -338,12 +342,16 @@ export class Controller {
         beforeRise: null,
         escalations: 0,
         setEffortCalls: 0,
+        wire: null,
+        noted: null,
       };
       rows.push({ event: 'decision', turnId: input.turnId, model: input.model, level: plan.level, source: 'plan', reason: plan.reason, upshift: plan.upshift, hints: plan.hintSources.length ? plan.hintSources : null, sessionEffort: effort, override: held?.level ?? null });
     }
     const turn = this.turn;
     turn.steps += 1;
     const level = clamp(turn.level, s.floor, s.ceiling);
+    turn.wire = level;
+    turn.noted = null;
     const send = level === effort ? undefined : level;
     const prev = this.last;
     const switched = prev !== undefined && prev.model === variant && prev.wire !== level;
@@ -517,6 +525,26 @@ export class Controller {
     turn.reason = `${failures} failing test runs`;
     turn.escalations += 1;
     return { context: escalationLine(failures, from, to), rows: [{ event: 'escalation', turnId: turn.id, from, to, failures }] };
+  }
+
+  /**
+   * The note a level change inside a running turn is due, taken once per level. Claude Code moves a running turn's requests
+   * to a new level only behind a user row that holds text: after a tool result alone the request keeps the old level, and
+   * the change would wait for the next prompt. None before the turn's first request, at the level that went out, or while
+   * off, the user's pin or the model gate decides the effort.
+   */
+  takeLevelNote(): string | undefined {
+    const turn = this.turn;
+    if (turn === null || turn.wire === null || !this.enabled || this.pin !== null) return undefined;
+    if (this.lastModel !== undefined && !this.gate(this.lastModel).active) return undefined;
+    const level = clamp(turn.level, this.settingsNow.floor, this.settingsNow.ceiling);
+    if (level === turn.wire) {
+      turn.noted = null;
+      return undefined;
+    }
+    if (level === turn.noted) return undefined;
+    turn.noted = level;
+    return levelNote(level);
   }
 
   /** A passing test run ends the failing streak; with `lowerOnPass` the turn gets back what it held before the streak's first rise. */
