@@ -1,6 +1,6 @@
 // Every sentence the model or the user reads. The tool description and the turn reminder are what the pilot tunes.
 
-import { LEVELS, rank, type Effort } from './levels.ts';
+import { LEVELS, rank, type Effort } from './levels';
 
 const GUIDE: Record<Effort, string> = {
   low: 'lookups, status reports, formatting, one-line edits',

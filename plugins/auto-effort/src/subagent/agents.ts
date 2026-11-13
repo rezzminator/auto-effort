@@ -1,9 +1,9 @@
-import { isEffort, isParentTag, LEVELS, type Effort, type ParentTag } from './effort.ts';
-import { parseFrontmatter } from './frontmatter.ts';
-import { parseTripwires, type Tripwire } from './judge.ts';
-import { rank } from './ladder.ts';
-import { PluginRoots } from './plugin-root.ts';
-import { parseDecay } from './settings.ts';
+import { isEffort, isParentTag, LEVELS, type Effort, type ParentTag } from './effort';
+import { parseFrontmatter } from './frontmatter';
+import { parseTripwires, type Tripwire } from './judge';
+import { rank } from './ladder';
+import { PluginRoots } from './plugin-root';
+import { parseDecay } from './settings';
 
 export type AgentFs = {
   exists: (path: string) => Promise<boolean>;

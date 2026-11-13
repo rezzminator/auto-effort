@@ -1,4 +1,4 @@
-import { LEVELS, type Effort } from './effort.ts';
+import { LEVELS, type Effort } from './effort';
 
 const RANK: Readonly<Record<Effort, number>> = { low: 0, medium: 1, high: 2, xhigh: 3, max: 4 };
 

@@ -1,4 +1,4 @@
-import type { AgentFs } from './agents.ts';
+import type { AgentFs } from './agents';
 
 type Json = Record<string, unknown>;
 /** A record that exists but could not be read or parsed (already logged): "could not look", never "found nothing". */

@@ -1,7 +1,7 @@
 // `/auto-effort`: parsing the arguments and the status text.
 
-import { recheckAt, type Gate, type Unsafe } from './gate.ts';
-import { DEFAULTS, PLUGIN, SETTING_KEYS, type Settings } from './settings.ts';
+import { recheckAt, type Gate, type Unsafe } from './gate';
+import { DEFAULTS, PLUGIN, SETTING_KEYS, type Settings } from './settings';
 
 export const USAGE = '/auto-effort [on|off|status] | /auto-effort set <key> <value> | /auto-effort clear [model]';
 

@@ -1,5 +1,5 @@
-import { DEFAULTS as MAIN_DEFAULTS, envName, FORMER, PLUGIN, resolveSettings as mainSettings } from './settings.ts';
-import { DEFAULTS as SUBAGENT_DEFAULTS, resolveSettings as subagentSettings } from './subagent/settings.ts';
+import { DEFAULTS as MAIN_DEFAULTS, envName, FORMER, PLUGIN, resolveSettings as mainSettings } from './settings';
+import { DEFAULTS as SUBAGENT_DEFAULTS, resolveSettings as subagentSettings } from './subagent/settings';
 
 export type Scope = 'main' | 'subagent';
 export type Values = Readonly<Record<string, unknown>>;

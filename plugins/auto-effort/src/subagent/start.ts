@@ -1,5 +1,5 @@
-import type { Effort, ParentTag } from './effort.ts';
-import { clamp } from './ladder.ts';
+import type { Effort, ParentTag } from './effort';
+import { clamp } from './ladder';
 
 export type Row = Record<string, unknown>;
 

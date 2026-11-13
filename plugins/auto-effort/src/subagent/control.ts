@@ -1,11 +1,11 @@
 // The per-agent controller: the state of one steered agent and every decision about its
 // effort. Pure: events go in, `{ actions }` come out; the hooks file performs the actions.
 
-import type { Effort } from './effort.ts';
-import { collapse, packet as buildPacket, parseAnswer, type Tripwire } from './judge.ts';
-import { clamp, rank, step } from './ladder.ts';
-import { returnLine, type ReturnWords } from './signals.ts';
-import { announceLine, autoText, boundText, buttonText, unsteeredNote, whyChild, whyDecayed, whyJudge, whyRedispatch, whyResolved, WHY_FAIL1, WHY_FAIL2, WHY_JUDGE_FAILED, WHY_LANDING, type Direction } from './text.ts';
+import type { Effort } from './effort';
+import { collapse, packet as buildPacket, parseAnswer, type Tripwire } from './judge';
+import { clamp, rank, step } from './ladder';
+import { returnLine, type ReturnWords } from './signals';
+import { announceLine, autoText, boundText, buttonText, unsteeredNote, whyChild, whyDecayed, whyJudge, whyRedispatch, whyResolved, WHY_FAIL1, WHY_FAIL2, WHY_JUDGE_FAILED, WHY_LANDING, type Direction } from './text';
 
 export type Row = Record<string, unknown>;
 

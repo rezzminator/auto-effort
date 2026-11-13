@@ -1,7 +1,7 @@
 // The model gate (allow / probation / deny, `unknownModels` for the rest), the marks that persist across sessions and their recheck.
 
-import { modelVariant, normalizeModel } from './model.ts';
-import type { Compiled, Settings } from './settings.ts';
+import { modelVariant, normalizeModel } from './model';
+import type { Compiled, Settings } from './settings';
 
 export { modelVariant, normalizeModel };
 

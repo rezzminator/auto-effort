@@ -1,7 +1,7 @@
 // The planning level: what the first request of a turn runs at, before the model has said anything.
 
-import { clamp, rank, type Effort } from './levels.ts';
-import type { Compiled, Settings } from './settings.ts';
+import { clamp, rank, type Effort } from './levels';
+import type { Compiled, Settings } from './settings';
 
 export type Plan = {
   level: Effort;

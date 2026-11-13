@@ -1,15 +1,15 @@
 // Every decision, as plain state and methods: the adapter feeds it the hook events and does what it returns.
 // Nothing here touches the engine; a clock is passed in.
 
-import { judgeSwitch, wholePrompt, type Usage } from './canary.ts';
-import type { View } from './command.ts';
-import { bindingMark, cleanSwitch, clearUnsafe, coversMark, gateOf, liftMark, markUnsafe, nextFails, recheckAt, type Checks, type Gate, type Persisted, type Unsafe } from './gate.ts';
-import { clamp, isEffort, levelsWithin, stepUp, type Effort } from './levels.ts';
-import { modelVariant, normalizeModel } from './model.ts';
-import { planFor } from './plan.ts';
-import { compile, type Compiled, type Settings } from './settings.ts';
-import { stateOf, type EffortState } from './state.ts';
-import { deescalationLine, escalationLine, handBackText, heldLine, levelNote, quote, reminderLine, setText, shortReason } from './text.ts';
+import { judgeSwitch, wholePrompt, type Usage } from './canary';
+import type { View } from './command';
+import { bindingMark, cleanSwitch, clearUnsafe, coversMark, gateOf, liftMark, markUnsafe, nextFails, recheckAt, type Checks, type Gate, type Persisted, type Unsafe } from './gate';
+import { clamp, isEffort, levelsWithin, stepUp, type Effort } from './levels';
+import { modelVariant, normalizeModel } from './model';
+import { planFor } from './plan';
+import { compile, type Compiled, type Settings } from './settings';
+import { stateOf, type EffortState } from './state';
+import { deescalationLine, escalationLine, handBackText, heldLine, levelNote, quote, reminderLine, setText, shortReason } from './text';
 
 export type Row = Record<string, unknown>;
 /** What decided a turn's level: the planning level, the main chat's own set_effort level, a failing-test rise, the user's /effort. */

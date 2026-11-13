@@ -1,6 +1,6 @@
 // The judge: a cheap model reads a snapshot taken at a tripwire and estimates the probability that the trouble continues.
 
-import type { Effort } from './effort.ts';
+import type { Effort } from './effort';
 
 export const JUDGE_SYSTEM = `You estimate whether an AI coding agent is in real trouble, so its reasoning effort can be raised in time. You get a snapshot taken right after a tripwire: a check failed, or a sub-task came back failed, blocked or partial.
 
