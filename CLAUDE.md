@@ -35,10 +35,10 @@ A live check loads the checkout with `--plugin-dir plugins/auto-effort` and `CLA
 - A malformed tag refuses the spawn with a message naming the valid levels; it is never silently dropped.
 - A setting under a former name — a `pluginConfigs` entry of `auto-effort-control@…` or `effort-live-control@…`, an `AUTO_EFFORT_CONTROL_*` or `EFFORT_LIVE_CONTROL_*` variable — is read under the `auto-effort` name or reported naming the old and the new key, never dropped.
 - The state file (`~/.local/state/auto-effort/state.json` by default) is a published interface: `version` 3 with `mode`, `level`, `reason`, `keeper`, `updatedAt`, a failing-test raise's reason `{N} failing test runs`, the keeper's last argument `auto-effort-keeper`; a change to any of them bumps `STATE_VERSION`.
-- `~/.local/state/effort-live-control/` is never moved, rewritten or deleted. `~/.local/state/auto-effort-control/` and `$PLUGIN_LOG_DIR/auto-effort-control/` move once to their `auto-effort` place while that place is free (`src/former.ts`), never overwriting it; a state-file destination inside either former tree is refused.
+- `~/.local/state/effort-live-control/` is never moved, rewritten or deleted. `~/.local/state/auto-effort-control/` and `$PLUGIN_LOG_DIR/auto-effort-control/` move once to their `auto-effort` place while that place is free (`plugins/auto-effort/src/former.ts`), never overwriting it; a state-file destination inside either former tree is refused.
 - The decision log never holds prompt or tool-result text, except the judge packets the opt-in `logPackets` option writes (off by default; README § Options says what they hold).
 - Standalone: the plugin runs on a machine with nothing but Claude Code. No path, agent, policy or wording of any other tool appears in code or in a file the plugin writes; credit is in the README and the manifest only.
-- A version bump moves `plugin.json`, `package.json`, `package-lock.json`, `src/version.ts` and the README badge together; `npm run release:check` proves it.
+- A version bump moves `plugin.json`, `package.json`, `package-lock.json`, `plugins/auto-effort/src/version.ts` and the README badge together; `npm run release:check` proves it.
 - No machine-absolute paths, personal data or private project names in a tracked file.
 - `$` is passed only to functions declared at the top level of the hooks file and always spelled `$.noun.event(...)`: Claude Code checks this statically and otherwise loads the module with zero hooks. `npm run validate:plugin` catches it.
 - Never write to the live Claude Code config (`~/.claude/**`, `settings.json`) from a test or a check.
@@ -53,5 +53,5 @@ A live check loads the checkout with `--plugin-dir plugins/auto-effort` and `CLA
   3. Open the `develop → main` pull request. Its `ci.yml` runs the same make targets, `check` on Linux and macOS and `release`, and its `ci` job passes only when every one succeeded; `release` requires the version to have moved past `main`'s and the CHANGELOG section to yield notes.
   4. Merge once `ci` is green. The merge is the release: `publish.yml`'s `publish` job tags the merge commit `auto-effort--vX.Y.Z` and publishes the GitHub release from the CHANGELOG section. No tag is pushed by hand.
 - Semantic versioning: a fix is a patch; a new option or behaviour is a minor; a renamed or removed option is a major, and its CHANGELOG entry says how to migrate.
-- Publishing: README and marketing changes on `develop` are pushed as soon as they are committed. Code is pushed, and a release is cut, only when the owner asks.
+- Publishing: code is pushed, and a release is cut, only when the owner asks.
 - Git writes go through this repo's gitter, `.claude/agents/gitter.md`.
