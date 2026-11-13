@@ -344,7 +344,7 @@ describe('level note for a change inside a turn', () => {
     ['the level asked for is the one that went out', (r: ReturnType<typeof rig>): void => { r.prompt(); r.step('t1', 0); r.set({ level: 'medium' }); }],
     ['auto-effort is off', (r: ReturnType<typeof rig>): void => { r.prompt(); r.step('t1', 0); r.set({ level: 'high' }); r.ctl.setEnabled(false); }],
     ['the user pinned the effort', (r: ReturnType<typeof rig>): void => { r.prompt(); r.step('t1', 0); r.set({ level: 'high' }); r.ctl.onEffortCommand('low'); }],
-    ['the model gate went unsafe', (r: ReturnType<typeof rig>): void => { r.prompt(); r.step('t1', 0); r.set({ level: 'high' }); r.ctl.loadPersisted(markUnsafe(EMPTY_PERSISTED, OPUS, { at: '2026-01-01T00:00:00.000Z', ratio: 0.1, prevPrompt: 1000, cacheRead: 100, from: 'medium', to: 'high' })); }],
+    ['the model gate went unsafe', (r: ReturnType<typeof rig>): void => { r.prompt(); r.step('t1', 0); r.set({ level: 'high' }); r.ctl.loadPersisted(markUnsafe(EMPTY_PERSISTED, OPUS, { fails: 1, at: '2026-01-01T00:00:00.000Z', ratio: 0.1, prevPrompt: 1000, cacheRead: 100, from: 'medium', to: 'high' })); }],
   ] as const)('is not due when %s', (_name, arrange) => {
     const r = rig({ planLevel: 'medium' });
     arrange(r);
@@ -724,9 +724,9 @@ describe('cache canary (R9)', () => {
 
   it('marks the model unsafe below the threshold, warns once and stops switching on that model', () => {
     const { r, out } = switched(200);
-    expect(out.end.persisted?.unsafe[OPUS]).toMatchObject({ from: 'high', to: 'medium' });
-    expect(out.end.warning?.msg).toContain(OPUS);
-    expect(out.end.warning?.msg).toContain('/auto-effort clear');
+    // The rig's clock: request 1 ended at 1,000,000 ms, the switched one 20 s later.
+    expect(out.end.persisted?.unsafe[OPUS]).toEqual({ at: '1970-01-01T00:17:00.000Z', ratio: 0.04, prevPrompt: 5010, cacheRead: 200, from: 'high', to: 'medium', fails: 1 });
+    expect(out.end.warning?.msg).toBe(`auto-effort stopped changing effort on ${OPUS}: after the change from high to medium the cache read was 4.0% of what the previous request cached (the check wants 90%). It checks again at 1970-01-01T01:17:00.000Z. /auto-effort clear ${OPUS} turns it back on.`);
     expect(r.rows.find((row) => row.event === 'canary')).toMatchObject({ verdict: 'fail' });
     const after = r.step('t1', 2, { effort: 'xhigh' });
     expect(after.plan).toMatchObject({ send: undefined, source: 'off' });
@@ -752,20 +752,97 @@ describe('cache canary (R9)', () => {
     const { out } = switched(200, { model: WIDE });
     expect(Object.keys(out.end.persisted?.unsafe ?? {})).toEqual([WIDE]);
     expect(out.end.model).toBe(WIDE);
-    expect(out.end.warning?.msg).toContain(`/auto-effort clear ${WIDE} turns it back on.`);
+    expect(out.end.warning?.msg).toContain(`It checks again at 1970-01-01T01:17:00.000Z. /auto-effort clear ${WIDE} turns it back on.`);
     const later = rig({}, out.end.persisted);
     later.prompt();
     expect(later.step('t9', 0).plan).toMatchObject({ send: 'high', source: 'plan' });
     later.prompt('x', WIDE);
     const wide = later.step('t10', 0, { model: WIDE });
     expect(wide.plan).toMatchObject({ send: undefined, source: 'off' });
-    expect(wide.plan.warning?.msg).toBe(`auto-effort is off for ${WIDE}: a cache check failed on it earlier. /auto-effort clear ${WIDE} turns it back on.`);
+    expect(wide.plan.warning?.msg).toBe(`auto-effort is off for ${WIDE}: a cache check failed on it earlier. It checks again at 1970-01-01T01:17:00.000Z. /auto-effort clear ${WIDE} turns it back on.`);
     expect(later.ctl.view()).toMatchObject({ model: WIDE, gate: { status: 'unsafe' }, unsafe: { from: 'high', to: 'medium' } });
     later.ctl.clear(OPUS);
     later.prompt('x', WIDE);
+    // Past the cache TTL, so this first steered request is no check that could set the mark aside.
+    later.clock.t += 301_000;
     expect(later.step('t11', 0, { model: WIDE }).plan).toMatchObject({ send: 'high', source: 'plan' });
     later.ctl.loadPersisted(out.end.persisted ?? EMPTY_PERSISTED);
     expect(later.step('t11', 1, { model: WIDE }).plan.warning?.msg).toContain(`auto-effort is off for ${WIDE}`);
+  });
+
+  // The recheck: a mark waits an hour, then the model is steered again and its next switch is judged like any other.
+  const HOUR = 3_600_000;
+  // A later turn on `r`, begun past the cache TTL so its first request is not judged: it runs at high, then switches to
+  // medium on a request that reads `read` of the 5000 tokens the first one cached.
+  function again(r: ReturnType<typeof rig>, turn: string, read: number) {
+    r.prompt('x');
+    const first = r.step(turn, 0, { u: usage(10, 0, 5000) });
+    r.set({ level: 'medium', reason: 'rename' });
+    r.clock.t += 20_000;
+    return { first, out: r.step(turn, 1, { effort: 'xhigh', u: usage(20, read, 100) }) };
+  }
+
+  it('stays off until the hour is over, then steers again and lifts the mark when the next switch keeps the cache', () => {
+    const { r } = switched(200);
+    r.clock.t = 1_020_000 + HOUR - 1;
+    expect(r.ctl.view().gate).toEqual({ model: OPUS, status: 'unsafe', active: false });
+    r.clock.t = 1_020_000 + HOUR;
+    expect(r.ctl.view().gate).toEqual({ model: OPUS, status: 'recheck', active: true });
+    const { first, out } = again(r, 't2', 4990);
+    expect(first.plan).toMatchObject({ send: 'high', source: 'plan' });
+    expect(first.end.persisted).toBeUndefined();
+    expect(r.ctl.view().gate).toEqual({ model: OPUS, status: 'allow', active: true });
+    expect(out.end.persisted?.unsafe).toEqual({});
+    expect(out.end.model).toBe(OPUS);
+    expect(out.end.warning).toBeUndefined();
+    expect(r.rows.filter((row) => row.event === 'gate')).toEqual([
+      { event: 'gate', model: OPUS, status: 'unsafe', why: 'cache canary', ratio: 0.04, fails: 1 },
+      { event: 'gate', model: OPUS, status: 'allow', why: 'cache check passed' },
+    ]);
+    expect(r.ctl.view().unsafe).toBeUndefined();
+  });
+
+  it('doubles the wait when the recheck fails too', () => {
+    const { r } = switched(200);
+    r.clock.t = 1_020_000 + HOUR;
+    const { out } = again(r, 't2', 200);
+    // The recheck's switched request ended at the hour plus its 20 s.
+    const failedAt = 1_040_000 + HOUR;
+    expect(out.end.persisted?.unsafe[OPUS]).toEqual({ at: new Date(failedAt).toISOString(), ratio: 0.04, prevPrompt: 5010, cacheRead: 200, from: 'high', to: 'medium', fails: 2 });
+    expect(out.end.warning?.msg).toContain(`It checks again at ${new Date(failedAt + 2 * HOUR).toISOString()}.`);
+    r.clock.t = failedAt + 2 * HOUR - 1;
+    expect(r.ctl.view().gate).toEqual({ model: OPUS, status: 'unsafe', active: false });
+    r.clock.t = failedAt + 2 * HOUR;
+    expect(r.ctl.view().gate).toEqual({ model: OPUS, status: 'recheck', active: true });
+  });
+
+  it("keeps a chat whose own check passed steered through another chat's mark, and lifts that mark at its next clean switch", () => {
+    const { r } = switched(4990);
+    const foreign = { at: new Date(r.clock.t).toISOString(), ratio: 0.2, prevPrompt: 9000, cacheRead: 1800, from: 'high', to: 'xhigh', fails: 1 };
+    r.ctl.loadPersisted(markUnsafe(EMPTY_PERSISTED, OPUS, foreign));
+    expect(r.ctl.view()).toMatchObject({ gate: { model: OPUS, status: 'allow', active: true }, unsafe: undefined });
+    r.clock.t += 301_000;
+    const { first, out } = again(r, 't2', 4990);
+    expect(first.plan).toMatchObject({ send: 'high', source: 'plan' });
+    expect(out.end.persisted?.unsafe).toEqual({});
+    // A chat with no check of its own is held by the same mark.
+    const fresh = rig({}, markUnsafe(EMPTY_PERSISTED, OPUS, foreign));
+    fresh.prompt();
+    expect(fresh.step('t1', 0, { effort: 'xhigh' }).plan).toMatchObject({ send: undefined, source: 'off' });
+  });
+
+  it("holds a chat to its own failed check after another chat's clean switch lifted the stored mark, and /auto-effort clear lifts both", () => {
+    const { r } = switched(200);
+    r.ctl.loadPersisted(EMPTY_PERSISTED);
+    r.prompt();
+    expect(r.step('t2', 0, { effort: 'xhigh' }).plan).toMatchObject({ send: undefined, source: 'off' });
+    expect(r.ctl.view()).toMatchObject({ gate: { status: 'unsafe', active: false }, unsafe: { from: 'high', to: 'medium', fails: 1 } });
+    expect(r.ctl.marks(undefined)).toEqual([OPUS]);
+    expect(r.ctl.marks('claude-fable-5-1')).toEqual([]);
+    r.ctl.clear(OPUS);
+    expect(r.ctl.marks(undefined)).toEqual([]);
+    r.prompt();
+    expect(r.step('t3', 0).plan).toMatchObject({ send: 'high', source: 'plan' });
   });
 
   it.each([
@@ -877,7 +954,7 @@ describe('controller upkeep', () => {
 
   it('starts a cleared session afresh: on, pin kept, no turn, nothing to compare with, the notice told again', () => {
     const r = rig();
-    r.ctl.loadPersisted(markUnsafe(EMPTY_PERSISTED, 'claude-fable-5-1', { at: 'x', ratio: 0.1, prevPrompt: 10, cacheRead: 1, from: 'high', to: 'medium' }));
+    r.ctl.loadPersisted(markUnsafe(EMPTY_PERSISTED, 'claude-fable-5-1', { at: '2026-01-01T00:00:00.000Z', ratio: 0.1, prevPrompt: 10, cacheRead: 1, from: 'high', to: 'medium', fails: 1 }));
     r.prompt();
     r.step('t1', 0, { effort: 'xhigh' });
     r.prompt();
@@ -984,7 +1061,7 @@ describe('session state', () => {
 
 
 it('returns warning diagnostics for unsafe and failed-canary decisions', () => {
-  const unsafe = markUnsafe(EMPTY_PERSISTED, OPUS, { at: 'x', ratio: 0.1, prevPrompt: 1, cacheRead: 0, from: 'high', to: 'medium' });
+  const unsafe = markUnsafe(EMPTY_PERSISTED, OPUS, { at: '2026-01-01T00:00:00.000Z', ratio: 0.1, prevPrompt: 1, cacheRead: 0, from: 'high', to: 'medium', fails: 1 });
   const off = rig({}, unsafe);
   const first = off.step('t1', 0).plan;
   expect(first.warning).toEqual({ event: 'gate-unsafe', msg: expect.stringContaining(`auto-effort is off for ${OPUS}`), where: 'src/controller.ts#beginStep' });

@@ -27,9 +27,9 @@ describe('parseCommand', () => {
 });
 
 describe('statusText', () => {
-  const view = (raw: Record<string, unknown> = {}, persisted = EMPTY_PERSISTED) => {
+  const view = (raw: Record<string, unknown> = {}, persisted = EMPTY_PERSISTED, now = 0) => {
     const { settings, errors } = resolveSettings(raw);
-    const ctl = new Controller(settings, persisted, () => 0);
+    const ctl = new Controller(settings, persisted, () => now);
     ctl.onPrompt({ text: 'fix it', model: 'claude-opus-5-5', midTurn: false });
     ctl.beginStep({ turnId: 't1', index: 0, model: 'claude-opus-5-5', effort: 'xhigh', messageCount: 2 });
     return statusText({ view: ctl.view(), settings, errors, version: '0.1.0', settingsFrom: 'live' });
@@ -86,7 +86,7 @@ describe('statusText', () => {
   });
 
   it('lists the option errors and a cache mark with the way to clear it', () => {
-    const marked = markUnsafe(EMPTY_PERSISTED, 'claude-opus-5-5', { at: '2026-10-11T12:00:00Z', ratio: 0.12, prevPrompt: 40000, cacheRead: 4800, from: 'high', to: 'medium' });
+    const marked = markUnsafe(EMPTY_PERSISTED, 'claude-opus-5-5', { at: '2026-10-11T12:00:00Z', ratio: 0.12, prevPrompt: 40000, cacheRead: 4800, from: 'high', to: 'medium', fails: 1 });
     const text = view({ floor: 'nope' }, marked);
     expect(text).toContain('"floor"');
     expect(text).toContain('model: claude-opus-5-5 · unsafe');
@@ -94,7 +94,8 @@ describe('statusText', () => {
   });
 
   it('shows a cache mark whose ratio was not kept as unknown', () => {
-    const marked = markUnsafe(EMPTY_PERSISTED, 'claude-opus-5-5', { at: '2026-10-11T12:00:00Z', ratio: null, prevPrompt: 0, cacheRead: 0, from: 'high', to: 'medium' });
-    expect(view({}, marked).split('\n')).toContain('model: claude-opus-5-5 · unsafe · cache read unknown of what the previous request cached at 2026-10-11T12:00:00Z; /auto-effort clear claude-opus-5-5 turns it back on');
+    const marked = markUnsafe(EMPTY_PERSISTED, 'claude-opus-5-5', { at: '2026-10-11T12:00:00Z', ratio: null, prevPrompt: 0, cacheRead: 0, from: 'high', to: 'medium', fails: 2 });
+    expect(view({}, marked).split('\n')).toContain('model: claude-opus-5-5 · unsafe · cache read unknown of what the previous request cached at 2026-10-11T12:00:00Z; checks again at 2026-10-11T14:00:00.000Z; /auto-effort clear claude-opus-5-5 turns it back on');
+    expect(view({}, marked, Date.parse('2026-10-11T14:00:00Z')).split('\n')).toContain('model: claude-opus-5-5 · recheck · cache read unknown of what the previous request cached at 2026-10-11T12:00:00Z; the next effort change checks again');
   });
 });

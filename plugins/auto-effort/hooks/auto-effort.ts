@@ -595,8 +595,7 @@ async function runCommand($: EngineInterface, st: State, args: string): Promise<
       return `auto-effort is ${command.kind} for this session.`;
     case 'clear': {
       const stored = readPersisted(await $.store.get(STORE_KEY));
-      const mine = st.ctl.persisted;
-      const named = command.model === undefined ? [...Object.keys(stored.unsafe), ...Object.keys(mine.unsafe)] : [...marksOf(stored, command.model), ...marksOf(mine, command.model)];
+      const named = [...(command.model === undefined ? Object.keys(stored.unsafe) : marksOf(stored, command.model)), ...st.ctl.marks(command.model)];
       if (named.length === 0) {
         return command.model === undefined ? 'Nothing to clear: no model has a cache mark.' : `Nothing to clear: ${command.model} has no cache mark.`;
       }

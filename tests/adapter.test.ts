@@ -518,7 +518,7 @@ suite('turn.step', () => {
   });
 
   it('starts off on a model the store marked unsafe, without a diagnostic toast', async () => {
-    const e = engine({}, { storeValue: { unsafe: { [OPUS]: { at: 'x', ratio: 0.1, prevPrompt: 1, cacheRead: 0, from: 'high', to: 'medium' } }, probation: {}, graduated: [] } });
+    const e = engine({}, { storeValue: { unsafe: { [OPUS]: { at: '2999-01-01T00:00:00.000Z', ratio: 0.1, prevPrompt: 1, cacheRead: 0, from: 'high', to: 'medium', fails: 1 } }, probation: {}, graduated: [] } });
     await e.start();
     await e.prompt();
     expect(await e.step({})).toMatchObject({ effort: 'xhigh' });
@@ -552,7 +552,7 @@ suite('turn.step', () => {
     await e.start();
     await e.prompt();
     await e.step({}, { usage: usage(10, 0, 5000) });
-    const other = { at: 'y', ratio: 0.2, prevPrompt: 9, cacheRead: 1, from: 'high', to: 'xhigh' };
+    const other = { at: 'y', ratio: 0.2, prevPrompt: 9, cacheRead: 1, from: 'high', to: 'xhigh', fails: 1 };
     e.store.set('state', { unsafe: { 'claude-fable-5-1': other }, probation: { 'claude-haiku-5-5': 3 }, graduated: [] });
     await e.tool({ tool: TOOL, level: 'medium', reason: 'rename' });
     await e.step({ index: 1 }, { usage: usage(4000, 100, 900) });
@@ -1400,6 +1400,24 @@ suite('/auto-effort', () => {
     expect((await e.command('clear claude-opus-5-5')).text).toContain('cleared');
     expect((e.store.get('state') as any).unsafe).toEqual({});
   });
+
+  it("clears the mark of this chat's own failed check after another chat lifted the stored one", async () => {
+    const e = engine({ statusLine: false });
+    await e.start();
+    await e.prompt();
+    await e.step({}, { usage: usage(10, 0, 5000) });
+    await e.tool({ tool: TOOL, level: 'medium', reason: 'rename' });
+    await e.step({ index: 1 }, { usage: usage(4000, 100, 900) });
+    await e.end();
+    expect(Object.keys((e.store.get('state') as any).unsafe)).toEqual([OPUS]);
+    e.store.set('state', { unsafe: {}, probation: {}, graduated: [] });
+    await e.prompt();
+    expect(await e.step({ index: 2 })).toMatchObject({ effort: 'xhigh' });
+    expect((await e.command('clear')).text).toBe('Cache mark cleared for every model; automatic effort applies to it again.');
+    await e.prompt();
+    // Steered again: the request goes at the level set_effort still holds, not the xhigh it carried.
+    expect(await e.step({ index: 3 })).toMatchObject({ effort: 'medium' });
+  });
 });
 
 suite('manifest', () => {
@@ -1432,7 +1450,7 @@ suite('plugin log adapter', () => {
   it.each(['missing directory', 'write failure', 'initialization failure'])('screen policy: a warning never reaches the screen, even with no log (%s); the log failure shows one line', async (failure) => {
     const e = engine({}, {
       env: failure === 'missing directory' ? {} : { HOME: '/isolated/home' },
-      storeValue: { unsafe: { [OPUS]: { at: 'x', ratio: 0.1, prevPrompt: 1, cacheRead: 0, from: 'high', to: 'medium' } }, probation: {}, graduated: [] },
+      storeValue: { unsafe: { [OPUS]: { at: '2999-01-01T00:00:00.000Z', ratio: 0.1, prevPrompt: 1, cacheRead: 0, from: 'high', to: 'medium', fails: 1 } }, probation: {}, graduated: [] },
     });
     e.$.process.run = async () => ({ exitCode: 1, stdout: '', stderr: 'read-only log' });
     if (failure === 'initialization failure') e.$.env.get = async (name) => {

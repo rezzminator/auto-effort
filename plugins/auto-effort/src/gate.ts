@@ -1,4 +1,4 @@
-// The model gate (allow / probation / deny, `unknownModels` for the rest) and the marks that persist across sessions.
+// The model gate (allow / probation / deny, `unknownModels` for the rest), the marks that persist across sessions and their recheck.
 
 import { modelVariant, normalizeModel } from './model.ts';
 import type { Compiled, Settings } from './settings.ts';
@@ -7,7 +7,17 @@ export { modelVariant, normalizeModel };
 
 /** The cache canary's finding: the model's cache did not survive an effort change. */
 /** `ratio` is null when a stored mark no longer holds it: the mark gates by its presence, the ratio is only shown. */
-export type Unsafe = { at: string; ratio: number | null; prevPrompt: number; cacheRead: number; from: string; to: string };
+/** `fails` counts the failed checks in a row, 1 for a first one and for a mark stored before the count was kept. */
+export type Unsafe = { at: string; ratio: number | null; prevPrompt: number; cacheRead: number; from: string; to: string; fails: number };
+
+/**
+ * A chat's own cache checks on one model and context window, held while its process lives: the mark its last failed
+ * check left, and whether a check has passed since. A failed check can come from the chat alone (its process, its
+ * conversation), so what a chat saw itself outranks what another chat stored.
+ */
+export type Checks = { failed: Unsafe | undefined; passed: boolean };
+
+export const NO_CHECKS: Checks = { failed: undefined, passed: false };
 
 export type Persisted = {
   /** The marks, per model and context window (`modelVariant`): a mark on `claude-x[1m]` leaves `claude-x` steered. */
@@ -20,15 +30,39 @@ export type Persisted = {
 
 export const EMPTY_PERSISTED: Persisted = { unsafe: {}, probation: {}, graduated: [] };
 
-export type GateStatus = 'allow' | 'probation' | 'deny' | 'off' | 'unsafe';
+/** `unsafe` while a mark waits, `recheck` once its wait is over: the model is steered again and its next switch is judged. */
+export type GateStatus = 'allow' | 'probation' | 'deny' | 'off' | 'unsafe' | 'recheck';
 export type Gate = { model: string; status: GateStatus; active: boolean };
 
-export function gateOf(model: string, settings: Settings, compiled: Compiled, persisted: Persisted): Gate {
+const RECHECK_FIRST_MS = 3_600_000;
+const RECHECK_LONGEST_MS = 86_400_000;
+
+/**
+ * When a mark is rechecked, in epoch ms: an hour after a first failed check, twice as long after each further one in a
+ * row, a day at most. A mark whose time cannot be read is due at once: nothing says how long it has waited.
+ */
+export function recheckAt(mark: Unsafe): number {
+  const at = Date.parse(mark.at);
+  return Number.isNaN(at) ? 0 : at + Math.min(RECHECK_LONGEST_MS, RECHECK_FIRST_MS * 2 ** (mark.fails - 1));
+}
+
+/** The mark that binds a chat: the one its own failed check left; else the stored one, unless a check of its own has passed. */
+export function bindingMark(persisted: Persisted, model: string, checks: Checks): Unsafe | undefined {
+  return checks.failed ?? (checks.passed ? undefined : persisted.unsafe[modelVariant(model)]);
+}
+
+/** The failed checks in a row one more failure makes: one past the longer of the chat's own run and the stored one. */
+export function nextFails(persisted: Persisted, model: string, checks: Checks): number {
+  return Math.max(checks.failed?.fails ?? 0, persisted.unsafe[modelVariant(model)]?.fails ?? 0) + 1;
+}
+
+export function gateOf(model: string, settings: Settings, compiled: Compiled, persisted: Persisted, checks: Checks, now: number): Gate {
   const name = normalizeModel(model);
   const configured = compiled.models[name] ?? settings.unknownModels;
   if (configured === 'deny') return { model: name, status: 'deny', active: false };
   if (configured === 'off') return { model: name, status: 'off', active: false };
-  if (persisted.unsafe[modelVariant(model)] !== undefined) return { model: name, status: 'unsafe', active: false };
+  const mark = bindingMark(persisted, model, checks);
+  if (mark !== undefined) return now >= recheckAt(mark) ? { model: name, status: 'recheck', active: true } : { model: name, status: 'unsafe', active: false };
   if (configured === 'probation' && persisted.graduated.includes(name)) return { model: name, status: 'allow', active: true };
   return { model: name, status: configured, active: true };
 }
@@ -72,11 +106,22 @@ export function mergeModels(stored: Persisted, mine: Persisted, models: readonly
   return { unsafe, probation, graduated: [...graduated] };
 }
 
-/** The marked names a model name covers: that context window alone when it names one (`claude-x[1m]`), else every window of the model. */
-export function marksOf(persisted: Persisted, model: string): string[] {
+/** Lifts the mark of one model and context window: the one a clean switch on it disproved. */
+export function liftMark(persisted: Persisted, model: string): Persisted {
+  const { [modelVariant(model)]: _lifted, ...unsafe } = persisted.unsafe;
+  return { ...persisted, unsafe };
+}
+
+/** Whether a model name covers a marked one: that context window alone when it names one (`claude-x[1m]`), else every window of the model. */
+export function coversMark(model: string, marked: string): boolean {
   const variant = modelVariant(model);
   const name = normalizeModel(model);
-  return Object.keys(persisted.unsafe).filter((marked) => (variant === name ? normalizeModel(marked) === name : marked === variant));
+  return variant === name ? normalizeModel(marked) === name : marked === variant;
+}
+
+/** The marked names a model name covers (`coversMark`). */
+export function marksOf(persisted: Persisted, model: string): string[] {
+  return Object.keys(persisted.unsafe).filter((marked) => coversMark(model, marked));
 }
 
 /** Lifts the marks a model name covers (`marksOf`), or every mark when none is named. */
@@ -105,6 +150,7 @@ export function readPersisted(raw: unknown, unreadable: string[] = []): Persiste
         cacheRead: Number(mark.cacheRead ?? 0),
         from: String(mark.from ?? ''),
         to: String(mark.to ?? ''),
+        fails: typeof mark.fails === 'number' && mark.fails >= 1 ? Math.floor(mark.fails) : 1,
       };
     }
   } else if (raw.unsafe !== undefined) unreadable.push('unsafe');

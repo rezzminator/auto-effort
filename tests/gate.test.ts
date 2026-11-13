@@ -1,10 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { clearUnsafe, cleanSwitch, EMPTY_PERSISTED, gateOf, marksOf, markUnsafe, mergeModels, modelVariant, normalizeModel, readPersisted } from '../plugins/auto-effort/src/gate.ts';
+import { clearUnsafe, cleanSwitch, EMPTY_PERSISTED, gateOf, liftMark, marksOf, markUnsafe, mergeModels, modelVariant, NO_CHECKS, normalizeModel, readPersisted, recheckAt, type Checks } from '../plugins/auto-effort/src/gate.ts';
 import { compile, DEFAULTS, resolveSettings } from '../plugins/auto-effort/src/settings.ts';
 
 const compiled = compile(DEFAULTS);
-const gate = (model: string, persisted = EMPTY_PERSISTED, settings = DEFAULTS) => gateOf(model, settings, compile(settings), persisted);
-const mark = { at: '2026-10-11T12:00:00Z', ratio: 0.12, prevPrompt: 40000, cacheRead: 4800, from: 'high', to: 'medium' };
+const MARKED_AT = Date.parse('2026-10-11T12:00:00Z');
+const HOUR = 3_600_000;
+// Half an hour after `mark`: inside the wait of a first failed check.
+const gate = (model: string, persisted = EMPTY_PERSISTED, settings = DEFAULTS, checks: Checks = NO_CHECKS, now = MARKED_AT + HOUR / 2) => gateOf(model, settings, compile(settings), persisted, checks, now);
+const mark = { at: '2026-10-11T12:00:00Z', ratio: 0.12, prevPrompt: 40000, cacheRead: 4800, from: 'high', to: 'medium', fails: 1 };
 
 // R8: a per-model allow / probation / deny map; an unknown model follows `unknownModels`.
 describe('gateOf', () => {
@@ -48,6 +51,38 @@ describe('gateOf', () => {
     expect(gate('claude-opus-5-5[1m]', plain)).toMatchObject({ status: 'allow', active: true });
   });
 
+  // A mark is no verdict for good: once its wait is over the model is steered again, and the next switch is the recheck.
+  it.each([
+    [1, 1],
+    [2, 2],
+    [5, 16],
+    [6, 24],
+    [40, 24],
+  ])('rechecks a mark of %i failed checks in a row after %i hours', (fails, hours) => {
+    const marked = markUnsafe(EMPTY_PERSISTED, 'claude-opus-5-5', { ...mark, fails });
+    expect(recheckAt({ ...mark, fails })).toBe(MARKED_AT + hours * HOUR);
+    expect(gate('claude-opus-5-5', marked, DEFAULTS, NO_CHECKS, MARKED_AT + hours * HOUR - 1)).toEqual({ model: 'claude-opus-5-5', status: 'unsafe', active: false });
+    expect(gate('claude-opus-5-5', marked, DEFAULTS, NO_CHECKS, MARKED_AT + hours * HOUR)).toEqual({ model: 'claude-opus-5-5', status: 'recheck', active: true });
+    expect(gate('claude-opus-5-5', marked, DEFAULTS, NO_CHECKS, MARKED_AT + hours * HOUR + 1)).toEqual({ model: 'claude-opus-5-5', status: 'recheck', active: true });
+  });
+
+  it("puts a chat's own checks before the stored mark: its own failure binds it, its own pass sets another chat's mark aside", () => {
+    const marked = markUnsafe(EMPTY_PERSISTED, 'claude-opus-5-5', mark);
+    expect(gate('claude-opus-5-5', marked, DEFAULTS, { failed: undefined, passed: true })).toEqual({ model: 'claude-opus-5-5', status: 'allow', active: true });
+    expect(gate('claude-opus-5-5', marked, DEFAULTS, NO_CHECKS)).toEqual({ model: 'claude-opus-5-5', status: 'unsafe', active: false });
+    expect(gate('claude-opus-5-5', EMPTY_PERSISTED, DEFAULTS, { failed: mark, passed: false })).toEqual({ model: 'claude-opus-5-5', status: 'unsafe', active: false });
+    // Its own mark of two failures outlasts the stored one of one.
+    const own = { failed: { ...mark, fails: 2 }, passed: false };
+    expect(gate('claude-opus-5-5', marked, DEFAULTS, own, MARKED_AT + HOUR)).toEqual({ model: 'claude-opus-5-5', status: 'unsafe', active: false });
+    expect(gate('claude-opus-5-5', marked, DEFAULTS, own, MARKED_AT + 2 * HOUR)).toEqual({ model: 'claude-opus-5-5', status: 'recheck', active: true });
+  });
+
+  it('lifts the mark of one context window and leaves the others', () => {
+    const both = markUnsafe(markUnsafe(EMPTY_PERSISTED, 'claude-opus-5-5', mark), 'claude-opus-5-5[1m]', mark);
+    expect(liftMark(both, 'claude-opus-5-5-20261001').unsafe).toEqual({ 'claude-opus-5-5[1m]': mark });
+    expect(liftMark(both, 'claude-opus-5-5[1m]').unsafe).toEqual({ 'claude-opus-5-5': mark });
+  });
+
   it('clears one window by its own name, and every window of a model by the bare name', () => {
     const both = markUnsafe(markUnsafe(markUnsafe(EMPTY_PERSISTED, 'claude-opus-5-5', mark), 'claude-opus-5-5[1m]', mark), 'claude-fable-5-1[1m]', mark);
     expect(marksOf(both, 'claude-opus-5-5[1m]')).toEqual(['claude-opus-5-5[1m]']);
@@ -85,11 +120,23 @@ describe('readPersisted', () => {
   it('keeps an unsafe mark whatever its fields hold, its ratio unknown when it is no number', () => {
     const stored = readPersisted({ unsafe: { 'claude-opus-5-5': { at: 'x', ratio: 'low', from: 'high', to: 'medium' }, 'claude-fable-5-1': true } });
     expect(stored.unsafe).toEqual({
-      'claude-opus-5-5': { at: 'x', ratio: null, prevPrompt: 0, cacheRead: 0, from: 'high', to: 'medium' },
-      'claude-fable-5-1': { at: '', ratio: null, prevPrompt: 0, cacheRead: 0, from: '', to: '' },
+      'claude-opus-5-5': { at: 'x', ratio: null, prevPrompt: 0, cacheRead: 0, from: 'high', to: 'medium', fails: 1 },
+      'claude-fable-5-1': { at: '', ratio: null, prevPrompt: 0, cacheRead: 0, from: '', to: '', fails: 1 },
     });
-    expect(gate('claude-opus-5-5', stored)).toMatchObject({ status: 'unsafe', active: false });
-    expect(gate('claude-fable-5-1', stored)).toMatchObject({ status: 'unsafe', active: false });
+    // A mark whose time cannot be read is rechecked at once: nothing says how long it has waited.
+    expect(gate('claude-opus-5-5', stored)).toEqual({ model: 'claude-opus-5-5', status: 'recheck', active: true });
+    expect(gate('claude-fable-5-1', stored)).toEqual({ model: 'claude-fable-5-1', status: 'recheck', active: true });
+  });
+
+  it.each([
+    [3, 3],
+    [2.9, 2],
+    [0, 1],
+    [-4, 1],
+    ['many', 1],
+    [undefined, 1],
+  ])('reads the failed checks in a row of a stored mark: %s is %i', (fails, read) => {
+    expect(readPersisted({ unsafe: { 'claude-opus-5-5': { ...mark, fails } } }).unsafe['claude-opus-5-5']).toEqual({ ...mark, fails: read });
   });
 
   it('names each stored entry it cannot read, and keeps the readable ones', () => {
