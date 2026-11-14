@@ -1,6 +1,6 @@
 {
   "name": "auto-effort",
-  "version": "3.0.1",
+  "version": "3.1.0",
   "description": "Automatic reasoning effort for main chats and sub-agents, with planning, cache checks, spawn tags, tripwires and control tools.",
   "license": "MIT",
   "types": "./contract.d.ts",
@@ -24,7 +24,7 @@
       "type": "string",
       "title": "floor: the lowest effort auto-effort ever sends",
       "description": "The lowest reasoning effort the plugin sends: low, medium, high, xhigh or max. A lower level the model asks for is raised to this one. Must not be above ceiling.",
-      "default": "medium"
+      "default": "low"
     },
     "ceiling": {
       "type": "string",
@@ -172,7 +172,7 @@
     "canaryThreshold": {
       "type": "number",
       "title": "canaryThreshold: cache read the switched request must keep (0 to 1)",
-      "description": "After an effort change, the switched request must read at least this fraction of what the previous request cached from the prompt cache. Below it the plugin stops changing effort on that model, tells you once, and remembers across sessions until /auto-effort clear.",
+      "description": "After an effort change, the switched request must read at least this fraction of what the previous request cached from the prompt cache. Below it the plugin stops changing effort on that model, tells you once, remembers across sessions, and checks again after an hour (twice as long after each further failure, a day at most) or at /auto-effort clear.",
       "default": 0.9,
       "min": 0.01,
       "max": 1

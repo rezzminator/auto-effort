@@ -1,6 +1,6 @@
 // Every sentence the model or the user reads. The tool description and the turn reminder are what the pilot tunes.
 
-import { LEVELS, rank, type Effort } from './levels.ts';
+import { LEVELS, rank, type Effort } from './levels';
 
 const GUIDE: Record<Effort, string> = {
   low: 'lookups, status reports, formatting, one-line edits',
@@ -76,6 +76,11 @@ export function deescalationLine(from: Effort, to: Effort): string {
 const REASON_MAX = 60;
 
 /** Text a message carries from outside (a raw value, an error): at most `max` characters. */
+/** The row that carries a level changed inside a turn to the next request (`Controller.takeLevelNote`). */
+export function levelNote(level: Effort): string {
+  return `auto-effort: effort is ${level} from this request on.`;
+}
+
 export function clip(text: string, max = REASON_MAX): string {
   return text.length > max ? `${text.slice(0, max - 1)}…` : text;
 }

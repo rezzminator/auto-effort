@@ -1,10 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { clearUnsafe, cleanSwitch, EMPTY_PERSISTED, gateOf, markUnsafe, mergeModels, normalizeModel, readPersisted } from '../plugins/auto-effort/src/gate.ts';
+import { clearUnsafe, cleanSwitch, EMPTY_PERSISTED, gateOf, liftMark, marksOf, markUnsafe, mergeModels, modelVariant, NO_CHECKS, normalizeModel, readPersisted, recheckAt, type Checks } from '../plugins/auto-effort/src/gate.ts';
 import { compile, DEFAULTS, resolveSettings } from '../plugins/auto-effort/src/settings.ts';
 
 const compiled = compile(DEFAULTS);
-const gate = (model: string, persisted = EMPTY_PERSISTED, settings = DEFAULTS) => gateOf(model, settings, compile(settings), persisted);
-const mark = { at: '2026-10-11T12:00:00Z', ratio: 0.12, prevPrompt: 40000, cacheRead: 4800, from: 'high', to: 'medium' };
+const MARKED_AT = Date.parse('2026-10-11T12:00:00Z');
+const HOUR = 3_600_000;
+// Half an hour after `mark`: inside the wait of a first failed check.
+const gate = (model: string, persisted = EMPTY_PERSISTED, settings = DEFAULTS, checks: Checks = NO_CHECKS, now = MARKED_AT + HOUR / 2) => gateOf(model, settings, compile(settings), persisted, checks, now);
+const mark = { at: '2026-10-11T12:00:00Z', ratio: 0.12, prevPrompt: 40000, cacheRead: 4800, from: 'high', to: 'medium', fails: 1 };
 
 // R8: a per-model allow / probation / deny map; an unknown model follows `unknownModels`.
 describe('gateOf', () => {
@@ -29,11 +32,65 @@ describe('gateOf', () => {
 
   // R9: the unsafe mark persists across sessions.
   it('stops a model the cache canary marked unsafe, until the mark is cleared', () => {
-    const marked = markUnsafe(EMPTY_PERSISTED, 'claude-opus-5-5[1m]', mark);
+    const marked = markUnsafe(EMPTY_PERSISTED, 'claude-opus-5-5-20261001', mark);
     expect(gate('claude-opus-5-5', marked)).toMatchObject({ status: 'unsafe', active: false });
     expect(gate('claude-fable-5-1', marked)).toMatchObject({ status: 'allow', active: true });
     expect(gate('claude-opus-5-5', clearUnsafe(marked, 'claude-opus-5-5'))).toMatchObject({ status: 'allow', active: true });
     expect(gate('claude-opus-5-5', clearUnsafe(marked, undefined))).toMatchObject({ status: 'allow', active: true });
+  });
+
+  // One model's context windows can carry effort differently on the wire, so a mark holds for the window it was found on.
+  it('keeps a mark to the context window it was made on', () => {
+    const wide = markUnsafe(EMPTY_PERSISTED, 'claude-opus-5-5[1m]', mark);
+    expect(Object.keys(wide.unsafe)).toEqual(['claude-opus-5-5[1m]']);
+    expect(gate('claude-opus-5-5[1m]', wide)).toMatchObject({ status: 'unsafe', active: false });
+    expect(gate('claude-opus-5-5-20261001[1m]', wide)).toMatchObject({ status: 'unsafe', active: false });
+    expect(gate('claude-opus-5-5', wide)).toMatchObject({ status: 'allow', active: true });
+    const plain = markUnsafe(EMPTY_PERSISTED, 'claude-opus-5-5', mark);
+    expect(gate('claude-opus-5-5', plain)).toMatchObject({ status: 'unsafe', active: false });
+    expect(gate('claude-opus-5-5[1m]', plain)).toMatchObject({ status: 'allow', active: true });
+  });
+
+  // A mark is no verdict for good: once its wait is over the model is steered again, and the next switch is the recheck.
+  it.each([
+    [1, 1],
+    [2, 2],
+    [5, 16],
+    [6, 24],
+    [40, 24],
+  ])('rechecks a mark of %i failed checks in a row after %i hours', (fails, hours) => {
+    const marked = markUnsafe(EMPTY_PERSISTED, 'claude-opus-5-5', { ...mark, fails });
+    expect(recheckAt({ ...mark, fails })).toBe(MARKED_AT + hours * HOUR);
+    expect(gate('claude-opus-5-5', marked, DEFAULTS, NO_CHECKS, MARKED_AT + hours * HOUR - 1)).toEqual({ model: 'claude-opus-5-5', status: 'unsafe', active: false });
+    expect(gate('claude-opus-5-5', marked, DEFAULTS, NO_CHECKS, MARKED_AT + hours * HOUR)).toEqual({ model: 'claude-opus-5-5', status: 'recheck', active: true });
+    expect(gate('claude-opus-5-5', marked, DEFAULTS, NO_CHECKS, MARKED_AT + hours * HOUR + 1)).toEqual({ model: 'claude-opus-5-5', status: 'recheck', active: true });
+  });
+
+  it("puts a chat's own checks before the stored mark: its own failure binds it, its own pass sets another chat's mark aside", () => {
+    const marked = markUnsafe(EMPTY_PERSISTED, 'claude-opus-5-5', mark);
+    expect(gate('claude-opus-5-5', marked, DEFAULTS, { failed: undefined, passed: true })).toEqual({ model: 'claude-opus-5-5', status: 'allow', active: true });
+    expect(gate('claude-opus-5-5', marked, DEFAULTS, NO_CHECKS)).toEqual({ model: 'claude-opus-5-5', status: 'unsafe', active: false });
+    expect(gate('claude-opus-5-5', EMPTY_PERSISTED, DEFAULTS, { failed: mark, passed: false })).toEqual({ model: 'claude-opus-5-5', status: 'unsafe', active: false });
+    // Its own mark of two failures outlasts the stored one of one.
+    const own = { failed: { ...mark, fails: 2 }, passed: false };
+    expect(gate('claude-opus-5-5', marked, DEFAULTS, own, MARKED_AT + HOUR)).toEqual({ model: 'claude-opus-5-5', status: 'unsafe', active: false });
+    expect(gate('claude-opus-5-5', marked, DEFAULTS, own, MARKED_AT + 2 * HOUR)).toEqual({ model: 'claude-opus-5-5', status: 'recheck', active: true });
+  });
+
+  it('lifts the mark of one context window and leaves the others', () => {
+    const both = markUnsafe(markUnsafe(EMPTY_PERSISTED, 'claude-opus-5-5', mark), 'claude-opus-5-5[1m]', mark);
+    expect(liftMark(both, 'claude-opus-5-5-20261001').unsafe).toEqual({ 'claude-opus-5-5[1m]': mark });
+    expect(liftMark(both, 'claude-opus-5-5[1m]').unsafe).toEqual({ 'claude-opus-5-5': mark });
+  });
+
+  it('clears one window by its own name, and every window of a model by the bare name', () => {
+    const both = markUnsafe(markUnsafe(markUnsafe(EMPTY_PERSISTED, 'claude-opus-5-5', mark), 'claude-opus-5-5[1m]', mark), 'claude-fable-5-1[1m]', mark);
+    expect(marksOf(both, 'claude-opus-5-5[1m]')).toEqual(['claude-opus-5-5[1m]']);
+    expect(marksOf(both, 'claude-opus-5-5')).toEqual(['claude-opus-5-5', 'claude-opus-5-5[1m]']);
+    expect(marksOf(both, 'claude-sonnet-5-5')).toEqual([]);
+    expect(Object.keys(clearUnsafe(both, 'claude-opus-5-5[1m]').unsafe)).toEqual(['claude-opus-5-5', 'claude-fable-5-1[1m]']);
+    expect(Object.keys(clearUnsafe(both, 'claude-opus-5-5').unsafe)).toEqual(['claude-fable-5-1[1m]']);
+    expect(clearUnsafe(both, undefined).unsafe).toEqual({});
   });
 });
 
@@ -63,11 +120,23 @@ describe('readPersisted', () => {
   it('keeps an unsafe mark whatever its fields hold, its ratio unknown when it is no number', () => {
     const stored = readPersisted({ unsafe: { 'claude-opus-5-5': { at: 'x', ratio: 'low', from: 'high', to: 'medium' }, 'claude-fable-5-1': true } });
     expect(stored.unsafe).toEqual({
-      'claude-opus-5-5': { at: 'x', ratio: null, prevPrompt: 0, cacheRead: 0, from: 'high', to: 'medium' },
-      'claude-fable-5-1': { at: '', ratio: null, prevPrompt: 0, cacheRead: 0, from: '', to: '' },
+      'claude-opus-5-5': { at: 'x', ratio: null, prevPrompt: 0, cacheRead: 0, from: 'high', to: 'medium', fails: 1 },
+      'claude-fable-5-1': { at: '', ratio: null, prevPrompt: 0, cacheRead: 0, from: '', to: '', fails: 1 },
     });
-    expect(gate('claude-opus-5-5', stored)).toMatchObject({ status: 'unsafe', active: false });
-    expect(gate('claude-fable-5-1', stored)).toMatchObject({ status: 'unsafe', active: false });
+    // A mark whose time cannot be read is rechecked at once: nothing says how long it has waited.
+    expect(gate('claude-opus-5-5', stored)).toEqual({ model: 'claude-opus-5-5', status: 'recheck', active: true });
+    expect(gate('claude-fable-5-1', stored)).toEqual({ model: 'claude-fable-5-1', status: 'recheck', active: true });
+  });
+
+  it.each([
+    [3, 3],
+    [2.9, 2],
+    [0, 1],
+    [-4, 1],
+    ['many', 1],
+    [undefined, 1],
+  ])('reads the failed checks in a row of a stored mark: %s is %i', (fails, read) => {
+    expect(readPersisted({ unsafe: { 'claude-opus-5-5': { ...mark, fails } } }).unsafe['claude-opus-5-5']).toEqual({ ...mark, fails: read });
   });
 
   it('names each stored entry it cannot read, and keeps the readable ones', () => {
@@ -99,6 +168,17 @@ describe('mergeModels', () => {
     expect(mergeModels(stored, mine, ['claude-haiku-5-5', 'claude-opus-5-5'])).toEqual({ unsafe: {}, probation: {}, graduated: ['claude-haiku-5-5'] });
     expect(mergeModels(stored, mine, ['claude-haiku-5-5'])).toEqual({ unsafe: { 'claude-opus-5-5': mark }, probation: {}, graduated: ['claude-haiku-5-5'] });
   });
+
+  it('lays a mark over its own context window only, and a probation count over the model whatever the window', () => {
+    const other = { ...mark, at: '2026-10-12T08:00:00Z' };
+    const stored = markUnsafe({ unsafe: {}, probation: { 'claude-sonnet-5-5': 1 }, graduated: [] }, 'claude-sonnet-5-5', other);
+    const mine = markUnsafe({ unsafe: {}, probation: { 'claude-sonnet-5-5': 2 }, graduated: [] }, 'claude-sonnet-5-5[1m]', mark);
+    expect(mergeModels(stored, mine, ['claude-sonnet-5-5[1m]'])).toEqual({
+      unsafe: { 'claude-sonnet-5-5': other, 'claude-sonnet-5-5[1m]': mark },
+      probation: { 'claude-sonnet-5-5': 2 },
+      graduated: [],
+    });
+  });
 });
 
 describe('normalizeModel', () => {
@@ -107,5 +187,16 @@ describe('normalizeModel', () => {
     expect(normalizeModel('claude-sonnet-5-5-20261001')).toBe('claude-sonnet-5-5');
     expect(normalizeModel('claude-sonnet-5')).toBe('claude-sonnet-5');
     expect(compiled.models['claude-sonnet-5']).toBe('deny');
+  });
+});
+
+describe('modelVariant', () => {
+  it.each([
+    ['claude-opus-5-5[1m]', 'claude-opus-5-5[1m]'],
+    ['claude-opus-5-5-20261001[1m]', 'claude-opus-5-5[1m]'],
+    ['claude-sonnet-5-5-20261001', 'claude-sonnet-5-5'],
+    [' claude-sonnet-5 ', 'claude-sonnet-5'],
+  ])('%j is %j: the date stamp dropped, the context window kept', (model, variant) => {
+    expect(modelVariant(model)).toBe(variant);
   });
 });

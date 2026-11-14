@@ -3,9 +3,9 @@
 // plugin.json's userConfig and the README table.
 // A bad value is reported by key (or variable name) and value, and the default applies.
 
-import { isEffort, isParentTag, LEVELS, type Effort, type ParentTag } from './effort.ts';
-import { parseTripwires } from './judge.ts';
-import { rank } from './ladder.ts';
+import { isEffort, isParentTag, LEVELS, type Effort, type ParentTag } from './effort';
+import { parseTripwires } from './judge';
+import { rank } from './ladder';
 
 export type Settings = {
   floor: Effort;

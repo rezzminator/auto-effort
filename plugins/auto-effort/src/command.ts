@@ -1,7 +1,7 @@
 // `/auto-effort`: parsing the arguments and the status text.
 
-import type { Gate, Unsafe } from './gate.ts';
-import { DEFAULTS, PLUGIN, SETTING_KEYS, type Settings } from './settings.ts';
+import { recheckAt, type Gate, type Unsafe } from './gate';
+import { DEFAULTS, PLUGIN, SETTING_KEYS, type Settings } from './settings';
 
 export const USAGE = '/auto-effort [on|off|status] | /auto-effort set <key> <value> | /auto-effort clear [model]';
 
@@ -66,7 +66,11 @@ export function statusText(input: { view: View; settings: Settings; errors: read
   if (view.model !== undefined && view.gate !== undefined) {
     let gate = `model: ${view.model} · ${view.gate.status}`;
     if (view.gate.status === 'probation') gate += ` (${view.probation ?? 0} of ${settings.probationSwitches} clean switches)`;
-    if (view.unsafe !== undefined) gate += ` · cache read ${view.unsafe.ratio === null ? 'unknown' : `${(view.unsafe.ratio * 100).toFixed(1)}%`} of what the previous request cached at ${view.unsafe.at}; /auto-effort clear ${view.model} turns it back on`;
+    if (view.unsafe !== undefined) {
+      gate += ` · cache read ${view.unsafe.ratio === null ? 'unknown' : `${(view.unsafe.ratio * 100).toFixed(1)}%`} of what the previous request cached at ${view.unsafe.at}`;
+      if (view.gate.status === 'recheck') gate += '; the next effort change checks again';
+      else gate += `${view.gate.status === 'unsafe' ? `; checks again at ${new Date(recheckAt(view.unsafe)).toISOString()}` : ''}; /auto-effort clear ${view.model} turns it back on`;
+    }
     lines.push(gate);
   }
   if (errors.length > 0) lines.push('option errors:', ...errors.map((line) => `  ${line}`));

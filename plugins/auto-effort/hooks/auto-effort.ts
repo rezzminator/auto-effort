@@ -1,18 +1,19 @@
-import { projectOptions, resolveOptions, type Scope, type ReadValue } from '../src/options.ts';
+import { projectOptions, resolveOptions, type Scope, type ReadValue } from '../src/options';
+import type { AutoEffortSession } from '../contract';
 import type { ConfigRow, EngineInterface, Register, ModelCompleteRequest, ModelCompleteResult, On, PluginOptions } from 'claude-code';
-import type { Usage } from '../src/canary.ts';
-import { parseCommand, statusText, USAGE } from '../src/command.ts';
-import { Controller, readSessionState, type Row, type StepPlan } from '../src/controller.ts';
-import { EMPTY_PERSISTED, mergeModels, readPersisted } from '../src/gate.ts';
-import { levelsWithin } from '../src/levels.ts';
-import { formerDirs, MOVE_SCRIPT } from '../src/former.ts';
-import { expandHome, fillSegments, SEGMENT_ROWS, sessionLogPath } from '../src/log.ts';
-import { normalizeModel } from '../src/model.ts';
-import { envName, FORMER, PLUGIN, resolveSettings, SETTING_KEYS, type EnvValues } from '../src/settings.ts';
-import { KEEPER_ARGV, stateText, type EffortState } from '../src/state.ts';
-import { quote, toolDescription } from '../src/text.ts';
-import { levelRow, onScreen, pluginLogDir, PluginLogQueue, type PluginLogLevel } from '../src/plugin-log.ts';
-import { VERSION } from '../src/version.ts';
+import type { Usage } from '../src/canary';
+import { parseCommand, statusText, USAGE } from '../src/command';
+import { Controller, readSessionState, type Row, type StepPlan } from '../src/controller';
+import { EMPTY_PERSISTED, marksOf, mergeModels, readPersisted } from '../src/gate';
+import { levelsWithin } from '../src/levels';
+import { formerDirs, MOVE_SCRIPT } from '../src/former';
+import { expandHome, fillSegments, SEGMENT_ROWS, sessionLogPath } from '../src/log';
+import { modelVariant } from '../src/model';
+import { envName, FORMER, PLUGIN, resolveSettings, SETTING_KEYS, type EnvValues } from '../src/settings';
+import { KEEPER_ARGV, stateText, type EffortState } from '../src/state';
+import { quote, toolDescription } from '../src/text';
+import { levelRow, onScreen, pluginLogDir, PluginLogQueue, type PluginLogLevel } from '../src/plugin-log';
+import { VERSION } from '../src/version';
 
 // Thin adapter: every decision lives in src/controller.ts. A failure is logged with its context and the request,
 // the prompt or the tool result goes through as it was.
@@ -402,7 +403,7 @@ async function restoreSession($: EngineInterface, st: State): Promise<void> {
 
 async function saveSession($: EngineInterface, st: State): Promise<void> {
   if (st.sessionId === undefined) return;
-  const now = st.ctl.sessionState();
+  const now: AutoEffortSession = st.ctl.sessionState();
   const text = JSON.stringify(now);
   if (text === st.savedSession) return;
   let failure: unknown;
@@ -492,7 +493,7 @@ async function followSession($: EngineInterface, st: State): Promise<void> {
 // The marks as the store holds them, with this session's unsaved changes laid over them and saved:
 // another chat's marks for other models survive the save, and a failed save is tried again at the next prompt.
 async function syncMarks($: EngineInterface, st: State, changed: readonly string[]): Promise<void> {
-  for (const model of changed) st.unsaved.add(normalizeModel(model));
+  for (const model of changed) st.unsaved.add(modelVariant(model));
   const merged = mergeModels(readPersisted(await $.store.get(STORE_KEY)), st.ctl.persisted, [...st.unsaved]);
   st.ctl.loadPersisted(merged);
   // Only the models this save carries are done: one marked while it was in flight stays for its own save.
@@ -595,9 +596,8 @@ async function runCommand($: EngineInterface, st: State, args: string): Promise<
       return `auto-effort is ${command.kind} for this session.`;
     case 'clear': {
       const stored = readPersisted(await $.store.get(STORE_KEY));
-      const mine = st.ctl.persisted;
-      const named = command.model === undefined ? [...Object.keys(stored.unsafe), ...Object.keys(mine.unsafe)] : [normalizeModel(command.model)];
-      if (!named.some((model) => stored.unsafe[model] !== undefined || mine.unsafe[model] !== undefined)) {
+      const named = [...(command.model === undefined ? Object.keys(stored.unsafe) : marksOf(stored, command.model)), ...st.ctl.marks(command.model)];
+      if (named.length === 0) {
         return command.model === undefined ? 'Nothing to clear: no model has a cache mark.' : `Nothing to clear: ${command.model} has no cache mark.`;
       }
       st.ctl.clear(command.model);
@@ -633,16 +633,16 @@ async function runCommand($: EngineInterface, st: State, args: string): Promise<
 }
 
 
-import { Definitions as SubDefinitions, type ControlConfig as SubControlConfig, type Definition as SubDefinition } from '../src/subagent/agents.ts';
-import { Controller as SubController, type Action as SubAction } from '../src/subagent/control.ts';
-import { describe as SubDescribe, denyText as SubDenyText, EMPTY_TEXT as SubEMPTY_TEXT, isStillRunning as SubIsStillRunning, parseTag as SubParseTag, stepEffort as SubStepEffort, stripTag as SubStripTag, type Effort as SubEffort, type Pin as SubPin } from '../src/subagent/effort.ts';
-import { JUDGE_SYSTEM as SubJUDGE_SYSTEM, parseTripwires as SubParseTripwires, TRIPWIRES as SubTRIPWIRES } from '../src/subagent/judge.ts';
-import { isLevel as SubIsLevel } from '../src/subagent/ladder.ts';
-import { appendRows as SubAppendRows, sessionLogPath as SubSessionLogPath } from '../src/subagent/log.ts';
-import { compile as SubCompile, envName as SubEnvName, resolveSettings as SubResolveSettings, SETTING_KEYS as SubSETTING_KEYS, type Compiled as SubCompiled, type OptionEnv as SubOptionEnv, type Settings as SubSettings } from '../src/subagent/settings.ts';
-import { isRead as SubIsRead, isTestRun as SubIsTestRun, testOutcome as SubTestOutcome } from '../src/subagent/signals.ts';
-import { startOf as SubStartOf } from '../src/subagent/start.ts';
-import { BUTTON_AUTO as SubBUTTON_AUTO, BUTTON_DOWN as SubBUTTON_DOWN, BUTTON_UP as SubBUTTON_UP, MAIN_REFUSED as SubMAIN_REFUSED, mainEffortToolOf as SubMainEffortToolOf, REFUSED as SubREFUSED, type Direction as SubDirection } from '../src/subagent/text.ts';
+import { Definitions as SubDefinitions, type ControlConfig as SubControlConfig, type Definition as SubDefinition } from '../src/subagent/agents';
+import { Controller as SubController, type Action as SubAction } from '../src/subagent/control';
+import { describe as SubDescribe, denyText as SubDenyText, EMPTY_TEXT as SubEMPTY_TEXT, isStillRunning as SubIsStillRunning, parseTag as SubParseTag, stepEffort as SubStepEffort, stripTag as SubStripTag, type Effort as SubEffort, type Pin as SubPin } from '../src/subagent/effort';
+import { JUDGE_SYSTEM as SubJUDGE_SYSTEM, parseTripwires as SubParseTripwires, TRIPWIRES as SubTRIPWIRES } from '../src/subagent/judge';
+import { isLevel as SubIsLevel } from '../src/subagent/ladder';
+import { appendRows as SubAppendRows, sessionLogPath as SubSessionLogPath } from '../src/subagent/log';
+import { compile as SubCompile, envName as SubEnvName, resolveSettings as SubResolveSettings, SETTING_KEYS as SubSETTING_KEYS, type Compiled as SubCompiled, type OptionEnv as SubOptionEnv, type Settings as SubSettings } from '../src/subagent/settings';
+import { isRead as SubIsRead, isTestRun as SubIsTestRun, testOutcome as SubTestOutcome } from '../src/subagent/signals';
+import { startOf as SubStartOf } from '../src/subagent/start';
+import { BUTTON_AUTO as SubBUTTON_AUTO, BUTTON_DOWN as SubBUTTON_DOWN, BUTTON_UP as SubBUTTON_UP, MAIN_REFUSED as SubMAIN_REFUSED, mainEffortToolOf as SubMainEffortToolOf, REFUSED as SubREFUSED, type Direction as SubDirection } from '../src/subagent/text';
 
 // Thin adapter: every decision lives in src/. A failure is logged with its context and
 // the spawn, request or tool call goes through at the effort it already had.
@@ -951,6 +951,8 @@ function SubStart(rt: SubRuntime, $: EngineInterface): Promise<void> {
         listMarkdown: async (dir) => (await $.fs.list(dir)).filter((entry) => entry.kind === 'file' && entry.name.endsWith('.md')).map((entry) => entry.name),
       },
       (line) => SubNotice(rt, $, 'error', 'definition-unreadable', line, 'definitionOf'),
+      // Plugin records live under CLAUDE_CONFIG_DIR, else ~/.claude (the plugin agents `P:N`).
+      configDir ? configDir : home ? `${home}/.claude` : undefined,
     );
   })().catch((error) => SubNotice(rt, $, 'error', 'start-failed', `auto-effort: starting failed: ${SubMessage(error)}; sub-agents run unsteered at the effort they carry`, 'start'));
   return rt.started;
@@ -1443,6 +1445,22 @@ on('turn.step', async function* ($, e, next) {if (e.agentId !== undefined) {
     return result;
 
 });
+// A level changed inside a turn reaches the next request only behind a user row with text (Controller.takeLevelNote):
+// the note follows the tool result that carried the change, once that row is kept.
+on('session.append', { door: 'tool-result' }, async ($, e, next) => {
+    const kept = await next(e);
+    if (e.agentId !== undefined) return kept;
+    try {
+      const text = st.ctl.takeLevelNote();
+      if (text !== undefined) {
+        const out = await $.session.append({ message: { type: 'user', content: [{ type: 'text', text }] } });
+        if (out.deny !== undefined) plog($, st, 'warning', 'level-note-refused', `the level note was refused: ${out.deny}; the new level applies from the next prompt`, 'hooks/auto-effort.ts#session.append', { reason: out.deny });
+      }
+    } catch (error) {
+      note($, st, 'error', 'level-note-failed', 'hooks/auto-effort.ts#session.append', 'appending the level note', error, 'the new level applies from the next prompt');
+    }
+    return kept;
+});
 on('tool.call', async ($, e, next) => {const name = st.ctl.toolName;
     if (name !== undefined && e.tool === name) return answerSetEffort($, st, e as Record<string, unknown>);
 if (e.agentId !== undefined || rt.buttons.has(e.tool)) {
@@ -1475,7 +1493,7 @@ if (e.agentId !== undefined || rt.buttons.has(e.tool)) {
     try {
       const text = result.text ?? (typeof result.result === 'string' ? result.result : '');
       // The tool's arguments ride beside `tool` (`e.command` for Bash); a call without a command is no test run.
-      const command = typeof e.command === 'string' ? e.command : undefined;
+      const command = 'command' in e && typeof e.command === 'string' ? e.command : undefined;
       const seen = st.ctl.onToolResult({ tool: e.tool, command, text });
       record($, st, seen.rows);
       if (seen.context !== undefined) return { ...result, context: [...(result.context ?? []), seen.context] };

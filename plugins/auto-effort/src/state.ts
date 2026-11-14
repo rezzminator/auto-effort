@@ -2,8 +2,8 @@
 // keeper vouching for it, for a reader outside the plugin such as a status line. The adapter rewrites it whole when its
 // text, `updatedAt` aside, changes; README § The state file is its contract.
 
-import type { Effort } from './levels.ts';
-import { shortReason } from './text.ts';
+import type { Effort } from './levels';
+import { shortReason } from './text';
 
 export const STATE_VERSION = 3;
 

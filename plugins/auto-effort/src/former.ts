@@ -1,8 +1,8 @@
 // The directories under the plugin's former name move to its name once: a directory moves only while its new place is
 // free, so no decision log, plugin log or state line is lost and nothing already under the new name is overwritten.
 
-import { pluginLogDir } from './plugin-log.ts';
-import { FORMER, PLUGIN } from './settings.ts';
+import { pluginLogDir } from './plugin-log';
+import { FORMER, PLUGIN } from './settings';
 
 /** Each directory FORMER wrote and its place under PLUGIN: the state directory, then the PLUGIN_LOG_DIR one; no directory twice. */
 export function formerDirs(configured: string | undefined, home: string | undefined): Array<[string, string]> {

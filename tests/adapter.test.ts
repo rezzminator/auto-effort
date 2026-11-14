@@ -8,6 +8,7 @@ import { describe as suite, expect, it, vi } from 'vitest';
 import { register } from '../plugins/auto-effort/hooks/auto-effort.ts';
 import { Controller } from '../plugins/auto-effort/src/controller.ts';
 import { KEEPER_ARGV } from '../plugins/auto-effort/src/state.ts';
+import { levelNote } from '../plugins/auto-effort/src/text.ts';
 import { VERSION } from '../plugins/auto-effort/src/version.ts';
 
 // A stand-in engine: the hooks the module registers, driven the way the engine drives them, over a fake `$`.
@@ -33,6 +34,9 @@ function engine(options: Record<string, unknown> = {}, o: { configRows?: unknown
   const registered: any[] = [];
   const commands: any[] = [];
   const configSets: any[] = [];
+  /** The rows the adapter appended through `$.session.append`; `refuse` makes the host refuse them, `fail` throw. */
+  const appended: any[] = [];
+  const appending = { mode: undefined as 'refuse' | 'fail' | undefined };
   const sess = { id: 'sess1' };
   // The host's plugin state outlives a plugin reload: one value per (plugin, key, id).
   const state = new Map<string, unknown>();
@@ -95,7 +99,17 @@ function engine(options: Record<string, unknown> = {}, o: { configRows?: unknown
       },
     },
     ui: { log: (line: string) => logs.push(line), status: (text?: string) => statuses.push(text), toast: (text: string) => toasts.push(text) },
-    session: { id: async () => sess.id, model: async () => OPUS, cwd: async () => '/work' },
+    session: {
+      id: async () => sess.id,
+      model: async () => OPUS,
+      cwd: async () => '/work',
+      append: async (args: any) => {
+        if (appending.mode === 'fail') throw new Error('no session');
+        if (appending.mode === 'refuse') return { deny: 'policy' };
+        appended.push(args);
+        return { message: { ...args.message, role: 'user', isMeta: true }, uuid: `note${appended.length}` };
+      },
+    },
     env: { get: async (name: string) => (o.env === undefined ? (name === 'HOME' ? '/fake-home/u' : undefined) : o.env[name]) },
     settings: { read: async (): Promise<Record<string, unknown>> => ({}) },
     config: {
@@ -117,7 +131,7 @@ function engine(options: Record<string, unknown> = {}, o: { configRows?: unknown
   };
   const sent: any[] = [];
   const api = {
-    $, sess, state, logs, logged, statuses, toasts, files, writes, store, registered, commands, configSets, hooks, sent, keepers, spawning,
+    $, sess, state, logs, logged, statuses, toasts, files, writes, store, registered, commands, configSets, hooks, sent, keepers, spawning, appended, appending,
     // A plugin reload (or an option change): the module registers again and builds a new controller; the host's state stays.
     reload: (opts: Record<string, unknown> = options) => {
       hooks.length = 0;
@@ -141,6 +155,8 @@ function engine(options: Record<string, unknown> = {}, o: { configRows?: unknown
       return sent[sent.length - 1];
     },
     tool: (e: Record<string, unknown>, result: Record<string, unknown> = { result: 'ok', text: 'ok' }) => find('tool.call')($, { tool: 'Bash', tool_use_id: 'u1', ...e }, async () => result),
+    // A tool result's row being kept; resolves to the row as stored, which the hook must relay.
+    row: (e: Record<string, unknown> = {}) => find('session.append', { door: 'tool-result' })($, { message: { type: 'user', role: 'user', content: [{ type: 'tool_result', tool_use_id: 'u1', content: 'ok' }] }, door: 'tool-result', origin: { kind: 'tool', tool: 'Bash' }, uuid: 'row1', ...e }, async (x: any) => ({ message: x.message, uuid: x.uuid })),
     complete: (e: Record<string, unknown> = {}) => find('turn.complete')($, { answer: '', durationMs: 3000, isAborted: false, turnId: 't1', reason: 'answer', ...e }, async (x: any) => x),
     command: (args: string) => find('command.run', { command: 'auto-effort' })($, { command: 'auto-effort', args, origin: { kind: 'composer' }, presentation: {} }, async () => ({ text: 'unhandled' })),
     logRows: () => [...files].filter(([path]) => path.endsWith('.jsonl')).flatMap(([, text]) => text.split('\n').filter(Boolean).map((l) => JSON.parse(l))),
@@ -341,8 +357,8 @@ suite('session start', () => {
     expect(e.registered).toHaveLength(1);
     expect(e.registered[0]).toMatchObject({ name: 'set_effort', isDeferred: false });
     expect(e.registered[0].description).toContain('Call it in your first response of a user turn whose work needs another level');
-    expect(e.registered[0].inputSchema.properties.level.enum).toEqual(['medium', 'high', 'xhigh', 'auto']);
-    expect(e.registered[0].inputSchema.properties.effort.enum).toEqual(['medium', 'high', 'xhigh', 'auto']);
+    expect(e.registered[0].inputSchema.properties.level.enum).toEqual(['low', 'medium', 'high', 'xhigh', 'auto']);
+    expect(e.registered[0].inputSchema.properties.effort.enum).toEqual(['low', 'medium', 'high', 'xhigh', 'auto']);
     expect(e.registered[0].inputSchema.properties.level.description).toContain('holds until this turn ends or you call it with auto');
     expect(e.registered[0].inputSchema.required ?? []).toEqual([]);
     expect(e.commands).toEqual([expect.objectContaining({ name: 'auto-effort' })]);
@@ -428,19 +444,48 @@ suite('turn.step', () => {
     expect(e.statuses).toEqual([undefined]);
   });
 
+  it("appends the level note once behind the main chat's tool result after a change inside the turn, and relays the row", async () => {
+    const e = engine();
+    await e.prompt();
+    await e.step({});
+    expect(await e.row()).toEqual({ message: { type: 'user', role: 'user', content: [{ type: 'tool_result', tool_use_id: 'u1', content: 'ok' }] }, uuid: 'row1' });
+    expect(e.appended).toEqual([]);
+    await e.tool({ tool: TOOL, level: 'medium', reason: 'rename' });
+    await e.row({ agentId: 'a1' });
+    expect(e.appended).toEqual([]);
+    await e.row();
+    await e.row({ uuid: 'row2' });
+    expect(e.appended).toEqual([{ message: { type: 'user', content: [{ type: 'text', text: levelNote('medium') }] } }]);
+  });
+
+  it.each([
+    ['refuse', 'warning', 'the level note was refused: policy; the new level applies from the next prompt'],
+    ['fail', 'error', 'auto-effort: appending the level note failed: no session; the new level applies from the next prompt'],
+  ] as const)('keeps the tool result and logs it when the host makes the level note %s', async (mode, level, msg) => {
+    const e = engine({}, LOGS);
+    await e.prompt();
+    await e.step({});
+    await e.tool({ tool: TOOL, level: 'medium', reason: 'rename' });
+    e.appending.mode = mode;
+    expect((await e.row()).uuid).toBe('row1');
+    await e.end();
+    expect(e.logged.filter((row) => row.level === level).map((row) => row.msg)).toContain(msg);
+  });
+
   // R9 through the adapter: the diagnostic and the mark in the store. statusLine off keeps the reason notices out, so any toast would be the gate's.
-  it('logs the cache guard without a toast and stores the unsafe mark after a switch', async () => {
+  it.each([OPUS, `${OPUS}[1m]`])('logs the cache guard without a toast and stores the unsafe mark of %s after a switch', async (model) => {
     const e = engine({ statusLine: false });
     await e.start();
     await e.prompt();
-    await e.step({}, { usage: usage(10, 0, 5000) });
+    await e.step({ model }, { usage: usage(10, 0, 5000) });
     await e.tool({ tool: TOOL, level: 'medium', reason: 'rename' });
-    await e.step({ index: 1 }, { usage: usage(4000, 100, 900) });
+    await e.step({ model, index: 1 }, { usage: usage(4000, 100, 900) });
     await e.end();
     expect(e.toasts).toEqual([]);
     expect(e.logs).toEqual([]);
-    expect((e.store.get('state') as any).unsafe[OPUS]).toMatchObject({ from: 'high', to: 'medium' });
-    expect(await e.step({ index: 2 })).toMatchObject({ effort: 'xhigh' });
+    expect(Object.keys((e.store.get('state') as any).unsafe)).toEqual([model]);
+    expect((e.store.get('state') as any).unsafe[model]).toMatchObject({ from: 'high', to: 'medium' });
+    expect(await e.step({ model, index: 2 })).toMatchObject({ effort: 'xhigh' });
     expect(e.toasts).toEqual([]);
   });
 
@@ -473,7 +518,7 @@ suite('turn.step', () => {
   });
 
   it('starts off on a model the store marked unsafe, without a diagnostic toast', async () => {
-    const e = engine({}, { storeValue: { unsafe: { [OPUS]: { at: 'x', ratio: 0.1, prevPrompt: 1, cacheRead: 0, from: 'high', to: 'medium' } }, probation: {}, graduated: [] } });
+    const e = engine({}, { storeValue: { unsafe: { [OPUS]: { at: '2999-01-01T00:00:00.000Z', ratio: 0.1, prevPrompt: 1, cacheRead: 0, from: 'high', to: 'medium', fails: 1 } }, probation: {}, graduated: [] } });
     await e.start();
     await e.prompt();
     expect(await e.step({})).toMatchObject({ effort: 'xhigh' });
@@ -507,7 +552,7 @@ suite('turn.step', () => {
     await e.start();
     await e.prompt();
     await e.step({}, { usage: usage(10, 0, 5000) });
-    const other = { at: 'y', ratio: 0.2, prevPrompt: 9, cacheRead: 1, from: 'high', to: 'xhigh' };
+    const other = { at: 'y', ratio: 0.2, prevPrompt: 9, cacheRead: 1, from: 'high', to: 'xhigh', fails: 1 };
     e.store.set('state', { unsafe: { 'claude-fable-5-1': other }, probation: { 'claude-haiku-5-5': 3 }, graduated: [] });
     await e.tool({ tool: TOOL, level: 'medium', reason: 'rename' });
     await e.step({ index: 1 }, { usage: usage(4000, 100, 900) });
@@ -780,14 +825,14 @@ suite('environment options', () => {
     const e = envEngine({ AUTO_EFFORT_FLOOR: 'high' }, { ceiling: 'medium' });
     await e.start();
     await e.prompt();
-    const conflict = 'floor=medium ceiling=xhigh';
+    const conflict = 'floor=low ceiling=xhigh';
     expect((await e.command('status')).text).toContain(conflict);
     const reply = (await e.command('set ceiling medium')).text;
     expect(reply).toBe('ceiling is saved as "medium", but "xhigh" is in effect: see the option errors in /auto-effort status.');
     expect((await e.command('status')).text).toContain(conflict);
     await e.command('set planLevel xhigh');
     expect((await e.command('status')).text).toContain(conflict);
-    expect(e.registered.at(-1).inputSchema.properties.level.enum).toEqual(['medium', 'high', 'xhigh', 'auto']);
+    expect(e.registered.at(-1).inputSchema.properties.level.enum).toEqual(['low', 'medium', 'high', 'xhigh', 'auto']);
   });
 
   it('names the variable behind a floor/ceiling conflict', async () => {
@@ -1312,7 +1357,7 @@ suite('/auto-effort', () => {
     const { text } = await e.command('');
     expect(text).toContain(`auto-effort ${VERSION} · on`);
     expect(text).toContain('level: high');
-    expect(text).toContain('floor=medium');
+    expect(text).toContain('floor=low');
     expect((await e.command('status')).text).toBe(text);
   });
 
@@ -1344,12 +1389,34 @@ suite('/auto-effort', () => {
   });
 
   it('clears a cache mark', async () => {
-    const e = engine({}, { storeValue: { unsafe: { [OPUS]: { at: 'x', ratio: 0.1, prevPrompt: 1, cacheRead: 0, from: 'high', to: 'medium' } }, probation: {}, graduated: [] } });
+    const stored = { at: 'x', ratio: 0.1, prevPrompt: 1, cacheRead: 0, from: 'high', to: 'medium' };
+    const e = engine({}, { storeValue: { unsafe: { [OPUS]: stored, [`${OPUS}[1m]`]: stored, 'claude-haiku-5-5[1m]': stored }, probation: {}, graduated: [] } });
     await e.start();
     expect((await e.command('clear claude-fable-5-1')).text).toBe('Nothing to clear: claude-fable-5-1 has no cache mark.');
-    expect((e.store.get('state') as any).unsafe[OPUS]).toBeDefined();
+    expect(Object.keys((e.store.get('state') as any).unsafe)).toEqual([OPUS, `${OPUS}[1m]`, 'claude-haiku-5-5[1m]']);
+    // A name with a context window clears that window's mark alone; a bare name, every window of the model.
+    expect((await e.command('clear claude-haiku-5-5[1m]')).text).toBe('Cache mark cleared for claude-haiku-5-5[1m]; automatic effort applies to it again.');
+    expect(Object.keys((e.store.get('state') as any).unsafe)).toEqual([OPUS, `${OPUS}[1m]`]);
     expect((await e.command('clear claude-opus-5-5')).text).toContain('cleared');
     expect((e.store.get('state') as any).unsafe).toEqual({});
+  });
+
+  it("clears the mark of this chat's own failed check after another chat lifted the stored one", async () => {
+    const e = engine({ statusLine: false });
+    await e.start();
+    await e.prompt();
+    await e.step({}, { usage: usage(10, 0, 5000) });
+    await e.tool({ tool: TOOL, level: 'medium', reason: 'rename' });
+    await e.step({ index: 1 }, { usage: usage(4000, 100, 900) });
+    await e.end();
+    expect(Object.keys((e.store.get('state') as any).unsafe)).toEqual([OPUS]);
+    e.store.set('state', { unsafe: {}, probation: {}, graduated: [] });
+    await e.prompt();
+    expect(await e.step({ index: 2 })).toMatchObject({ effort: 'xhigh' });
+    expect((await e.command('clear')).text).toBe('Cache mark cleared for every model; automatic effort applies to it again.');
+    await e.prompt();
+    // Steered again: the request goes at the level set_effort still holds, not the xhigh it carried.
+    expect(await e.step({ index: 3 })).toMatchObject({ effort: 'medium' });
   });
 });
 
@@ -1383,7 +1450,7 @@ suite('plugin log adapter', () => {
   it.each(['missing directory', 'write failure', 'initialization failure'])('screen policy: a warning never reaches the screen, even with no log (%s); the log failure shows one line', async (failure) => {
     const e = engine({}, {
       env: failure === 'missing directory' ? {} : { HOME: '/isolated/home' },
-      storeValue: { unsafe: { [OPUS]: { at: 'x', ratio: 0.1, prevPrompt: 1, cacheRead: 0, from: 'high', to: 'medium' } }, probation: {}, graduated: [] },
+      storeValue: { unsafe: { [OPUS]: { at: '2999-01-01T00:00:00.000Z', ratio: 0.1, prevPrompt: 1, cacheRead: 0, from: 'high', to: 'medium', fails: 1 } }, probation: {}, graduated: [] },
     });
     e.$.process.run = async () => ({ exitCode: 1, stdout: '', stderr: 'read-only log' });
     if (failure === 'initialization failure') e.$.env.get = async (name) => {

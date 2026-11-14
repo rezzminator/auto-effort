@@ -5,7 +5,7 @@
 **Claude sets its own reasoning effort. The Claude Code main chat gets a `set_effort` tool: the model raises its effort when the work turns hard and lowers it when only mechanical steps remain. A sub-agent's effort is set per spawn, and an agent that opts in steps its own effort with its trouble.**
 
 [![Claude Code plugin](https://img.shields.io/badge/Claude%20Code-plugin-D97757)](https://docs.claude.com/en/docs/claude-code/plugins)
-[![Version](https://img.shields.io/badge/version-3.0.1-blue)](./CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-3.1.0-blue)](./CHANGELOG.md)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](./LICENSE)
 
 </div>
@@ -37,6 +37,7 @@ It ends with when to move: *"Raise it the moment the work turns harder than plan
 
 - **Arguments.** `level` (a level within the range, or `auto`; `effort` is the same field) and `reason`, a few words that go to the state file and the decision log.
 - **Lifetime.** A level applies from the next request until the turn ends, over the planned level and the test rules. The next turn starts at its planned level again. `auto` drops the model's level and hands the rest of the turn back to the automatic rules.
+- **Inside a turn.** Claude Code moves a running turn to a new level only behind a user message that holds text, so a change after a tool result alone would wait for the next prompt. After a change inside a turn (`set_effort`, a failing-test rise, a passing run's return) the plugin appends one short line behind that tool result, `auto-effort: effort is {level} from this request on.`, which the model reads and the person does not see as typed; the next request then goes at the new level.
 - **What outranks it.** Your `/effort` pin, `/auto-effort off`, a model the gate leaves alone and a model that takes no effort level. In each case the call is refused and the answer says why. A sub-agent's call is refused: `set_effort` is the main chat's.
 
 ## Quick start
@@ -81,7 +82,7 @@ It is built against the plugin API of Claude Code 2.1.296 (`types/claude-code.d.
 
    The count then starts again. While the model's own level holds, nothing rises: the line says the level stays and that `set_effort` with a higher level or `auto` changes that.
 5. **Passing tests bring it back.** A passing run sets the count to 0. With `lowerOnPass`, the first passing run after a rise returns the level to where the failing streak found it, unless the model called `set_effort` since, and says so in one line.
-6. **The clamp.** Every level the plugin sends is held within `floor` (`medium`) and `ceiling` (`xhigh`). A request's `effort` is rewritten only when it differs from the level held.
+6. **The clamp.** Every level the plugin sends is held within `floor` (`low`) and `ceiling` (`xhigh`). A request's `effort` is rewritten only when it differs from the level held.
 
 ### Your `/effort`
 
@@ -93,7 +94,7 @@ With `userEffortPins` on, `/effort <level>` pins the session: the plugin stops s
 
 ### The cache check
 
-Changing effort mid-turn must not cost the prompt cache. After each switch, the switched request must read from the cache at least `canaryThreshold` (0.9) of what the previous request cached (its cache reads plus cache writes). Below that, the plugin marks the model unsafe, stops changing effort on it, writes one warning to `warnings.jsonl` and remembers the mark across sessions; `/auto-effort clear <model>` lifts it. The check judges nothing when it cannot hold: no token usage, a different model, a compaction in between, fewer messages than before, more than `cacheTtlSeconds` (300) between the two requests, or nothing cached before.
+Changing effort mid-turn must not cost the prompt cache. After each switch, the switched request must read from the cache at least `canaryThreshold` (0.9) of what the previous request cached (its cache reads plus cache writes). Below that, the plugin marks the model unsafe, stops changing effort on it, writes one warning to `warnings.jsonl` and remembers the mark across sessions. A mark is no final verdict: after an hour the model is steered again and its next switch is the recheck. A switch that keeps the cache lifts the mark; one that fails again doubles the wait, up to a day. `/auto-effort status` shows when the next check is due, and `/auto-effort clear <model>` lifts a mark at once. A chat trusts its own checks over another chat's mark, because a failure can come from one chat alone, its process or its conversation: a chat whose own switch kept the cache stays steered through a mark another chat stored and lifts it at its next clean switch, while the chat whose check failed waits out its own mark even after that. A mark holds for the context window it was found on: one on `claude-opus-5-5[1m]` leaves `claude-opus-5-5` steered, and the other way round, because one model's windows can carry effort differently in a request. The check judges nothing when it cannot hold: no token usage, a different model or context window, a compaction in between, fewer messages than before, more than `cacheTtlSeconds` (300) between the two requests, or nothing cached before.
 
 ## Sub-agents
 
@@ -149,7 +150,7 @@ You coordinate the build. Spawn builders, check their returns, run the tests, th
 | `effortControl.parentTag` | `honor` or `ignore`: whether a tag beats this type's `effort:` (default: the option). Read even when steering is off, and it alone never turns steering on: `effortControl:` holding only `parentTag: ignore` pins a type at its own `effort:` without steering it. |
 | `effortControl.enabled` | `on` or `off`; on by default when any nested key other than `parentTag` is present. |
 
-An invalid value is logged and the default used. An agent without `effortControl`, or with it off, is not steered; only the tag rules apply to it. Definitions are read from `.claude/agents` of the project, of `CLAUDE_CONFIG_DIR` and of the home directory, then from `agentDirs`.
+An invalid value is logged and the default used. An agent without `effortControl`, or with it off, is not steered; only the tag rules apply to it. Definitions are read from `.claude/agents` of the project, of `CLAUDE_CONFIG_DIR` and of the home directory, then from `agentDirs`. A plugin agent, whose type is `plugin:name` (`flights:foreman`), is read from the `agents` directory of each enabled copy of that plugin: the directory marketplace's listing of it, else its installed path, both from the plugin records under `CLAUDE_CONFIG_DIR` (else `~/.claude`). A plugin that is not enabled has no definition, like an unknown type; a plugin record that cannot be read is logged.
 
 A steered agent starts at its **home** level: its tag, else its definition's `effort:`, else the effort of its first request (a numeric effort leaves it unsteered), held within floor..ceiling. Under `parentTag: ignore` the definition's `effort:` comes first. Each request goes at the current level, on a model the `subagent:` entries of `models` name; any other model passes through untouched.
 
@@ -181,7 +182,7 @@ A steered agent starts at its **home** level: its tag, else its definition's `ef
 | `/auto-effort` or `/auto-effort status` | The level held and what decided it, the gate state of the current model, option errors and the settings in effect. |
 | `/auto-effort off` / `on` | Stops or resumes steering for this session. `on` also releases a `/effort` pin. |
 | `/auto-effort set <key> <value>` | Saves one of the main chat's single-valued options through `/config`'s own writer: `floor`, `ceiling`, `planLevel`, `planUpshiftChars`, `turnReminder`, `escalateAfterFailures`, `lowerOnPass`, `userEffortPins`, `unknownModels`, `probationSwitches`, `canaryThreshold`, `cacheTtlSeconds`, `statusLine`, `stateFile`. An environment variable of that option still overrides it. The lists and the sub-agent options are edited in `/config` or `settings.json`. |
-| `/auto-effort clear [model]` | Lifts the cache check's mark from one model, or from every model. |
+| `/auto-effort clear [model]` | Lifts the cache check's mark from one model, or from every model. A name with a context window (`claude-opus-5-5[1m]`) lifts that window's mark alone; a bare name lifts the mark of every window of that model. |
 
 ## Options
 
@@ -226,7 +227,7 @@ An unset or blank variable is absent. A variable that does not fit is reported b
 
 | Option | Environment variable | Default | What it does |
 | --- | --- | --- | --- |
-| `floor` | `AUTO_EFFORT_FLOOR` | `medium` | The lowest reasoning effort the plugin sends: low, medium, high, xhigh or max. A lower level the model asks for is raised to this one. Must not be above ceiling. |
+| `floor` | `AUTO_EFFORT_FLOOR` | `low` | The lowest reasoning effort the plugin sends: low, medium, high, xhigh or max. A lower level the model asks for is raised to this one. Must not be above ceiling. |
 | `ceiling` | `AUTO_EFFORT_CEILING` | `xhigh` | The highest reasoning effort the plugin sends: low, medium, high, xhigh or max. A higher level the model asks for, or an escalation, is lowered to this one. Must not be below floor. |
 | `parentTag` | `AUTO_EFFORT_PARENT_TAG` | `honor` | `honor` (default): an `[effort: ...]` tag on the Agent prompt wins over the `effort:` in the agent's definition; a steered agent starts at the tag held within its floor and ceiling. `ignore`: the definition's effort keeps and the tag is ignored. An agent's `effortControl.parentTag` overrides it. |
 | `models` | `AUTO_EFFORT_MODELS` | `main:claude-opus-5-5=allow`<br>`main:claude-fable-5-1=allow`<br>`main:claude-sonnet-5-5=probation`<br>`main:claude-haiku-5-5=probation`<br>`main:claude-sonnet-5=deny`<br>`subagent:claude-opus-5-5`<br>`subagent:claude-fable-5-1`<br>`subagent:claude-sonnet-5-5` | Scope-tagged entries: main:model=allow\|probation\|deny and subagent:model-prefix. Unqualified entries are rejected. |
@@ -257,7 +258,7 @@ An unset or blank variable is absent. A variable that does not fit is reported b
 | `userEffortPins` | `AUTO_EFFORT_USER_EFFORT_PINS` | `true` | On: when you change the effort yourself with /effort, auto-effort stops steering that session until /effort auto or /auto-effort on. Off: it keeps steering whatever you set. |
 | `unknownModels` | `AUTO_EFFORT_UNKNOWN_MODELS` | `off` | off leaves it untouched; allow, probation and deny act as in models. |
 | `probationSwitches` | `AUTO_EFFORT_PROBATION_SWITCHES` | `5` | How many effort switches in a row of a probation model must keep the cache (see canaryThreshold) before it counts as allow. |
-| `canaryThreshold` | `AUTO_EFFORT_CANARY_THRESHOLD` | `0.9` | After an effort change, the switched request must read at least this fraction of what the previous request cached from the prompt cache. Below it the plugin stops changing effort on that model, logs one warning, and remembers across sessions until /auto-effort clear. |
+| `canaryThreshold` | `AUTO_EFFORT_CANARY_THRESHOLD` | `0.9` | After an effort change, the switched request must read at least this fraction of what the previous request cached from the prompt cache. Below it the plugin stops changing effort on that model, logs one warning, remembers across sessions, and checks again after an hour (twice as long after each further failure, a day at most) or at /auto-effort clear. |
 | `cacheTtlSeconds` | `AUTO_EFFORT_CACHE_TTL_SECONDS` | `300` | When more than this many seconds passed between two requests the cache may have expired on its own, so the check judges nothing. 300 fits the five-minute cache; use 3600 with the one-hour cache. |
 | `statusLine` | `AUTO_EFFORT_STATUS_LINE` | `true` | On: when the effort's mode, level or reason changes, a short notice shows the reason alone. The mode and level themselves are in stateFile, for a status line to show. Off: no such notice. |
 | `stateFile` | `AUTO_EFFORT_STATE_FILE` | `~/.local/state/auto-effort/state.json` | One JSON line per session naming the mode the main chat's effort is in (auto, model, pin or off), its level, the reason and the keeper that vouches for it, rewritten when one of them changes; the line at a path the plugin leaves is retired (keeper 0). The session id is inserted before the extension (state.<session>.json). A leading ~ is your home directory; a relative path is under the session's working directory, so give an absolute one. Empty: no file. |
@@ -298,7 +299,7 @@ The main chat writes `decisions.<session>.jsonl`, a new numbered file every 1000
 | `escalation` | A rise from failing test runs; `held: override` when the model's own level kept the effort where it was. |
 | `deescalation` | A passing test run returning the level (`lowerOnPass`). |
 | `canary` | The cache check of a switch: `ok`, `fail` or `skip` with the reason. |
-| `gate` | A model graduating from probation, or marked unsafe. |
+| `gate` | A model graduating from probation, marked unsafe (`fails`: the failed checks in a row), or its mark lifted by a switch that kept the cache (`why: cache check passed`). |
 | `pin` | A recognised `/effort` change: `via: command` for an explicit level, `via: carried` for a changed request effort. |
 | `unpin` | `/effort auto`, with the released pin level (or `null`). |
 | `turn` | A turn's summary: start and end level, steps, switches, calls, tokens. |

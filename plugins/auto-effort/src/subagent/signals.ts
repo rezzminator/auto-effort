@@ -1,4 +1,4 @@
-import { runSegments } from './shell.ts';
+import { runSegments } from './shell';
 
 // What a steered agent's tool results and its sub-agents' answers say about trouble.
 

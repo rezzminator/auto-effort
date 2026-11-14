@@ -403,6 +403,25 @@ suite('definition effort over the tag', () => {
     expect(await x.step('a2', 'high')).toBe('low');
   });
 
+  const pluginFiles = (config: string) => ({
+    [`${config}/settings.json`]: '{"enabledPlugins":{"flights@professor":true}}',
+    [`${config}/plugins/known_marketplaces.json`]: '{"professor":{"source":{"source":"directory","path":"/mk"},"installLocation":"/mk"}}',
+    '/mk/.claude-plugin/marketplace.json': '{"plugins":[{"name":"flights","source":"./plugins/flights"}]}',
+    '/mk/plugins/flights/agents/foreman.md': '---\nname: foreman\neffort: max\n---\n',
+  });
+
+  it('finds a plugin agent through the plugin records of CLAUDE_CONFIG_DIR', async () => {
+    const x = engine(new Map(), { files: pluginFiles('/cfg'), env: { CLAUDE_CONFIG_DIR: '/cfg' } });
+    await x.spawned('Go.', 'a1', { subagentType: 'flights:foreman' });
+    expect(await x.step('a1', 'high')).toBe('max');
+  });
+
+  it('finds a plugin agent through the plugin records of ~/.claude when CLAUDE_CONFIG_DIR is unset', async () => {
+    const x = engine(new Map(), { files: pluginFiles('/fixture-home/t/.claude') });
+    await x.spawned('Go.', 'a1', { subagentType: 'flights:foreman' });
+    expect(await x.step('a1', 'high')).toBe('max');
+  });
+
   it('finds a definition in an agentDirs directory', async () => {
     const x = engine(new Map(), { files: { '/extra/e.md': '---\nname: e\neffort: max\n---\n' }, options: { agentDirs: ['/extra'] } });
     await x.spawned('Go.', 'a1', { subagentType: 'e' });

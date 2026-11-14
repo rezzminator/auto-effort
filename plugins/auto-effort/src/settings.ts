@@ -2,9 +2,9 @@
 // which wins over the option, which wins over the default. Defaults agree in three places: here, plugin.json's userConfig and the README table.
 // A bad value is reported by key and value (a bad variable by its name), and the default applies.
 
-import { isEffort, LEVELS, rank, type Effort } from './levels.ts';
-import { normalizeModel } from './model.ts';
-import { clip, quote } from './text.ts';
+import { isEffort, LEVELS, rank, type Effort } from './levels';
+import { normalizeModel } from './model';
+import { clip, quote } from './text';
 
 export const PLUGIN = 'auto-effort';
 /** The plugin's name from 1.0.0 to 2.0.0: its settings, variables and state directory are migrated, never dropped. */
@@ -37,7 +37,7 @@ export type Settings = {
 };
 
 export const DEFAULTS: Settings = {
-  floor: 'medium',
+  floor: 'low',
   ceiling: 'xhigh',
   planLevel: 'high',
   planUpshiftPatterns: [],

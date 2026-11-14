@@ -8,7 +8,7 @@ describe('resolveSettings', () => {
     expect(errors).toEqual([]);
     expect(settings).toEqual(DEFAULTS);
     expect(DEFAULTS).toMatchObject({
-      floor: 'medium',
+      floor: 'low',
       ceiling: 'xhigh',
       planLevel: 'high',
       planUpshiftChars: 1500,
@@ -40,7 +40,7 @@ describe('resolveSettings', () => {
   });
 
   it.each([
-    ['floor', 'lowest', 'medium'],
+    ['floor', 'lowest', 'low'],
     ['ceiling', 7, 'xhigh'],
     ['planLevel', 'HIGH!', 'high'],
     ['planUpshiftChars', -1, 1500],
@@ -87,7 +87,7 @@ describe('resolveSettings', () => {
 
   it('puts a floor above the ceiling back to both defaults and names both keys', () => {
     const { settings, errors } = resolveSettings({ floor: 'xhigh', ceiling: 'medium' });
-    expect([settings.floor, settings.ceiling]).toEqual(['medium', 'xhigh']);
+    expect([settings.floor, settings.ceiling]).toEqual(['low', 'xhigh']);
     expect(errors).toHaveLength(1);
     expect(errors[0]).toContain('"floor"');
     expect(errors[0]).toContain('"ceiling"');
@@ -216,7 +216,7 @@ describe('resolveSettings with environment variables', () => {
 
   it('checks the floor against the ceiling after both layers', () => {
     const { settings, errors } = resolveSettings({ ceiling: 'low' }, { floor: 'high' });
-    expect([settings.floor, settings.ceiling]).toEqual(['medium', 'xhigh']);
+    expect([settings.floor, settings.ceiling]).toEqual(['low', 'xhigh']);
     expect(errors).toHaveLength(1);
     expect(errors[0]).toContain('"floor"');
     expect(errors[0]).toContain('"floor" ("high", from AUTO_EFFORT_FLOOR)');
