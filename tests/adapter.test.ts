@@ -357,8 +357,8 @@ suite('session start', () => {
     expect(e.registered).toHaveLength(1);
     expect(e.registered[0]).toMatchObject({ name: 'set_effort', isDeferred: false });
     expect(e.registered[0].description).toContain('Call it in your first response of a user turn whose work needs another level');
-    expect(e.registered[0].inputSchema.properties.level.enum).toEqual(['medium', 'high', 'xhigh', 'auto']);
-    expect(e.registered[0].inputSchema.properties.effort.enum).toEqual(['medium', 'high', 'xhigh', 'auto']);
+    expect(e.registered[0].inputSchema.properties.level.enum).toEqual(['low', 'medium', 'high', 'xhigh', 'auto']);
+    expect(e.registered[0].inputSchema.properties.effort.enum).toEqual(['low', 'medium', 'high', 'xhigh', 'auto']);
     expect(e.registered[0].inputSchema.properties.level.description).toContain('holds until this turn ends or you call it with auto');
     expect(e.registered[0].inputSchema.required ?? []).toEqual([]);
     expect(e.commands).toEqual([expect.objectContaining({ name: 'auto-effort' })]);
@@ -825,14 +825,14 @@ suite('environment options', () => {
     const e = envEngine({ AUTO_EFFORT_FLOOR: 'high' }, { ceiling: 'medium' });
     await e.start();
     await e.prompt();
-    const conflict = 'floor=medium ceiling=xhigh';
+    const conflict = 'floor=low ceiling=xhigh';
     expect((await e.command('status')).text).toContain(conflict);
     const reply = (await e.command('set ceiling medium')).text;
     expect(reply).toBe('ceiling is saved as "medium", but "xhigh" is in effect: see the option errors in /auto-effort status.');
     expect((await e.command('status')).text).toContain(conflict);
     await e.command('set planLevel xhigh');
     expect((await e.command('status')).text).toContain(conflict);
-    expect(e.registered.at(-1).inputSchema.properties.level.enum).toEqual(['medium', 'high', 'xhigh', 'auto']);
+    expect(e.registered.at(-1).inputSchema.properties.level.enum).toEqual(['low', 'medium', 'high', 'xhigh', 'auto']);
   });
 
   it('names the variable behind a floor/ceiling conflict', async () => {
@@ -1357,7 +1357,7 @@ suite('/auto-effort', () => {
     const { text } = await e.command('');
     expect(text).toContain(`auto-effort ${VERSION} · on`);
     expect(text).toContain('level: high');
-    expect(text).toContain('floor=medium');
+    expect(text).toContain('floor=low');
     expect((await e.command('status')).text).toBe(text);
   });
 

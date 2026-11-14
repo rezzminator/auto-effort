@@ -108,8 +108,16 @@ describe('set_effort (R3, R6)', () => {
     expect(r.step('t1', 1, { effort: 'medium' }).plan).toMatchObject({ send: 'xhigh', source: 'model' });
   });
 
-  it('clamps to the floor and the ceiling and says so', () => {
+  it('applies low under the default settings', () => {
     const r = rig();
+    r.prompt();
+    r.step('t1', 0);
+    expect(r.set({ level: 'low', reason: 'lookup' }).text).toContain('Effort set to low from your next request');
+    expect(r.step('t1', 1).plan.level).toBe('low');
+  });
+
+  it('clamps to the floor and the ceiling and says so', () => {
+    const r = rig({ floor: 'medium' });
     r.prompt();
     r.step('t1', 0);
     const low = r.set({ level: 'low', reason: 'lookup' }).text;

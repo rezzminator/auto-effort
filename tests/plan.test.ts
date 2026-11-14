@@ -29,7 +29,7 @@ describe('planFor', () => {
     expect(plan('refactor it', { planUpshiftPatterns: ['refactor'] })).toMatchObject({ level: 'xhigh', upshift: 'pattern' });
     expect(plan('think hard', { planUpshiftPatterns: ['refactor'] })).toMatchObject({ level: 'high', upshift: null });
     expect(plan('think hard', { ceiling: 'high' })).toMatchObject({ level: 'high' });
-    expect(plan('plain', { planLevel: 'low' })).toMatchObject({ level: 'medium' });
+    expect(plan('plain', { planLevel: 'low', floor: 'medium' })).toMatchObject({ level: 'medium' });
   });
 
   it('says in its reason why the level was chosen', () => {

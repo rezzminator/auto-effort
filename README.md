@@ -5,7 +5,7 @@
 **Claude sets its own reasoning effort. The Claude Code main chat gets a `set_effort` tool: the model raises its effort when the work turns hard and lowers it when only mechanical steps remain. A sub-agent's effort is set per spawn, and an agent that opts in steps its own effort with its trouble.**
 
 [![Claude Code plugin](https://img.shields.io/badge/Claude%20Code-plugin-D97757)](https://docs.claude.com/en/docs/claude-code/plugins)
-[![Version](https://img.shields.io/badge/version-3.0.1-blue)](./CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-3.1.0-blue)](./CHANGELOG.md)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](./LICENSE)
 
 </div>
@@ -82,7 +82,7 @@ It is built against the plugin API of Claude Code 2.1.296 (`types/claude-code.d.
 
    The count then starts again. While the model's own level holds, nothing rises: the line says the level stays and that `set_effort` with a higher level or `auto` changes that.
 5. **Passing tests bring it back.** A passing run sets the count to 0. With `lowerOnPass`, the first passing run after a rise returns the level to where the failing streak found it, unless the model called `set_effort` since, and says so in one line.
-6. **The clamp.** Every level the plugin sends is held within `floor` (`medium`) and `ceiling` (`xhigh`). A request's `effort` is rewritten only when it differs from the level held.
+6. **The clamp.** Every level the plugin sends is held within `floor` (`low`) and `ceiling` (`xhigh`). A request's `effort` is rewritten only when it differs from the level held.
 
 ### Your `/effort`
 
@@ -227,7 +227,7 @@ An unset or blank variable is absent. A variable that does not fit is reported b
 
 | Option | Environment variable | Default | What it does |
 | --- | --- | --- | --- |
-| `floor` | `AUTO_EFFORT_FLOOR` | `medium` | The lowest reasoning effort the plugin sends: low, medium, high, xhigh or max. A lower level the model asks for is raised to this one. Must not be above ceiling. |
+| `floor` | `AUTO_EFFORT_FLOOR` | `low` | The lowest reasoning effort the plugin sends: low, medium, high, xhigh or max. A lower level the model asks for is raised to this one. Must not be above ceiling. |
 | `ceiling` | `AUTO_EFFORT_CEILING` | `xhigh` | The highest reasoning effort the plugin sends: low, medium, high, xhigh or max. A higher level the model asks for, or an escalation, is lowered to this one. Must not be below floor. |
 | `parentTag` | `AUTO_EFFORT_PARENT_TAG` | `honor` | `honor` (default): an `[effort: ...]` tag on the Agent prompt wins over the `effort:` in the agent's definition; a steered agent starts at the tag held within its floor and ceiling. `ignore`: the definition's effort keeps and the tag is ignored. An agent's `effortControl.parentTag` overrides it. |
 | `models` | `AUTO_EFFORT_MODELS` | `main:claude-opus-5-5=allow`<br>`main:claude-fable-5-1=allow`<br>`main:claude-sonnet-5-5=probation`<br>`main:claude-haiku-5-5=probation`<br>`main:claude-sonnet-5=deny`<br>`subagent:claude-opus-5-5`<br>`subagent:claude-fable-5-1`<br>`subagent:claude-sonnet-5-5` | Scope-tagged entries: main:model=allow\|probation\|deny and subagent:model-prefix. Unqualified entries are rejected. |

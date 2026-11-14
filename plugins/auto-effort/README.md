@@ -14,7 +14,7 @@ Set under the plugin's settings, or in the environment variable named in the tab
 
 | Option | Environment variable | Default | What it does |
 | --- | --- | --- | --- |
-| `floor` | `AUTO_EFFORT_FLOOR` | `medium` | The lowest reasoning effort the plugin sends: low, medium, high, xhigh or max. A lower level the model asks for is raised to this one. Must not be above ceiling. |
+| `floor` | `AUTO_EFFORT_FLOOR` | `low` | The lowest reasoning effort the plugin sends: low, medium, high, xhigh or max. A lower level the model asks for is raised to this one. Must not be above ceiling. |
 | `ceiling` | `AUTO_EFFORT_CEILING` | `xhigh` | The highest reasoning effort the plugin sends: low, medium, high, xhigh or max. A higher level the model asks for, or an escalation, is lowered to this one. Must not be below floor. |
 | `parentTag` | `AUTO_EFFORT_PARENT_TAG` | `honor` | `honor` (default): an `[effort: ...]` tag on the Agent prompt wins over the `effort:` in the agent's definition; a steered agent starts at the tag held within its floor and ceiling. `ignore`: the definition's effort keeps and the tag is ignored. An agent's `effortControl.parentTag` overrides it. |
 | `models` | `AUTO_EFFORT_MODELS` | `main:claude-opus-5-5=allow`<br>`main:claude-fable-5-1=allow`<br>`main:claude-sonnet-5-5=probation`<br>`main:claude-haiku-5-5=probation`<br>`main:claude-sonnet-5=deny`<br>`subagent:claude-opus-5-5`<br>`subagent:claude-fable-5-1`<br>`subagent:claude-sonnet-5-5` | Scope-tagged entries: main:model=allow\|probation\|deny and subagent:model-prefix. Unqualified entries are rejected. |

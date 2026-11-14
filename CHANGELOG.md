@@ -4,6 +4,8 @@ All notable changes to this plugin are recorded here. The format follows [Keep a
 
 ## [Unreleased]
 
+## [3.1.0] — 2026-11-14
+
 ### Added
 
 - A plugin agent type `plugin:name`, which Claude Code reports for the agents a plugin ships, finds its definition (`effort`, `effortControl`) in the `agents` directory of the enabled plugin, located through the plugin records under `CLAUDE_CONFIG_DIR` (else `~/.claude`). Until now such an agent ran as if it had no definition. A plugin record that exists but cannot be read is logged with its path and the error.
@@ -12,6 +14,7 @@ All notable changes to this plugin are recorded here. The format follows [Keep a
 
 - A failed cache check no longer switches automatic effort off for good. Until now a marked model stayed unsteered until `/auto-effort clear`, and since nothing changed its effort any more, nothing could find the cache working again. A mark now waits an hour, then the model is steered again and its next effort change is the recheck: a change that keeps the cache lifts the mark, one that fails again doubles the wait, up to a day. The warning and `/auto-effort status` name the time of the next check, and the gate shows `recheck` once it is due.
 - A chat trusts its own cache checks over another chat's mark. A failure can come from one chat alone, so a chat whose own effort change kept the cache stays steered through a mark another chat stored and lifts it at its next clean change, while the chat whose check failed waits out its own mark even after that. The decision log's `gate` row carries `fails`, the failed checks in a row, and a lifted mark is a `gate` row with `why: cache check passed`.
+- `floor` defaults to `low` (was `medium`): the model may now set its own effort to `low` through `set_effort`, whose guide gains the line `low: lookups, status reports, formatting, one-line edits`. Nothing lowers the effort by itself: a turn still starts at `planLevel`. To keep the old lowest level, set `floor` to `medium` (`/auto-effort set floor medium` or `AUTO_EFFORT_FLOOR=medium`). The sub-agent floor is unchanged.
 
 ### Fixed
 

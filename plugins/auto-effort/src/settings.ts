@@ -37,7 +37,7 @@ export type Settings = {
 };
 
 export const DEFAULTS: Settings = {
-  floor: 'medium',
+  floor: 'low',
   ceiling: 'xhigh',
   planLevel: 'high',
   planUpshiftPatterns: [],
