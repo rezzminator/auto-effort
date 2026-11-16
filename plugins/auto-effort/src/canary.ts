@@ -49,3 +49,14 @@ export function judgeSwitch(check: SwitchCheck): Verdict {
   const ratio = cur.cache_read_input_tokens / cached;
   return { verdict: ratio >= check.threshold ? 'ok' : 'fail', ratio };
 }
+
+/** A request the cache check compares the next one with: its model and context window (`modelVariant`), the effort it went at, its usage, when it ended, how many messages it carried. */
+export type Sample = { model: string; wire: unknown; usage: Usage | null; endedAt: number; messages: number };
+
+/** A request at another effort than the one before it on the same model: its Sample, when it started, whether a compaction came between. */
+export type Switched = Sample & { startedAt: number; compacted: boolean };
+
+/** The cache check of a switched request against the one before it: the one door the main chat and the sub-agents judge through. */
+export function judgeStep(prev: Sample, cur: Switched, ttlMs: number, threshold: number): Verdict {
+  return judgeSwitch({ prev: prev.usage, cur: cur.usage, gapMs: cur.startedAt - prev.endedAt, ttlMs, threshold, compacted: cur.compacted, sameModel: prev.model === cur.model, prevMessages: prev.messages, curMessages: cur.messages });
+}

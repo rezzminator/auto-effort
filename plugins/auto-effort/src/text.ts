@@ -97,3 +97,13 @@ export function shortReason(reason: unknown): string {
   if (text === '') return 'no reason given';
   return text.length > REASON_MAX ? `${text.slice(0, REASON_MAX - 1)}…` : text;
 }
+
+/** When a waiting cache mark is checked again, as every notice says it. */
+export function checksAgain(at: number): string {
+  return `It checks again at ${new Date(at).toISOString()}.`;
+}
+
+/** The warning of a failed cache check: the change that lost the cache, the share read against the threshold, the recheck. */
+export function canaryNotice(input: { model: string; variant: string; from: string; to: string; ratio: number; threshold: number; recheck: number }): string {
+  return `auto-effort stopped changing effort on ${input.model}: after the change from ${input.from} to ${input.to} the cache read was ${(input.ratio * 100).toFixed(1)}% of what the previous request cached (the check wants ${(input.threshold * 100).toFixed(0)}%). ${checksAgain(input.recheck)} /auto-effort clear ${input.variant} turns it back on.`;
+}

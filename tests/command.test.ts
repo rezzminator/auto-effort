@@ -39,7 +39,7 @@ describe('statusText', () => {
     const text = view();
     expect(text).toContain('auto-effort 0.1.0 · on');
     expect(text).toContain('level: high · plan · planning turn');
-    expect(text).toContain('model: claude-opus-5-5 · allow');
+    expect(text).toContain('model: claude-opus-5-5 · probation (0 of 5 clean switches)');
     expect(text).toContain('floor=low');
     expect(text).toContain('ceiling=xhigh');
     expect(text).toContain('environment migration: checks known legacy names and settings.env only; this engine cannot enumerate other OS variables (AUTO_EFFORT_CONTROL_* / EFFORT_LIVE_CONTROL_* -> AUTO_EFFORT_*).');

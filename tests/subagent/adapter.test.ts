@@ -47,9 +47,10 @@ function engine(state = new Map<string, unknown>(), opts: Opts = {}) {
   const hooks = new Map<string, Hook>();
   const timers: Array<() => void> = [];
   const logs: string[] = [];
+  const stored = new Map<string, unknown>();
   let keeperDeadline = false;
   const $ = {
-    store: { get: async () => undefined, set: async () => undefined },
+    store: { get: async (key: string) => stored.get(key), set: async (key: string, value: unknown) => void stored.set(key, value) },
     command: { register: async () => ({ name: 'auto-effort' }) },
     state: {
       get: async (ref: { id: string }) => ({ value: state.get(ref.id), version: 0 }),
@@ -100,14 +101,14 @@ function engine(state = new Map<string, unknown>(), opts: Opts = {}) {
       complete: (request: any) => (opts.reply ? Promise.resolve(opts.reply(request)) : new Promise<any>((resolve, reject) => judgeCalls.push({ request, resolve, reject }))),
     },
   };
-  (register as Hook)((name: string, fn: Hook) => hooks.set(name, fn), { stateFile: '', ...(opts.options ?? {}), models: (Array.isArray(opts.options?.models) ? opts.options.models : ['claude-opus-5-5', 'claude-fable-5-1', 'claude-sonnet-5-5']).map((x: string) => `subagent:${x}`) });
+  (register as Hook)((name: string, fn: Hook) => hooks.set(name, fn), { stateFile: '', unknownModels: 'off', ...(opts.options ?? {}), models: (Array.isArray(opts.options?.models) ? opts.options.models : ['claude-opus-5-5', 'claude-fable-5-1', 'claude-sonnet-5-5']).map((x: string) => `subagent:${x}`) });
 
-  async function step(agentId: string | undefined, effort: string | number | undefined, signal = new AbortController().signal, model = 'm', answer = ''): Promise<string | undefined> {
+  async function step(agentId: string | undefined, effort: string | number | undefined, signal = new AbortController().signal, model = 'm', answer = '', usage?: Record<string, number>): Promise<string | undefined> {
     let sent: string | undefined;
     const next = Object.assign(
       async function* (e: any) {
         sent = e.effort;
-        return { answer, toolUses: [] };
+        return { answer, toolUses: [], ...(usage === undefined ? {} : { usage }) };
       },
       { signal },
     );
@@ -170,7 +171,8 @@ function engine(state = new Map<string, unknown>(), opts: Opts = {}) {
     return text.split('\n').filter((line) => line !== '').map((line) => JSON.parse(line) as Record<string, any>);
   };
   const sessionEnd = async (next = async () => ({})) => { if (hooks.has('session.end')) await hooks.get('session.end')!($, {}, next); };
-  return { $, state, statuses, touch, step, mainStep, spawn, spawned, complete, tool, sessionStart, sessionEnd, describeTool, fireTimers, tick, logs, timers, files, judgeCalls, registered, rows };
+  const compact = (agentId: string) => hooks.get('session.compact')!($, { trigger: 'auto', messages: [], agentId }, async () => ({ messages: [] }));
+  return { $, state, stored, statuses, touch, step, mainStep, spawn, spawned, complete, tool, sessionStart, sessionEnd, compact, describeTool, fireTimers, tick, logs, timers, files, judgeCalls, registered, rows };
 }
 
 suite('agent.spawn', () => {
@@ -634,6 +636,36 @@ suite('steering', () => {
     const { x } = await withLead(LEAD, { models: ['claude-haiku-5-5'] });
     expect(await x.step('L1', 'low', undefined, 'claude-haiku-5-5')).toBe('medium');
     expect(await x.step('L1', 'low', undefined, OPUS)).toBe('low');
+  });
+
+  it('R-9: a cache check that fails in a steered agent marks its model for the main chat too, saved to the store, and the effort tools say the effort stays', async () => {
+    const NOVA = 'claude-nova-9';
+    const cached = (read: number, write: number) => ({ input_tokens: 10, output_tokens: 5, cache_read_input_tokens: read, cache_creation_input_tokens: write });
+    const { x, run } = await withLead(LEAD, { judge: false, models: ['*'], unknownModels: 'probation' });
+    await x.sessionStart();
+    expect(await x.mainStep('xhigh', 't1', NOVA)).toBe('high');
+    expect(await x.step('L1', 'low', undefined, NOVA, '', cached(0, 5000))).toBe('medium');
+    await run('npm test', 'FAIL a');
+    expect(await x.step('L1', 'low', undefined, NOVA, '', cached(200, 100))).toBe('high');
+    const mark = (x.stored.get('state') as { unsafe: Record<string, { at: string }> }).unsafe[NOVA]!;
+    expect(mark).toMatchObject({ ratio: 0.04, prevPrompt: 5010, cacheRead: 200, from: 'medium', to: 'high', fails: 1 });
+    expect(await x.mainStep('xhigh', 't2', NOVA)).toBe('xhigh');
+    const { out } = await x.tool('L1', 'mcp__auto-effort__effort_up', {});
+    expect(out).toEqual({ result: `Not applied: auto-effort does not change effort on ${NOVA} (unsafe): changing it rewrites this model's prompt cache, so your effort stays at high. It checks again at ${new Date(Date.parse(mark.at) + 3_600_000).toISOString()}.` });
+    expect((await x.rows()).filter((row) => row.event === 'canary')).toEqual([expect.objectContaining({ agent: 'L1', model: NOVA, from: 'medium', to: 'high', verdict: 'fail', ratio: 0.04 })]);
+  });
+
+  it('R-9: a compaction of a steered agent keeps its next switch from being judged', async () => {
+    const NOVA = 'claude-nova-9';
+    const cached = (read: number, write: number) => ({ input_tokens: 10, output_tokens: 5, cache_read_input_tokens: read, cache_creation_input_tokens: write });
+    const { x, run } = await withLead(LEAD, { judge: false, models: ['*'], unknownModels: 'probation' });
+    await x.sessionStart();
+    expect(await x.step('L1', 'low', undefined, NOVA, '', cached(0, 5000))).toBe('medium');
+    await run('npm test', 'FAIL a');
+    await x.compact('L1');
+    expect(await x.step('L1', 'low', undefined, NOVA, '', cached(200, 100))).toBe('high');
+    expect((await x.rows()).filter((row) => row.event === 'canary')).toEqual([expect.objectContaining({ agent: 'L1', model: NOVA, from: 'medium', to: 'high', verdict: 'skip', why: 'compaction' })]);
+    expect(x.stored.get('state')).toBeUndefined();
   });
 
   it("R-4: the reply's text is kept as the agent's last words for the judge", async () => {

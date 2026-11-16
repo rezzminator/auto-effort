@@ -1,5 +1,7 @@
-// The model gate (allow / probation / deny, `unknownModels` for the rest), the marks that persist across sessions and their recheck.
+// The model gate (allow / probation / deny, `unknownModels` for the rest), the marks that persist across sessions and their recheck,
+// and the marks one process holds for the main chat and its sub-agents alike (`Marks`).
 
+import { wholePrompt, type Sample, type Switched, type Verdict } from './canary';
 import { modelVariant, normalizeModel } from './model';
 import type { Compiled, Settings } from './settings';
 
@@ -46,6 +48,11 @@ export function recheckAt(mark: Unsafe): number {
   return Number.isNaN(at) ? 0 : at + Math.min(RECHECK_LONGEST_MS, RECHECK_FIRST_MS * 2 ** (mark.fails - 1));
 }
 
+/** Whether a mark still waits at `now`: before its recheck the model takes no effort change. */
+export function waits(mark: Unsafe, now: number): boolean {
+  return now < recheckAt(mark);
+}
+
 /** The mark that binds a chat: the one its own failed check left; else the stored one, unless a check of its own has passed. */
 export function bindingMark(persisted: Persisted, model: string, checks: Checks): Unsafe | undefined {
   return checks.failed ?? (checks.passed ? undefined : persisted.unsafe[modelVariant(model)]);
@@ -62,7 +69,7 @@ export function gateOf(model: string, settings: Settings, compiled: Compiled, pe
   if (configured === 'deny') return { model: name, status: 'deny', active: false };
   if (configured === 'off') return { model: name, status: 'off', active: false };
   const mark = bindingMark(persisted, model, checks);
-  if (mark !== undefined) return now >= recheckAt(mark) ? { model: name, status: 'recheck', active: true } : { model: name, status: 'unsafe', active: false };
+  if (mark !== undefined) return waits(mark, now) ? { model: name, status: 'unsafe', active: false } : { model: name, status: 'recheck', active: true };
   if (configured === 'probation' && persisted.graduated.includes(name)) return { model: name, status: 'allow', active: true };
   return { model: name, status: configured, active: true };
 }
@@ -169,4 +176,83 @@ export function readPersisted(raw: unknown, unreadable: string[] = []): Persiste
     });
   } else if (raw.graduated !== undefined) unreadable.push('graduated');
   return { unsafe, probation, graduated };
+}
+
+/** What keeping one judged switch did: whether it lifted a mark, the mark a failure set, whether the stored marks changed. */
+export type Kept = { lifted: boolean; mark: Unsafe | undefined; stored: boolean };
+
+/**
+ * The cache marks one process holds: the stored marks as last read, with its own changes laid over them, and its own
+ * checks (`Checks`) per model and context window. The main chat and every sub-agent it launches share one, since an
+ * effort change that loses the prompt cache loses it for the model, whichever scope made the change.
+ */
+export class Marks {
+  persisted: Persisted;
+  private readonly failed = new Map<string, Unsafe>();
+  private readonly passed = new Set<string>();
+
+  constructor(persisted: Persisted = EMPTY_PERSISTED) {
+    this.persisted = persisted;
+  }
+
+  checks(model: string): Checks {
+    const variant = modelVariant(model);
+    return { failed: this.failed.get(variant), passed: this.passed.has(variant) };
+  }
+
+  /** The mark that binds this process on a model (`bindingMark`). */
+  binding(model: string): Unsafe | undefined {
+    return bindingMark(this.persisted, model, this.checks(model));
+  }
+
+  /** The binding mark while it waits (`waits`): until its recheck, no effort change on the model. */
+  waiting(model: string, now: number): Unsafe | undefined {
+    const mark = this.binding(model);
+    return mark !== undefined && waits(mark, now) ? mark : undefined;
+  }
+
+  /** The marked names a model name covers (`coversMark`), or every one when none is named: the stored ones and this process's own. */
+  names(model: string | undefined): string[] {
+    return [...new Set([...Object.keys(this.persisted.unsafe), ...this.failed.keys()])].filter((marked) => model === undefined || coversMark(model, marked));
+  }
+
+  /** Lifts the marks a model name covers, or every mark when none is named, this process's own included; returns the names lifted. */
+  clear(model: string | undefined): string[] {
+    const names = this.names(model);
+    for (const marked of names) this.failed.delete(marked);
+    this.persisted = clearUnsafe(this.persisted, model);
+    return names;
+  }
+
+  /**
+   * One judged switch kept. A clean one is this process's proof: it lifts its own mark and the stored one, whoever stored
+   * it. A failed one marks the model and context window, one more failed check in a row (`nextFails`), unless a mark still
+   * waits: then it was made before that mark, by another scope, and adds no failure. A skip keeps nothing.
+   */
+  keep(verdict: Verdict, prev: Sample, cur: Switched): Kept {
+    const variant = modelVariant(cur.model);
+    if (verdict.verdict === 'ok') {
+      this.passed.add(variant);
+      const own = this.failed.delete(variant);
+      const stored = this.persisted.unsafe[variant] !== undefined;
+      if (stored) this.persisted = liftMark(this.persisted, variant);
+      return { lifted: own || stored, mark: undefined, stored };
+    }
+    if (verdict.verdict === 'skip' || prev.usage === null || cur.usage === null) return { lifted: false, mark: undefined, stored: false };
+    // A change already in flight when another scope's check failed is no try after the wait: the waiting mark stands as it is.
+    if (this.waiting(variant, cur.endedAt) !== undefined) return { lifted: false, mark: undefined, stored: false };
+    const mark: Unsafe = {
+      at: new Date(cur.endedAt).toISOString(),
+      ratio: verdict.ratio,
+      prevPrompt: wholePrompt(prev.usage),
+      cacheRead: cur.usage.cache_read_input_tokens,
+      from: String(prev.wire),
+      to: String(cur.wire),
+      fails: nextFails(this.persisted, variant, this.checks(variant)),
+    };
+    this.failed.set(variant, mark);
+    this.passed.delete(variant);
+    this.persisted = markUnsafe(this.persisted, variant, mark);
+    return { lifted: false, mark, stored: true };
+  }
 }

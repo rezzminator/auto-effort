@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { Controller, type Action, type Outcome, type Setup } from '../../plugins/auto-effort/src/subagent/control.ts';
+import { Controller, steers, type Action, type Outcome, type Setup } from '../../plugins/auto-effort/src/subagent/control.ts';
 import { TRIPWIRES, type Tripwire } from '../../plugins/auto-effort/src/subagent/judge.ts';
 import { DEFAULTS } from '../../plugins/auto-effort/src/subagent/settings.ts';
+import { EMPTY_PERSISTED, Marks, markUnsafe } from '../../plugins/auto-effort/src/gate.ts';
 
 const USAGE = { input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 };
 
@@ -21,6 +22,8 @@ function make(over: Partial<Setup> = {}): Controller {
     announce: true,
     struggleDecay: DEFAULTS.struggleDecay,
     brief: 'Coordinate the build of X.',
+    marks: new Marks(),
+    now: () => 0,
     ...over,
   });
 }
@@ -45,17 +48,34 @@ describe('onRequest', () => {
   });
 
   it('R-4: an allowed model matches as a prefix of the request model, bracket suffix included', () => {
-    expect(make().onRequest('claude-opus-5-5[1m]', undefined).send).toBe('medium');
-    expect(make().onRequest('claude-sonnet-5-5-20260101', undefined).send).toBe('medium');
+    expect(make({ models: ['claude-opus-5-5', 'claude-sonnet-5-5'] }).onRequest('claude-opus-5-5[1m]', 'low').send).toBe('medium');
+    expect(make({ models: ['claude-opus-5-5', 'claude-sonnet-5-5'] }).onRequest('claude-sonnet-5-5-20260101', 'low').send).toBe('medium');
   });
 
   it('R-4: an unallowed model passes through untouched, logged once per agent', () => {
-    const c = make({ home: 'high' });
+    const c = make({ home: 'high', models: ['claude-opus-5-5'] });
     const first = c.onRequest('claude-haiku-5-5', 'low');
     expect(first.send).toBeUndefined();
     expect(rows(first, 'model-gated')).toEqual([{ event: 'model-gated', model: 'claude-haiku-5-5' }]);
     expect(rows(c.onRequest('claude-haiku-5-5', 'low'), 'model-gated')).toEqual([]);
     expect(rows(c.onRequest('claude-haiku-5-5', 'low'), 'step')).toEqual([]);
+  });
+
+  it.each([
+    [['*'], 'claude-nova-9', true],
+    [['*'], 'claude-opus-5-5[1m]', true],
+    [['claude-opus-5-5'], 'claude-opus-5-5[1m]', true],
+    [['claude-opus-5-5'], 'claude-nova-9', false],
+    [[], 'claude-nova-9', false],
+  ] as const)('R-4: models %j steers %s: %s', (models, model, steered) => {
+    expect(steers(models, model)).toBe(steered);
+  });
+
+  it('R-4: a request that carries no level passes through untouched, logged once per agent', () => {
+    const c = make({ home: 'high' });
+    expect(c.onRequest('claude-nova-9', undefined)).toEqual({ send: undefined, actions: [{ kind: 'log', row: { event: 'model-gated', model: 'claude-nova-9', requested: null } }] });
+    expect(c.onRequest('claude-nova-9', 4)).toEqual({ send: undefined, actions: [] });
+    expect(c.onRequest('claude-nova-9', 'low').send).toBe('high');
   });
 
   it('R-4: writes a step row per steered request', () => {
@@ -65,7 +85,7 @@ describe('onRequest', () => {
 
   it('R-4: the tail of a non-empty answer is the agent\'s last words, whitespace collapsed to 400 chars', () => {
     const c = make();
-    c.onRequest('claude-opus-5-5', undefined);
+    c.onRequest('claude-opus-5-5', 'low');
     c.onAnswer('first   words');
     c.onAnswer('');
     c.onAnswer(`${'x'.repeat(500)}\n\nend   here`);
@@ -295,9 +315,9 @@ describe('a tripwire', () => {
   it('R-8: a request issued while the judge is pending goes at the old level, the next one after the answer at the new level', () => {
     const c = make();
     fail2(c);
-    expect(c.onRequest('claude-opus-5-5', undefined).send).toBe('medium');
+    expect(c.onRequest('claude-opus-5-5', 'low').send).toBe('medium');
     c.onJudgeAnswer(1, '85 - same test fails after the fix', 800, USAGE);
-    expect(c.onRequest('claude-opus-5-5', undefined).send).toBe('high');
+    expect(c.onRequest('claude-opus-5-5', 'low').send).toBe('high');
   });
 
   it('R-8: with the judge on, p at or above judgeRaiseAt raises one step', () => {
@@ -449,8 +469,8 @@ describe('resolution', () => {
     const c = make({ home: 'high' });
     fail2(c);
     c.onJudgeAnswer(1, '90 - stuck', 100, USAGE);
-    c.onRequest('claude-opus-5-5', undefined);
-    c.onRequest('claude-opus-5-5', undefined);
+    c.onRequest('claude-opus-5-5', 'low');
+    c.onRequest('claude-opus-5-5', 'low');
     const out = c.onTestRun(PASS);
     expect(c.level).toBe('high');
     expect(c.struggleOpen).toBe(false);
@@ -626,10 +646,10 @@ describe('the hold: no automatic rule moves a pressed level', () => {
     const c = make({ judge: false, struggleDecay: 3 });
     c.onTestRun(FAIL);
     c.onButton('up');
-    const out = [c.onRequest(MODEL, undefined), c.onRequest(MODEL, undefined), c.onRequest(MODEL, undefined)];
+    const out = [c.onRequest(MODEL, 'low'), c.onRequest(MODEL, 'low'), c.onRequest(MODEL, 'low')];
     expect(out.flatMap((o) => rows(o, 'resolved'))).toEqual([{ event: 'resolved', from: 'xhigh', to: 'xhigh', requests: 3, why: 'decay', held: true }]);
     expect(c.struggleOpen).toBe(false);
-    expect(c.onRequest(MODEL, undefined).send).toBe('xhigh');
+    expect(c.onRequest(MODEL, 'low').send).toBe('xhigh');
   });
 
   it('hold: resolution ends the struggle but leaves the level, and announces nothing', () => {
@@ -783,11 +803,11 @@ describe('announcements', () => {
 describe('end', () => {
   it('summarises requests by level, struggles and judge calls', () => {
     const c = make();
-    c.onRequest('claude-opus-5-5', undefined);
+    c.onRequest('claude-opus-5-5', 'low');
     fail2(c);
     c.onJudgeAnswer(1, '80 - x', 1, USAGE);
-    c.onRequest('claude-opus-5-5', undefined);
-    c.onRequest('claude-opus-5-5', undefined);
+    c.onRequest('claude-opus-5-5', 'low');
+    c.onRequest('claude-opus-5-5', 'low');
     expect(c.end()).toEqual({ event: 'end', requests: { medium: 1, high: 2 }, struggles: 1, judgeCalls: 2, judgeTokens: { input: 20, output: 10 } });
   });
 });
@@ -891,7 +911,7 @@ describe('judge-busy', () => {
 
 describe('struggle decay', () => {
   const MODEL = 'claude-opus-5-5';
-  const quiet = (c: Controller, n: number): Outcome[] => Array.from({ length: n }, () => c.onRequest(MODEL, undefined));
+  const quiet = (c: Controller, n: number): Outcome[] => Array.from({ length: n }, () => c.onRequest(MODEL, 'low'));
 
   it('decay: a struggle with no tripwire for struggleDecay requests resolves to its pre level', () => {
     const c = make({ judge: false, struggleDecay: 20 });
@@ -901,11 +921,11 @@ describe('struggle decay', () => {
     expect(early.flatMap((o) => rows(o, 'resolved'))).toEqual([]);
     expect(c.level).toBe('high');
     expect(c.struggleOpen).toBe(true);
-    const last = c.onRequest(MODEL, undefined);
+    const last = c.onRequest(MODEL, 'low');
     expect(rows(last, 'resolved')).toEqual([{ event: 'resolved', from: 'high', to: 'medium', requests: 20, why: 'decay' }]);
     expect(c.level).toBe('medium');
     expect(c.struggleOpen).toBe(false);
-    expect(c.onRequest(MODEL, undefined).send).toBe('medium');
+    expect(c.onRequest(MODEL, 'low').send).toBe('medium');
     expect(c.takeAnnouncement()).toContain('back to medium');
   });
 
@@ -917,7 +937,7 @@ describe('struggle decay', () => {
     expect(c.level).toBe('xhigh');
     quiet(c, 19);
     expect(c.struggleOpen).toBe(true);
-    const last = c.onRequest(MODEL, undefined);
+    const last = c.onRequest(MODEL, 'low');
     expect(rows(last, 'resolved')).toEqual([{ event: 'resolved', from: 'xhigh', to: 'medium', requests: 35, why: 'decay' }]);
     expect(c.level).toBe('medium');
   });
@@ -930,7 +950,7 @@ describe('struggle decay', () => {
     c.onTestRun(FAIL); // fail2, not armed
     quiet(c, 1);
     expect(c.struggleOpen).toBe(true);
-    expect(rows(c.onRequest(MODEL, undefined), 'resolved')).toHaveLength(1);
+    expect(rows(c.onRequest(MODEL, 'low'), 'resolved')).toHaveLength(1);
   });
 
   it('decay: an open child red is cleared by decay, and a later passing test run then needs no green return', () => {
@@ -992,9 +1012,91 @@ describe('struggle decay', () => {
   });
 
   it('decay: a request on a gated model is not counted', () => {
-    const c = make({ judge: false, struggleDecay: 2 });
+    const c = make({ judge: false, struggleDecay: 2, models: ['claude-opus-5-5'] });
     c.onTestRun(FAIL);
-    for (let i = 0; i < 5; i++) c.onRequest('claude-haiku-5-5', undefined);
+    for (let i = 0; i < 5; i++) c.onRequest('claude-haiku-5-5', 'low');
     expect(c.struggleOpen).toBe(true);
+  });
+});
+
+describe('the cache check', () => {
+  const NOVA = 'claude-nova-9';
+  const AT = Date.parse('2026-10-11T12:00:00Z');
+  const HOUR = 3_600_000;
+  const CHECK = { ttlMs: 300_000, threshold: 0.9 };
+  const cached = (read: number, write: number) => ({ input_tokens: 10, output_tokens: 5, cache_read_input_tokens: read, cache_creation_input_tokens: write });
+  const HELD = (recheck: string) => `Not applied: auto-effort does not change effort on ${NOVA} (unsafe): changing it rewrites this model's prompt cache, so your effort stays at high. It checks again at ${recheck}.`;
+
+  /** A judge-off controller on NOVA over `marks`, on a clock the test moves; `request` sends one request and answers it 10 s later. */
+  function rig(marks: Marks) {
+    const clock = { t: AT };
+    const c = make({ judge: false, marks, now: () => clock.t });
+    const request = (usage: ReturnType<typeof cached>, messages: number) => {
+      const asked = c.onRequest(NOVA, 'low', messages);
+      clock.t += 10_000;
+      return { asked, answered: c.onResponse(usage, CHECK) };
+    };
+    return { c, clock, request };
+  }
+
+  it('R-9: a raise that loses the cache marks the model in the shared marks; the agent keeps its effort until the recheck, which a clean switch passes', () => {
+    const marks = new Marks();
+    const { c, clock, request } = rig(marks);
+    expect(request(cached(0, 5000), 2).asked.send).toBe('medium');
+    c.onTestRun(FAIL);
+    const raised = request(cached(200, 100), 4);
+    expect(raised.asked.send).toBe('high');
+    expect(raised.answered).toEqual({
+      actions: [
+        { kind: 'log', row: { event: 'canary', model: NOVA, from: 'medium', to: 'high', verdict: 'fail', ratio: 0.04 } },
+        { kind: 'log', row: { event: 'gate', model: NOVA, status: 'unsafe', why: 'cache canary', ratio: 0.04, fails: 1 } },
+      ],
+      changed: NOVA,
+      warning: `auto-effort stopped changing effort on ${NOVA}: after the change from medium to high the cache read was 4.0% of what the previous request cached (the check wants 90%). It checks again at 2026-10-11T13:00:20.000Z. /auto-effort clear ${NOVA} turns it back on.`,
+    });
+    expect(marks.persisted.unsafe).toEqual({ [NOVA]: { at: '2026-10-11T12:00:20.000Z', ratio: 0.04, prevPrompt: 5010, cacheRead: 200, from: 'medium', to: 'high', fails: 1 } });
+    // Held: a tripwire raises nothing, the effort tools are refused, the requests keep their effort.
+    expect(rows(c.onTestRun(FAIL), 'tripwire')).toEqual([{ event: 'tripwire', tripwire: 'fail2', level: 'high', unsafe: true }]);
+    expect(c.onButton('down')).toEqual({ text: HELD('2026-10-11T13:00:20.000Z'), actions: [{ kind: 'log', row: { event: 'button-refused', direction: 'down', model: NOVA, status: 'unsafe' } }] });
+    expect(c.onAuto().text).toBe(HELD('2026-10-11T13:00:20.000Z'));
+    // The trouble resolves during the wait: the level comes home, while the requests keep their effort to the wait's end.
+    expect(rows(c.onTestRun(PASS), 'resolved')).toEqual([{ event: 'resolved', from: 'high', to: 'medium', requests: 1, why: 'resolved', unsafe: true }]);
+    clock.t = AT + 20_000 + HOUR - 10_000;
+    expect(request(cached(5100, 100), 6).asked.send).toBe('high');
+    // The wait over, the next request goes at the level: the switch the recheck judges, and one that keeps the cache lifts the mark.
+    const recheck = request(cached(5200, 50), 8);
+    expect(recheck.asked.send).toBe('medium');
+    expect(recheck.answered).toEqual({
+      actions: [
+        { kind: 'log', row: { event: 'canary', model: NOVA, from: 'high', to: 'medium', verdict: 'ok', ratio: 1 } },
+        { kind: 'log', row: { event: 'gate', model: NOVA, status: 'steered', why: 'cache check passed' } },
+      ],
+      changed: NOVA,
+    });
+    expect(marks.persisted.unsafe).toEqual({});
+  });
+
+  it('R-9: a compaction between two requests judges nothing, whatever the message count', () => {
+    const marks = new Marks();
+    const { c, request } = rig(marks);
+    request(cached(0, 5000), 2);
+    c.onTestRun(FAIL);
+    c.onCompaction();
+    expect(request(cached(200, 100), 4).answered).toEqual({ actions: [{ kind: 'log', row: { event: 'canary', model: NOVA, from: 'medium', to: 'high', verdict: 'skip', why: 'compaction' } }] });
+    expect(marks.persisted.unsafe).toEqual({});
+  });
+
+  it('R-9: a mark the main chat or another agent set stops this agent too, whose first request still goes at its level', () => {
+    const marked = markUnsafe(EMPTY_PERSISTED, NOVA, { at: '2026-10-11T12:00:00Z', ratio: 0.1, prevPrompt: 1000, cacheRead: 100, from: 'high', to: 'medium', fails: 1 });
+    const { c, request } = rig(new Marks(marked));
+    expect(request(cached(0, 5000), 2).asked).toEqual({
+      send: 'medium',
+      actions: [
+        { kind: 'log', row: { event: 'gate', model: NOVA, status: 'unsafe', why: 'cache mark', recheckAt: '2026-10-11T13:00:00.000Z' } },
+        { kind: 'log', row: { event: 'step', model: NOVA, requested: 'low', sent: 'medium', struggle: false } },
+      ],
+    });
+    expect(rows(c.onTestRun(FAIL), 'tripwire')).toEqual([{ event: 'tripwire', tripwire: 'fail1', level: 'medium', unsafe: true }]);
+    expect(request(cached(5000, 100), 4).asked.send).toBe('medium');
   });
 });

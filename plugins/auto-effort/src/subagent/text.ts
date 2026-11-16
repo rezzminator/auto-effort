@@ -1,6 +1,8 @@
 // Every text the model reads from this plugin, apart from the tag's deny texts and the
 // Agent tool's description line (effort.ts) and the judge's prompt (judge.ts).
 
+import { checksAgain } from '../text';
+
 export const BUTTON_UP =
   'Raise your own reasoning effort one step for your next replies. Use it when you are stuck: a check still fails after your fix, results do not fit your understanding of the code, a sub-task came back red for a reason you did not foresee — or right before a design decision that is hard to undo. Not for routine steps; it makes every later reply slower and costlier. The level then holds, whatever happens, until you call effort_auto.';
 
@@ -43,6 +45,11 @@ export function buttonText(direction: Direction, level: string, floor: string, c
 /** What a press adds while the agent's last request went to a model this plugin does not steer. */
 export function unsteeredNote(model: string): string {
   return ` Your current model, ${model}, is not steered here: the level applies once a steered model answers.`;
+}
+
+/** What an effort tool answers while a cache mark holds the agent's model: a change would rewrite its prompt cache. */
+export function unsafeText(model: string, level: string, recheck: number): string {
+  return `Not applied: auto-effort does not change effort on ${model} (unsafe): changing it rewrites this model's prompt cache, so your effort stays at ${level}. ${checksAgain(recheck)}`;
 }
 
 /** What a button press at the end of the range answers. */
