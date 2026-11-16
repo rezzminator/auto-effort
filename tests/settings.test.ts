@@ -27,6 +27,7 @@ describe('resolveSettings', () => {
     expect(DEFAULTS.models).toEqual([
       'claude-opus-5-5=allow',
       'claude-fable-5-1=allow',
+      'claude-fable-5-2=probation',
       'claude-sonnet-5-5=probation',
       'claude-haiku-5-5=probation',
       'claude-sonnet-5=deny',
@@ -242,6 +243,7 @@ describe('compile', () => {
     expect(compiled.models).toEqual({
       'claude-opus-5-5': 'allow',
       'claude-fable-5-1': 'allow',
+      'claude-fable-5-2': 'probation',
       'claude-sonnet-5-5': 'probation',
       'claude-haiku-5-5': 'probation',
       'claude-sonnet-5': 'deny',

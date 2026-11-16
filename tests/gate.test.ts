@@ -14,6 +14,7 @@ describe('gateOf', () => {
   it.each([
     ['claude-opus-5-5', 'allow', true],
     ['claude-fable-5-1', 'allow', true],
+    ['claude-fable-5-2', 'probation', true],
     ['claude-sonnet-5-5', 'probation', true],
     ['claude-haiku-5-5', 'probation', true],
     ['claude-sonnet-5', 'deny', false],

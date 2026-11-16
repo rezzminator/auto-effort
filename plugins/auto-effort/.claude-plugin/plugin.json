@@ -147,11 +147,13 @@
       "default": [
         "main:claude-opus-5-5=allow",
         "main:claude-fable-5-1=allow",
+        "main:claude-fable-5-2=probation",
         "main:claude-sonnet-5-5=probation",
         "main:claude-haiku-5-5=probation",
         "main:claude-sonnet-5=deny",
         "subagent:claude-opus-5-5",
         "subagent:claude-fable-5-1",
+        "subagent:claude-fable-5-2",
         "subagent:claude-sonnet-5-5"
       ],
       "multiple": true

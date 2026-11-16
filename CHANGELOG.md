@@ -4,6 +4,10 @@ All notable changes to this plugin are recorded here. The format follows [Keep a
 
 ## [Unreleased]
 
+### Added
+
+- `claude-fable-5-2` joins the default `models` list: `main:claude-fable-5-2=probation` for the main chat and `subagent:claude-fable-5-2` for sub-agents. Until now it fell under `unknownModels` (`off`), so automatic effort left it untouched and `set_effort` answered `Not applied`.
+
 ## [3.1.0] — 2026-11-14
 
 ### Added

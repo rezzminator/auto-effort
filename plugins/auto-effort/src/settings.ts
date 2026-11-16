@@ -66,7 +66,7 @@ export const DEFAULTS: Settings = {
     '\\bscripts?/test[\\w.-]*\\.sh\\b',
   ],
   userEffortPins: true,
-  models: ['claude-opus-5-5=allow', 'claude-fable-5-1=allow', 'claude-sonnet-5-5=probation', 'claude-haiku-5-5=probation', 'claude-sonnet-5=deny'],
+  models: ['claude-opus-5-5=allow', 'claude-fable-5-1=allow', 'claude-fable-5-2=probation', 'claude-sonnet-5-5=probation', 'claude-haiku-5-5=probation', 'claude-sonnet-5=deny'],
   unknownModels: 'off',
   probationSwitches: 5,
   canaryThreshold: 0.9,
