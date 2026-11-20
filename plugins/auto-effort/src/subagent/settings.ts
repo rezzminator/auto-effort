@@ -38,7 +38,7 @@ export const DEFAULTS: Settings = {
   floor: 'medium',
   ceiling: 'xhigh',
   parentTag: 'honor',
-  models: ['claude-opus-5-5', 'claude-fable-5-1', 'claude-sonnet-5-5'],
+  models: ['*'],
   judge: false,
   judgeRaiseAt: 25,
   tripwires: 'fail1,fail2,red,redispatch',

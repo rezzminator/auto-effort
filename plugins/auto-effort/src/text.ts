@@ -25,10 +25,9 @@ export function toolDescription(floor: Effort, ceiling: Effort): string {
     'set_effort: set your reasoning effort for the requests after this call. A level you set holds until this turn ends, over the automatic rules; the next turn starts at its planned level again.',
     'auto hands the effort back to the automatic rules for the rest of this turn: its planned level, and failing test runs raise it.',
     'Main chat only: a sub-agent never calls it.',
-    'Call it in your first response of a user turn whose work needs another level than the one in effect, alongside your first tool calls.',
+    'Call it in your first response of a user turn whose work needs another level than the one in effect, alongside your first tool calls; a reply with no tool work calls it only to raise the level, then answers after its result.',
     ...lines,
     'Raise it the moment the work turns harder than planned: a test fails for a reason you cannot name, or a fix you were sure of did not hold. Lower it once only mechanical steps remain.',
-    'If the answer itself needs deep thought and there is no tool work, call this first and answer after its result.',
   ].join('\n');
 }
 
@@ -38,7 +37,7 @@ export function reminderLine({ level, tool, upshift, chars, hints, hintLevel }: 
   const words = hints.map((word) => JSON.stringify(word));
   const named = words.length < 2 ? words.join('') : `${words.slice(0, -1).join(', ')} and ${words.at(-1)}`;
   const hint = hints.length ? ` This prompt names ${named}: the ${tool} guide places that kind of work at ${hintLevel}; whether this turn is that work is your call.` : '';
-  return `Your reasoning effort starts this turn at ${level}${why}, and this first response runs at ${level}. Call ${tool} first, with the level the work ahead needs; a level you set lasts until this turn ends. With no call, the turn stays at ${level}.${hint}`;
+  return `Your reasoning effort starts this turn at ${level}${why}, and this first response runs at ${level}. Call ${tool} only when the work ahead needs another level; a level you set lasts until this turn ends, and with no call the turn stays at ${level}.${hint}`;
 }
 
 /** The answer to a level set with set_effort, with why a clamped level differs from the one asked. */
@@ -96,4 +95,14 @@ export function shortReason(reason: unknown): string {
   const text = reason.replace(/\s+/g, ' ').trim();
   if (text === '') return 'no reason given';
   return text.length > REASON_MAX ? `${text.slice(0, REASON_MAX - 1)}…` : text;
+}
+
+/** When a waiting cache mark is checked again, as every notice says it. */
+export function checksAgain(at: number): string {
+  return `It checks again at ${new Date(at).toISOString()}.`;
+}
+
+/** The warning of a failed cache check: the change that lost the cache, the share read against the threshold, the recheck. */
+export function canaryNotice(input: { model: string; variant: string; from: string; to: string; ratio: number; threshold: number; recheck: number }): string {
+  return `auto-effort stopped changing effort on ${input.model}: after the change from ${input.from} to ${input.to} the cache read was ${(input.ratio * 100).toFixed(1)}% of what the previous request cached (the check wants ${(input.threshold * 100).toFixed(0)}%). ${checksAgain(input.recheck)} /auto-effort clear ${input.variant} turns it back on.`;
 }

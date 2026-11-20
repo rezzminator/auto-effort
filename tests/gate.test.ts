@@ -1,12 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import { clearUnsafe, cleanSwitch, EMPTY_PERSISTED, gateOf, liftMark, marksOf, markUnsafe, mergeModels, modelVariant, NO_CHECKS, normalizeModel, readPersisted, recheckAt, type Checks } from '../plugins/auto-effort/src/gate.ts';
+import { clearUnsafe, cleanSwitch, EMPTY_PERSISTED, gateOf, liftMark, Marks, marksOf, markUnsafe, mergeModels, modelVariant, NO_CHECKS, normalizeModel, readPersisted, recheckAt, type Checks } from '../plugins/auto-effort/src/gate.ts';
 import { compile, DEFAULTS, resolveSettings } from '../plugins/auto-effort/src/settings.ts';
 
-const compiled = compile(DEFAULTS);
+// The model rows this plugin shipped until it named no model, set here as a user's own.
+const CONFIGURED = resolveSettings({ models: ['claude-opus-5-5=allow', 'claude-fable-5-1=allow', 'claude-fable-5-2=probation', 'claude-sonnet-5-5=probation', 'claude-haiku-5-5=probation', 'claude-sonnet-5=deny'], unknownModels: 'off' }).settings;
+const compiled = compile(CONFIGURED);
 const MARKED_AT = Date.parse('2026-10-11T12:00:00Z');
 const HOUR = 3_600_000;
 // Half an hour after `mark`: inside the wait of a first failed check.
-const gate = (model: string, persisted = EMPTY_PERSISTED, settings = DEFAULTS, checks: Checks = NO_CHECKS, now = MARKED_AT + HOUR / 2) => gateOf(model, settings, compile(settings), persisted, checks, now);
+const gate = (model: string, persisted = EMPTY_PERSISTED, settings = CONFIGURED, checks: Checks = NO_CHECKS, now = MARKED_AT + HOUR / 2) => gateOf(model, settings, compile(settings), persisted, checks, now);
 const mark = { at: '2026-10-11T12:00:00Z', ratio: 0.12, prevPrompt: 40000, cacheRead: 4800, from: 'high', to: 'medium', fails: 1 };
 
 // R8: a per-model allow / probation / deny map; an unknown model follows `unknownModels`.
@@ -14,6 +16,7 @@ describe('gateOf', () => {
   it.each([
     ['claude-opus-5-5', 'allow', true],
     ['claude-fable-5-1', 'allow', true],
+    ['claude-fable-5-2', 'probation', true],
     ['claude-sonnet-5-5', 'probation', true],
     ['claude-haiku-5-5', 'probation', true],
     ['claude-sonnet-5', 'deny', false],
@@ -28,6 +31,11 @@ describe('gateOf', () => {
     expect(gate('claude-new-9', EMPTY_PERSISTED, resolveSettings({ unknownModels: 'allow' }).settings)).toMatchObject({ status: 'allow', active: true });
     expect(gate('claude-new-9', EMPTY_PERSISTED, resolveSettings({ unknownModels: 'probation' }).settings)).toMatchObject({ status: 'probation', active: true });
     expect(gate('claude-new-9', EMPTY_PERSISTED, resolveSettings({ unknownModels: 'deny' }).settings)).toMatchObject({ status: 'deny', active: false });
+  });
+
+  it('steers every model on probation when nothing is configured: no shipped row names a model', () => {
+    expect(gate('claude-nova-9', EMPTY_PERSISTED, DEFAULTS)).toEqual({ model: 'claude-nova-9', status: 'probation', active: true });
+    expect(gate('claude-sonnet-5', EMPTY_PERSISTED, DEFAULTS)).toEqual({ model: 'claude-sonnet-5', status: 'probation', active: true });
   });
 
   // R9: the unsafe mark persists across sessions.
@@ -61,20 +69,20 @@ describe('gateOf', () => {
   ])('rechecks a mark of %i failed checks in a row after %i hours', (fails, hours) => {
     const marked = markUnsafe(EMPTY_PERSISTED, 'claude-opus-5-5', { ...mark, fails });
     expect(recheckAt({ ...mark, fails })).toBe(MARKED_AT + hours * HOUR);
-    expect(gate('claude-opus-5-5', marked, DEFAULTS, NO_CHECKS, MARKED_AT + hours * HOUR - 1)).toEqual({ model: 'claude-opus-5-5', status: 'unsafe', active: false });
-    expect(gate('claude-opus-5-5', marked, DEFAULTS, NO_CHECKS, MARKED_AT + hours * HOUR)).toEqual({ model: 'claude-opus-5-5', status: 'recheck', active: true });
-    expect(gate('claude-opus-5-5', marked, DEFAULTS, NO_CHECKS, MARKED_AT + hours * HOUR + 1)).toEqual({ model: 'claude-opus-5-5', status: 'recheck', active: true });
+    expect(gate('claude-opus-5-5', marked, CONFIGURED,NO_CHECKS, MARKED_AT + hours * HOUR - 1)).toEqual({ model: 'claude-opus-5-5', status: 'unsafe', active: false });
+    expect(gate('claude-opus-5-5', marked, CONFIGURED,NO_CHECKS, MARKED_AT + hours * HOUR)).toEqual({ model: 'claude-opus-5-5', status: 'recheck', active: true });
+    expect(gate('claude-opus-5-5', marked, CONFIGURED,NO_CHECKS, MARKED_AT + hours * HOUR + 1)).toEqual({ model: 'claude-opus-5-5', status: 'recheck', active: true });
   });
 
   it("puts a chat's own checks before the stored mark: its own failure binds it, its own pass sets another chat's mark aside", () => {
     const marked = markUnsafe(EMPTY_PERSISTED, 'claude-opus-5-5', mark);
-    expect(gate('claude-opus-5-5', marked, DEFAULTS, { failed: undefined, passed: true })).toEqual({ model: 'claude-opus-5-5', status: 'allow', active: true });
-    expect(gate('claude-opus-5-5', marked, DEFAULTS, NO_CHECKS)).toEqual({ model: 'claude-opus-5-5', status: 'unsafe', active: false });
-    expect(gate('claude-opus-5-5', EMPTY_PERSISTED, DEFAULTS, { failed: mark, passed: false })).toEqual({ model: 'claude-opus-5-5', status: 'unsafe', active: false });
+    expect(gate('claude-opus-5-5', marked, CONFIGURED,{ failed: undefined, passed: true })).toEqual({ model: 'claude-opus-5-5', status: 'allow', active: true });
+    expect(gate('claude-opus-5-5', marked, CONFIGURED,NO_CHECKS)).toEqual({ model: 'claude-opus-5-5', status: 'unsafe', active: false });
+    expect(gate('claude-opus-5-5', EMPTY_PERSISTED, CONFIGURED,{ failed: mark, passed: false })).toEqual({ model: 'claude-opus-5-5', status: 'unsafe', active: false });
     // Its own mark of two failures outlasts the stored one of one.
     const own = { failed: { ...mark, fails: 2 }, passed: false };
-    expect(gate('claude-opus-5-5', marked, DEFAULTS, own, MARKED_AT + HOUR)).toEqual({ model: 'claude-opus-5-5', status: 'unsafe', active: false });
-    expect(gate('claude-opus-5-5', marked, DEFAULTS, own, MARKED_AT + 2 * HOUR)).toEqual({ model: 'claude-opus-5-5', status: 'recheck', active: true });
+    expect(gate('claude-opus-5-5', marked, CONFIGURED,own, MARKED_AT + HOUR)).toEqual({ model: 'claude-opus-5-5', status: 'unsafe', active: false });
+    expect(gate('claude-opus-5-5', marked, CONFIGURED,own, MARKED_AT + 2 * HOUR)).toEqual({ model: 'claude-opus-5-5', status: 'recheck', active: true });
   });
 
   it('lifts the mark of one context window and leaves the others', () => {
@@ -198,5 +206,37 @@ describe('modelVariant', () => {
     [' claude-sonnet-5 ', 'claude-sonnet-5'],
   ])('%j is %j: the date stamp dropped, the context window kept', (model, variant) => {
     expect(modelVariant(model)).toBe(variant);
+  });
+});
+
+// One process's marks, shared by the main chat and its sub-agents: what a judged switch does to them.
+describe('Marks', () => {
+  const usage = (input: number, cacheRead: number, cacheWrite: number) => ({ input_tokens: input, output_tokens: 5, cache_read_input_tokens: cacheRead, cache_creation_input_tokens: cacheWrite });
+  const prev = { model: 'claude-nova-9', wire: 'high', usage: usage(10, 0, 5000), endedAt: MARKED_AT - 20_000, messages: 4 };
+  const cur = { model: 'claude-nova-9', wire: 'medium', usage: usage(20, 200, 100), endedAt: MARKED_AT, messages: 6, startedAt: MARKED_AT - 10_000, compacted: false };
+  const failed = { at: '2026-10-11T12:00:00.000Z', ratio: 0.04, prevPrompt: 5010, cacheRead: 200, from: 'high', to: 'medium', fails: 1 };
+
+  it('marks the model at a failed check and holds it until the recheck, whose failure is one more in a row', () => {
+    const marks = new Marks();
+    expect(marks.keep({ verdict: 'fail', ratio: 0.04 }, prev, cur)).toEqual({ lifted: false, mark: failed, stored: true });
+    expect(marks.persisted.unsafe).toEqual({ 'claude-nova-9': failed });
+    expect(marks.waiting('claude-nova-9', MARKED_AT + HOUR - 1)).toEqual(failed);
+    expect(marks.waiting('claude-nova-9', MARKED_AT + HOUR)).toBeUndefined();
+    expect(marks.waiting('claude-nova-9[1m]', MARKED_AT)).toBeUndefined();
+    // A failure judged while the mark waits was a change already in flight: the mark stands, no failure is added.
+    expect(marks.keep({ verdict: 'fail', ratio: 0.04 }, prev, { ...cur, endedAt: MARKED_AT + HOUR - 1 })).toEqual({ lifted: false, mark: undefined, stored: false });
+    expect(marks.persisted.unsafe).toEqual({ 'claude-nova-9': failed });
+    // The recheck's failure, once the wait is over, is the next in a row.
+    expect(marks.keep({ verdict: 'fail', ratio: 0.04 }, prev, { ...cur, endedAt: MARKED_AT + HOUR }).mark).toEqual({ ...failed, at: '2026-10-11T13:00:00.000Z', fails: 2 });
+  });
+
+  it("lifts its own mark and another chat's at a clean check, and keeps nothing at a skip", () => {
+    const marks = new Marks(markUnsafe(EMPTY_PERSISTED, 'claude-nova-9', mark));
+    expect(marks.keep({ verdict: 'skip', why: 'ttl' }, prev, cur)).toEqual({ lifted: false, mark: undefined, stored: false });
+    expect(marks.waiting('claude-nova-9', MARKED_AT)).toEqual(mark);
+    expect(marks.keep({ verdict: 'ok', ratio: 0.99 }, prev, cur)).toEqual({ lifted: true, mark: undefined, stored: true });
+    expect(marks.persisted.unsafe).toEqual({});
+    expect(marks.checks('claude-nova-9')).toEqual({ failed: undefined, passed: true });
+    expect(marks.keep({ verdict: 'ok', ratio: 0.99 }, prev, cur)).toEqual({ lifted: false, mark: undefined, stored: false });
   });
 });

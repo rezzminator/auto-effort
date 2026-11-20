@@ -4,7 +4,7 @@ import type { ConfigRow, EngineInterface, Register, ModelCompleteRequest, ModelC
 import type { Usage } from '../src/canary';
 import { parseCommand, statusText, USAGE } from '../src/command';
 import { Controller, readSessionState, type Row, type StepPlan } from '../src/controller';
-import { EMPTY_PERSISTED, marksOf, mergeModels, readPersisted } from '../src/gate';
+import { EMPTY_PERSISTED, Marks, marksOf, mergeModels, readPersisted } from '../src/gate';
 import { levelsWithin } from '../src/levels';
 import { formerDirs, MOVE_SCRIPT } from '../src/former';
 import { expandHome, fillSegments, SEGMENT_ROWS, sessionLogPath } from '../src/log';
@@ -82,6 +82,8 @@ type State = {
   /** The path and state whose write failed last, so a failure is said once per failing path and state; '' after a success. */
   stateFailed: string;
   stateWriting: Promise<void>;
+  /** The mark saves of the main chat and every steered agent, one after another: each merges over the store the last one wrote. */
+  marksSaving: Promise<void>;
 };
 
 function plog($: EngineInterface, st: State, level: PluginLogLevel, event: string, msg: string, where: string, detail?: Record<string, unknown>): void {
@@ -503,10 +505,16 @@ async function syncMarks($: EngineInterface, st: State, changed: readonly string
   for (const model of saving) st.unsaved.delete(model);
 }
 
-/** False when the marks could not be read or saved: they hold in this session and the next prompt tries again. */
+/**
+ * False when the marks could not be read or saved: they hold in this session and the next prompt tries again. Saves run
+ * one at a time (`marksSaving`): two in flight at once would each merge over a store read before the other's write.
+ */
 async function saveMarks($: EngineInterface, st: State, changed: readonly string[]): Promise<boolean> {
+  const saving = st.marksSaving.then(() => syncMarks($, st, changed));
+  // This save's failure is said below, by the caller that awaits it; the next save still runs.
+  st.marksSaving = saving.catch(() => undefined);
   try {
-    await syncMarks($, st, changed);
+    await saving;
     return true;
   } catch (error) {
     note($, st, 'error', 'marks-failed', 'hooks/auto-effort.ts#saveMarks', 'reading or saving the model marks', error, 'they hold in this session, and the next prompt tries again');
@@ -764,6 +772,8 @@ type SubRuntime = {
   pending: string[];
   writing: Promise<void>;
   steered: Map<string, SubController>;
+  /** The cache marks the main chat's controller and every steered agent share. */
+  marks: Marks;
   awaiting: Map<string, SubAwaiting>;
   /** Each child agent's id → its steered parent's id. */
   childOf: Map<string, string>;
@@ -991,6 +1001,8 @@ function SubNewController(rt: SubRuntime, id: string, type: string, control: Sub
     announce: rt.config.announce,
     struggleDecay: control.struggleDecay,
     brief,
+    marks: rt.marks,
+    now: () => Date.now(),
   });
   rt.steered.set(id, controller);
   return controller;
@@ -1002,7 +1014,7 @@ function SubPerform(rt: SubRuntime, $: EngineInterface, controller: SubControlle
     if (action.kind === 'log') {
       const { event, ...rest } = action.row;
       if (event === 'judge-failed' && rest.reason !== 'model-unavailable') levelLog(rt, $, 'error', 'judge-failed', `auto-effort: judge failed for ${controller.id}: ${String(rest.reason)}; effort ${String(rest.from)} -> ${String(rest.to)}`, 'src/subagent/control.ts#failed', { agent: controller.id, error: String(rest.reason) });
-      if (rest.from !== undefined && rest.to !== undefined && rest.from !== rest.to) levelLog(rt, $, 'info', 'effort-steered', `auto-effort: ${controller.id}'s effort changed from ${String(rest.from)} to ${String(rest.to)}`, 'hooks/auto-effort.ts#perform', { agent: controller.id, from: rest.from, to: rest.to });
+      if (event !== 'canary' && rest.from !== undefined && rest.to !== undefined && rest.from !== rest.to) levelLog(rt, $, 'info', 'effort-steered', `auto-effort: ${controller.id}'s effort changed from ${String(rest.from)} to ${String(rest.to)}`, 'hooks/auto-effort.ts#perform', { agent: controller.id, from: rest.from, to: rest.to });
       SubRecord(rt, $, controller.id, controller.type, { event, ...rest, ...(rt.config.logPackets ? action.detail : {}) });
     } else {
       SubRunJudge(rt, $, controller, action);
@@ -1098,6 +1110,19 @@ function SubAdoptFirst(rt: SubRuntime, $: EngineInterface, agentId: string, requ
     return undefined;
   }
   return SubNewController(rt, agentId, waiting.type, waiting.control, requested, waiting.brief);
+}
+
+// A steered agent's answered request goes to the cache check; a failure's mark is saved for every chat.
+async function SubCheckCache(rt: SubRuntime, $: EngineInterface, st: State, controller: SubController, usage: unknown): Promise<void> {
+  try {
+    const s = st.ctl.settings;
+    const out = controller.onResponse(toUsage(usage), { ttlMs: s.cacheTtlSeconds * 1000, threshold: s.canaryThreshold });
+    SubPerform(rt, $, controller, out.actions);
+    if (out.warning !== undefined) levelLog(rt, $, 'warning', 'canary-failed', out.warning, 'src/subagent/control.ts#onResponse', { agent: controller.id });
+    if (out.changed !== undefined) await saveMarks($, st, [out.changed]);
+  } catch (error) {
+    SubNotice(rt, $, 'error', 'cache-check-failed', `auto-effort: checking sub-agent ${controller.id}'s cache failed: ${SubMessage(error)}; the next request is not compared with it`, 'checkCache');
+  }
 }
 
 // What a steered agent's own tool call tells the controller.
@@ -1319,11 +1344,12 @@ const rt: SubRuntime = {
     awaiting: new Map(),
     childOf: new Map(),
     buttons: new Map(),
+    marks: new Marks(),
   };
 const initial = projectOptions(options, 'main');
 const { settings, errors } = resolveSettings(initial.options);
 const st: State = {
-    ctl: new Controller(settings, EMPTY_PERSISTED, () => Date.now()),
+    ctl: new Controller(settings, rt.marks, () => Date.now()),
     options: { ...options },
     errors,
     env: {},
@@ -1354,6 +1380,7 @@ const st: State = {
     stateUnretired: new Map(),
     stateFailed: '',
     stateWriting: Promise.resolve(),
+    marksSaving: Promise.resolve(),
   };
 on('session.start', async ($, e, next) => {
     await ensureStarted($, st);
@@ -1392,7 +1419,7 @@ on('turn.step', async function* ($, e, next) {if (e.agentId !== undefined) {
       const pin = await SubAwaitPin(rt, $, spawns, agentId, next.signal);
       controller = rt.steered.get(agentId) ?? SubAdoptFirst(rt, $, agentId, e.effort);
       if (controller) {
-        const out = controller.onRequest(e.model, e.effort);
+        const out = controller.onRequest(e.model, e.effort, e.messageCount);
         SubPerform(rt, $, controller, out.actions);
         send = out.send ?? e.effort;
       } else {
@@ -1409,6 +1436,7 @@ on('turn.step', async function* ($, e, next) {if (e.agentId !== undefined) {
     } catch (error) {
       SubNotice(rt, $, 'error', 'subagent-reply-unreadable', `auto-effort: reading sub-agent ${agentId}'s reply failed: ${SubMessage(error)}; its last words are not kept`, 'turn.step');
     }
+    if (controller !== undefined) await SubCheckCache(rt, $, st, controller, result.usage);
     return result;
    }
 
@@ -1531,7 +1559,9 @@ on('turn.complete', async ($, e, next) => {if (e.agentId !== undefined) {
 });
 on('session.compact', async ($, e, next) => {
     const result = await next(e);
-    if (e.agentId === undefined && e.trigger !== 'precompute' && typeof (result as { skip?: unknown }).skip !== 'string') st.ctl.noteCompaction();
+    if (e.trigger === 'precompute' || typeof (result as { skip?: unknown }).skip === 'string') return result;
+    if (e.agentId === undefined) st.ctl.noteCompaction();
+    else rt.steered.get(e.agentId)?.onCompaction();
     return result;
   });
 on('session.end', async ($, e, next) => {

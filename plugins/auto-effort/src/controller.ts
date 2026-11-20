@@ -1,15 +1,15 @@
 // Every decision, as plain state and methods: the adapter feeds it the hook events and does what it returns.
 // Nothing here touches the engine; a clock is passed in.
 
-import { judgeSwitch, wholePrompt, type Usage } from './canary';
+import { judgeStep, type Sample, type Switched, type Usage } from './canary';
 import type { View } from './command';
-import { bindingMark, cleanSwitch, clearUnsafe, coversMark, gateOf, liftMark, markUnsafe, nextFails, recheckAt, type Checks, type Gate, type Persisted, type Unsafe } from './gate';
+import { cleanSwitch, gateOf, Marks, recheckAt, type Gate, type Persisted, type Unsafe } from './gate';
 import { clamp, isEffort, levelsWithin, stepUp, type Effort } from './levels';
 import { modelVariant, normalizeModel } from './model';
 import { planFor } from './plan';
 import { compile, type Compiled, type Settings } from './settings';
 import { stateOf, type EffortState } from './state';
-import { deescalationLine, escalationLine, handBackText, heldLine, levelNote, quote, reminderLine, setText, shortReason } from './text';
+import { canaryNotice, checksAgain, deescalationLine, escalationLine, handBackText, heldLine, levelNote, quote, reminderLine, setText, shortReason } from './text';
 
 export type Row = Record<string, unknown>;
 /** What decided a turn's level: the planning level, the main chat's own set_effort level, a failing-test rise, the user's /effort. */
@@ -61,8 +61,6 @@ type Turn = {
   noted: Effort | null;
 };
 
-type Sample = { model: string; wire: Carried; usage: Usage | null; endedAt: number; messages: number };
-
 type Inflight = {
   turnId: string;
   index: number;
@@ -77,9 +75,6 @@ type Inflight = {
   startedAt: number;
   messages: number;
 };
-
-/** When a waiting mark's recheck is due, as the notices say it. */
-const checksAgain = (mark: Unsafe): string => `It checks again at ${new Date(recheckAt(mark)).toISOString()}.`;
 
 /** A harness note that the command went on in the background: its result says nothing about the tests yet. */
 const BACKGROUND = /^Command running in background with ID: \S+\.[^\r\n]*$/i;
@@ -129,7 +124,8 @@ export class Controller {
   toolName: string | undefined;
   private settingsNow: Settings;
   private compiled: Compiled;
-  private store: Persisted;
+  /** The cache marks this process holds, shared with the sub-agents it launches (`Marks`). */
+  private readonly modelMarks: Marks;
   private enabled = true;
   private pin: { level: Effort } | null = null;
   private override: Override | null = null;
@@ -144,18 +140,16 @@ export class Controller {
   private last: Sample | undefined;
   private compacted = false;
   private told = new Set<string>();
-  /** This chat's own cache checks per model and context window (`Checks`): the mark of a failed one, and the windows a check passed on since. */
-  private failed = new Map<string, Unsafe>();
-  private passed = new Set<string>();
 
+  /** `marks`: the stored marks, or the `Marks` this process shares with its sub-agents. */
   constructor(
     settings: Settings,
-    persisted: Persisted,
+    marks: Persisted | Marks,
     private readonly now: () => number,
   ) {
     this.settingsNow = settings;
     this.compiled = compile(settings);
-    this.store = persisted;
+    this.modelMarks = marks instanceof Marks ? marks : new Marks(marks);
   }
 
   get settings(): Settings {
@@ -163,7 +157,7 @@ export class Controller {
   }
 
   get persisted(): Persisted {
-    return this.store;
+    return this.modelMarks.persisted;
   }
 
   applySettings(settings: Settings): void {
@@ -172,7 +166,7 @@ export class Controller {
   }
 
   loadPersisted(persisted: Persisted): void {
-    this.store = persisted;
+    this.modelMarks.persisted = persisted;
   }
 
   setEnabled(on: boolean): void {
@@ -209,17 +203,13 @@ export class Controller {
 
   /** The marked names a model name covers, or every one when none is named: the stored marks this chat holds and those of its own failed checks. */
   marks(model: string | undefined): string[] {
-    return [...new Set([...Object.keys(this.store.unsafe), ...this.failed.keys()])].filter((marked) => model === undefined || coversMark(model, marked));
+    return this.modelMarks.names(model);
   }
 
   /** Lifts the cache marks a model name covers, or every mark when none is named, this chat's own included. */
   clear(model: string | undefined): void {
     if (model === undefined) this.told.clear();
-    for (const marked of this.marks(model)) {
-      this.told.delete(marked);
-      this.failed.delete(marked);
-    }
-    this.store = clearUnsafe(this.store, model);
+    for (const marked of this.modelMarks.clear(model)) this.told.delete(marked);
   }
 
   /** A new session in the same process (after /clear): on again, the user pin kept, no level of the main chat's, no turn, nothing to compare with; the marks stay. */
@@ -242,18 +232,13 @@ export class Controller {
     this.compacted = true;
   }
 
-  private checks(model: string): Checks {
-    const variant = modelVariant(model);
-    return { failed: this.failed.get(variant), passed: this.passed.has(variant) };
-  }
-
   /** The cache mark that binds this chat on a model, if any. */
   private mark(model: string): Unsafe | undefined {
-    return bindingMark(this.store, model, this.checks(model));
+    return this.modelMarks.binding(model);
   }
 
   private gate(model: string): Gate {
-    return gateOf(model, this.settingsNow, this.compiled, this.store, this.checks(model), this.now());
+    return gateOf(model, this.settingsNow, this.compiled, this.modelMarks.persisted, this.modelMarks.checks(model), this.now());
   }
 
   /**
@@ -340,7 +325,7 @@ export class Controller {
     if (!this.enabled) return this.inactive(input, effort, 'auto-effort is off for this session', gate, newTurn, rows);
     if (!gate.active) {
       const waiting = gate.status === 'unsafe' && !this.told.has(variant) ? this.mark(input.model) : undefined;
-      const notice = waiting === undefined ? undefined : `auto-effort is off for ${input.model}: a cache check failed on it earlier. ${checksAgain(waiting)} /auto-effort clear ${variant} turns it back on.`;
+      const notice = waiting === undefined ? undefined : `auto-effort is off for ${input.model}: a cache check failed on it earlier. ${checksAgain(recheckAt(waiting))} /auto-effort clear ${variant} turns it back on.`;
       if (notice !== undefined) this.told.add(variant);
       const inactive = this.inactive(input, effort, `auto-effort does not change effort on ${input.model} (${gate.status})`, gate, newTurn, rows);
       return { ...inactive, ...(notice === undefined ? {} : { warning: { event: 'gate-unsafe', msg: notice, where: 'src/controller.ts#beginStep' } as PluginWarning }) };
@@ -416,55 +401,25 @@ export class Controller {
     const model = modelVariant(inf.model);
     if (inf.switched && inf.active && inf.prev !== undefined) {
       const prev = inf.prev;
-      const verdict = judgeSwitch({
-        prev: prev.usage,
-        cur: usage,
-        gapMs: inf.startedAt - prev.endedAt,
-        ttlMs: s.cacheTtlSeconds * 1000,
-        threshold: s.canaryThreshold,
-        compacted: inf.compacted,
-        sameModel: prev.model === model,
-        prevMessages: prev.messages,
-        curMessages: inf.messages,
-      });
+      const cur: Switched = { model, wire: inf.wire, usage, endedAt, messages: inf.messages, startedAt: inf.startedAt, compacted: inf.compacted };
+      const verdict = judgeStep(prev, cur, s.cacheTtlSeconds * 1000, s.canaryThreshold);
       rows.push({ event: 'canary', turnId: inf.turnId, index: inf.index, model: inf.model, from: prev.wire ?? null, to: inf.wire ?? null, ...verdict });
-      // A clean switch is this chat's proof: it lifts its own mark and the stored one, whoever stored it.
-      if (verdict.verdict === 'ok') {
-        this.passed.add(model);
-        const own = this.failed.delete(model);
-        const stored = this.store.unsafe[model] !== undefined;
-        if (stored) {
-          this.store = liftMark(this.store, inf.model);
-          persisted = this.store;
-        }
-        if (own || stored) {
-          this.told.delete(model);
-          rows.push({ event: 'gate', model: inf.model, status: this.gate(inf.model).status, why: 'cache check passed' });
-        }
+      const kept = this.modelMarks.keep(verdict, prev, cur);
+      if (kept.stored) persisted = this.modelMarks.persisted;
+      if (kept.lifted) {
+        this.told.delete(model);
+        rows.push({ event: 'gate', model: inf.model, status: this.gate(inf.model).status, why: 'cache check passed' });
       }
       if (verdict.verdict === 'ok' && inf.gate.status === 'probation') {
-        const counted = cleanSwitch(this.store, inf.model, s.probationSwitches);
-        this.store = counted.persisted;
-        persisted = this.store;
+        const counted = cleanSwitch(this.modelMarks.persisted, inf.model, s.probationSwitches);
+        this.modelMarks.persisted = counted.persisted;
+        persisted = counted.persisted;
         if (counted.graduated) rows.push({ event: 'gate', model: inf.model, status: 'allow', why: 'graduated' });
       }
-      if (verdict.verdict === 'fail' && usage !== null && prev.usage !== null) {
-        const mark: Unsafe = {
-          at: new Date(endedAt).toISOString(),
-          ratio: verdict.ratio,
-          prevPrompt: wholePrompt(prev.usage),
-          cacheRead: usage.cache_read_input_tokens,
-          from: String(prev.wire),
-          to: String(inf.wire),
-          fails: nextFails(this.store, inf.model, this.checks(inf.model)),
-        };
-        this.failed.set(model, mark);
-        this.passed.delete(model);
-        this.store = markUnsafe(this.store, inf.model, mark);
-        persisted = this.store;
+      if (verdict.verdict === 'fail' && kept.mark !== undefined) {
         this.told.add(model);
-        rows.push({ event: 'gate', model: inf.model, status: 'unsafe', why: 'cache canary', ratio: verdict.ratio, fails: mark.fails });
-        notice = `auto-effort stopped changing effort on ${inf.model}: after the change from ${String(prev.wire)} to ${String(inf.wire)} the cache read was ${(verdict.ratio * 100).toFixed(1)}% of what the previous request cached (the check wants ${(s.canaryThreshold * 100).toFixed(0)}%). ${checksAgain(mark)} /auto-effort clear ${model} turns it back on.`;
+        rows.push({ event: 'gate', model: inf.model, status: 'unsafe', why: 'cache canary', ratio: verdict.ratio, fails: kept.mark.fails });
+        notice = canaryNotice({ model: inf.model, variant: model, from: kept.mark.from, to: kept.mark.to, ratio: verdict.ratio, threshold: s.canaryThreshold, recheck: recheckAt(kept.mark) });
       }
     }
     this.last = usage === null ? undefined : { model, wire: inf.wire, usage, endedAt, messages: inf.messages };
@@ -644,7 +599,7 @@ export class Controller {
       model,
       gate,
       turn: this.turn === null ? null : { level: this.turn.level, source: this.turn.source, reason: this.turn.reason },
-      probation: name === undefined ? undefined : this.store.probation[name],
+      probation: name === undefined ? undefined : this.modelMarks.persisted.probation[name],
       unsafe: model === undefined ? undefined : this.mark(model),
     };
   }

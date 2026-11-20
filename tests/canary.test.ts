@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { cachedPrompt, judgeSwitch, wholePrompt } from '../plugins/auto-effort/src/canary.ts';
+import { cachedPrompt, judgeStep, judgeSwitch, wholePrompt } from '../plugins/auto-effort/src/canary.ts';
 
 const usage = (input: number, cacheRead: number, cacheWrite: number) => ({ input_tokens: input, output_tokens: 50, cache_read_input_tokens: cacheRead, cache_creation_input_tokens: cacheWrite });
 const base = {
@@ -53,5 +53,22 @@ describe('judgeSwitch', () => {
   it('skips when a request carried no usage', () => {
     expect(judgeSwitch({ ...base, cur: null })).toEqual({ verdict: 'skip', why: 'no-usage' });
     expect(judgeSwitch({ ...base, prev: null })).toEqual({ verdict: 'skip', why: 'no-usage' });
+  });
+});
+
+// The one door both scopes judge through: two requests, as each scope keeps them, made into the check.
+describe('judgeStep', () => {
+  const prev = { model: 'claude-nova-9', wire: 'high', usage: usage(10, 900, 100), endedAt: 1_000, messages: 10 };
+  const cur = { model: 'claude-nova-9', wire: 'medium', usage: usage(20, 990, 30), endedAt: 30_000, messages: 12, startedAt: 21_000, compacted: false };
+  it.each([
+    ['the switched request against the one before', {}, { verdict: 'ok', ratio: 0.99 }],
+    ['a start exactly the TTL after the end before', { startedAt: 301_000 }, { verdict: 'ok', ratio: 0.99 }],
+    ['a start one ms past the TTL', { startedAt: 301_001 }, { verdict: 'skip', why: 'ttl' }],
+    ['another context window', { model: 'claude-nova-9[1m]' }, { verdict: 'skip', why: 'model' }],
+    ['a compaction between', { compacted: true }, { verdict: 'skip', why: 'compaction' }],
+    ['fewer messages than before', { messages: 9 }, { verdict: 'skip', why: 'shrunk' }],
+    ['a failing read', { usage: usage(900, 100, 0) }, { verdict: 'fail', ratio: 0.1 }],
+  ] as const)('judges %s', (_name, change, verdict) => {
+    expect(judgeStep(prev, { ...cur, ...change }, 300_000, 0.9)).toEqual(verdict);
   });
 });

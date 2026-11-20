@@ -5,14 +5,18 @@ import { resolveSettings } from '../plugins/auto-effort/src/settings.ts';
 import { deescalationLine, escalationLine, handBackText, heldLine, levelNote, setText } from '../plugins/auto-effort/src/text.ts';
 
 const OPUS = 'claude-opus-5-5';
+const NOVA = 'claude-nova-9';
 const TOOL = 'mcp__auto-effort__set_effort';
 const usage = (input: number, cacheRead: number, cacheWrite: number, output = 100) => ({ input_tokens: input, output_tokens: output, cache_read_input_tokens: cacheRead, cache_creation_input_tokens: cacheWrite });
 
+// The model rows this plugin shipped until it named no model, set here as a user's own: the suite runs under them unless a test passes its own base.
+const CONFIGURED = { models: ['claude-opus-5-5=allow', 'claude-fable-5-1=allow', 'claude-fable-5-2=probation', 'claude-sonnet-5-5=probation', 'claude-haiku-5-5=probation', 'claude-sonnet-5=deny'], unknownModels: 'off' };
+
 // A controller on a clock the test moves, and the rows every call returned.
-function rig(raw: Record<string, unknown> = {}, persisted: Persisted = EMPTY_PERSISTED) {
+function rig(raw: Record<string, unknown> = {}, persisted: Persisted = EMPTY_PERSISTED, base: Record<string, unknown> = CONFIGURED) {
   const clock = { t: 1_000_000 };
   const rows: Row[] = [];
-  const ctl = new Controller(resolveSettings(raw).settings, persisted, () => clock.t);
+  const ctl = new Controller(resolveSettings({ ...base, ...raw }).settings, persisted, () => clock.t);
   ctl.toolName = TOOL;
   const keep = <T extends { rows: Row[] }>(out: T): T => (rows.push(...out.rows), out);
   return {
@@ -696,6 +700,13 @@ describe('model gate (R8)', () => {
     expect(unknown.step('t1', 0, { model: 'claude-new-9' }).plan).toMatchObject({ send: 'high', source: 'plan' });
   });
 
+  it('steers a model no row names from its first turn, on probation, when nothing is configured', () => {
+    const r = rig({}, EMPTY_PERSISTED, {});
+    r.prompt('x', NOVA);
+    expect(r.step('t1', 0, { model: NOVA }).plan).toMatchObject({ send: 'high', source: 'plan' });
+    expect(r.ctl.view().gate).toEqual({ model: NOVA, status: 'probation', active: true });
+  });
+
   it('is off for the session on `/auto-effort off`', () => {
     const r = rig();
     r.ctl.setEnabled(false);
@@ -822,6 +833,20 @@ describe('cache canary (R9)', () => {
     expect(r.ctl.view().gate).toEqual({ model: OPUS, status: 'unsafe', active: false });
     r.clock.t = failedAt + 2 * HOUR;
     expect(r.ctl.view().gate).toEqual({ model: OPUS, status: 'recheck', active: true });
+  });
+
+  it('marks a never-seen model at a failed check, steers it again once the wait is over, and lifts the mark at a clean switch, when nothing is configured', () => {
+    const { r, out } = switched(200, { r: rig({}, EMPTY_PERSISTED, {}), model: NOVA });
+    expect(out.end.persisted?.unsafe).toEqual({ [NOVA]: { at: '1970-01-01T00:17:00.000Z', ratio: 0.04, prevPrompt: 5010, cacheRead: 200, from: 'high', to: 'medium', fails: 1 } });
+    expect(r.step('t1', 2, { model: NOVA, effort: 'xhigh' }).plan).toMatchObject({ send: undefined, source: 'off' });
+    r.clock.t = 1_020_000 + HOUR;
+    expect(r.ctl.view().gate).toEqual({ model: NOVA, status: 'recheck', active: true });
+    r.prompt('x', NOVA);
+    expect(r.step('t2', 0, { model: NOVA, u: usage(10, 0, 5000) }).plan).toMatchObject({ send: 'high', source: 'plan' });
+    r.set({ level: 'medium', reason: 'rename' });
+    r.clock.t += 20_000;
+    expect(r.step('t2', 1, { model: NOVA, effort: 'xhigh', u: usage(20, 4990, 100) }).end.persisted?.unsafe).toEqual({});
+    expect(r.ctl.view().gate).toEqual({ model: NOVA, status: 'probation', active: true });
   });
 
   it("keeps a chat whose own check passed steered through another chat's mark, and lifts that mark at its next clean switch", () => {

@@ -11,7 +11,7 @@ describe('resolveSettings', () => {
     expect(DEFAULTS).toMatchObject({
       floor: 'medium',
       ceiling: 'xhigh',
-      models: ['claude-opus-5-5', 'claude-fable-5-1', 'claude-sonnet-5-5'],
+      models: ['*'],
       judge: false,
       judgeRaiseAt: 25,
       judgeModel: 'haiku',

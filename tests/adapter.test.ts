@@ -564,7 +564,7 @@ suite('turn.step', () => {
 
   it('keeps a cache mark made while an earlier save is still in flight, and saves it', async () => {
     const FABLE = 'claude-fable-5-1';
-    const e = engine();
+    const e = engine({}, LOGS);
     await e.start();
     await e.prompt();
     await e.step({}, { usage: usage(10, 0, 5000) });
@@ -577,17 +577,26 @@ suite('turn.step', () => {
     await e.step({ index: 2, model: FABLE }, { usage: usage(10, 0, 5000) });
     await e.tool({ tool: TOOL, level: 'xhigh', reason: 'hard part' });
     let releaseSet: (() => void) | undefined;
-    e.$.store.set = (key: string, value: unknown) => new Promise((done) => (releaseSet = () => done(set(key, value))));
+    e.$.store.set = (key: string, value: unknown) => {
+      e.$.store.set = set;
+      return new Promise((done) => (releaseSet = () => done(set(key, value))));
+    };
     const first = e.prompt('also this', { turnId: 't1' });
     await vi.waitFor(() => expect(releaseSet).toBeDefined());
+    // A read answers with the store as it was when asked, once released: a save reading while the first is still
+    // writing would merge over a store without the first's mark.
     let releaseGet: (() => void) | undefined;
-    e.$.store.get = (key: string) => new Promise((done) => (releaseGet = () => done(get(key))));
+    e.$.store.get = (key: string) => {
+      e.$.store.get = get;
+      const was = structuredClone(e.store.get(key));
+      return new Promise((done) => (releaseGet = () => done(was)));
+    };
     const second = e.step({ index: 3, model: FABLE }, { usage: usage(4000, 100, 900) });
-    await vi.waitFor(() => expect(releaseGet).toBeDefined());
+    // The check is logged before its mark is saved: by then the second save has asked for the store, or waits its turn.
+    await vi.waitFor(() => expect(e.logRows().filter((row) => row.event === 'canary').map((row) => [row.model, row.verdict])).toEqual([[OPUS, 'fail'], [FABLE, 'fail']]));
     releaseSet!();
     await first;
-    e.$.store.set = set;
-    e.$.store.get = get;
+    await vi.waitFor(() => expect(releaseGet).toBeDefined());
     releaseGet!();
     await second;
     await e.prompt();
@@ -1605,8 +1614,8 @@ suite('merged configuration migration', () => {
 
 suite('composed scopes', () => {
   it.each([
-    { name: 'original scoped defaults: unittest', command: 'python -m unittest', models: undefined, main: 'high', subagent: 'low' },
-    { name: 'original scoped defaults: node test', command: 'node --test', models: undefined, main: 'high', subagent: 'low' },
+    { name: 'original scoped defaults: unittest', command: 'python -m unittest', models: undefined, main: 'high', subagent: 'medium' },
+    { name: 'original scoped defaults: node test', command: 'node --test', models: undefined, main: 'high', subagent: 'medium' },
     { name: 'explicit scoped model gates', command: 'python -m unittest', models: ['main:claude-haiku-5-5=deny', 'subagent:claude-haiku-5-5'], main: 'low', subagent: 'medium' },
   ])('$name preserves independent main and sub-agent steering', async ({ command, models, main, subagent }) => {
     const manifest = JSON.parse(readFileSync(new URL('../plugins/auto-effort/.claude-plugin/plugin.json', import.meta.url), 'utf8'));

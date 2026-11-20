@@ -1,11 +1,14 @@
 // The per-agent controller: the state of one steered agent and every decision about its
 // effort. Pure: events go in, `{ actions }` come out; the hooks file performs the actions.
 
+import { judgeStep, type Sample, type Switched, type Usage as CacheUsage } from '../canary';
+import { modelVariant, recheckAt, type Marks, type Unsafe } from '../gate';
+import { canaryNotice } from '../text';
 import type { Effort } from './effort';
 import { collapse, packet as buildPacket, parseAnswer, type Tripwire } from './judge';
-import { clamp, rank, step } from './ladder';
+import { clamp, isLevel, rank, step } from './ladder';
 import { returnLine, type ReturnWords } from './signals';
-import { announceLine, autoText, boundText, buttonText, unsteeredNote, whyChild, whyDecayed, whyJudge, whyRedispatch, whyResolved, WHY_FAIL1, WHY_FAIL2, WHY_JUDGE_FAILED, WHY_LANDING, type Direction } from './text';
+import { announceLine, autoText, boundText, buttonText, unsafeText, unsteeredNote, whyChild, whyDecayed, whyJudge, whyRedispatch, whyResolved, WHY_FAIL1, WHY_FAIL2, WHY_JUDGE_FAILED, WHY_LANDING, type Direction } from './text';
 
 export type Row = Record<string, unknown>;
 
@@ -33,7 +36,7 @@ export type Setup = {
   tripwires: ReadonlySet<Tripwire>;
   /** Agent types whose spawn lands the flight. */
   landing: readonly string[];
-  /** Model id prefixes the agent may be steered on. */
+  /** Model id prefixes the agent may be steered on; `*` steers every model. */
   models: readonly string[];
   words: ReturnWords;
   announce: boolean;
@@ -41,12 +44,18 @@ export type Setup = {
   struggleDecay: number;
   /** The spawn prompt after the tag was stripped. */
   brief: string;
+  /** The cache marks the main chat and every sub-agent share: a waiting one stops this agent's effort changes too. */
+  marks: Marks;
+  /** The clock, in epoch ms. */
+  now: () => number;
 };
 
 type Child = { type: string; name: string | undefined; unit: string | undefined };
 /** `requests` counts the struggle's raised requests; `quiet` the ones since its last tripwire. */
 type Struggle = { epoch: number; pre: Effort; requests: number; quiet: number };
 type Usage = { input_tokens: number; output_tokens: number };
+/** A request in flight: its raw model name, the request as the cache check sees it, and the one before it when it switched effort. */
+type Inflight = { name: string; request: Switched; prev: Sample | undefined };
 
 const RING = 12;
 const COMMAND_MAX = 70;
@@ -56,6 +65,11 @@ const HEAD_MAX = 300;
 const LAST_WORDS_MAX = 400;
 
 const log = (event: string, fields: Row = {}, detail?: Row): Action => ({ kind: 'log', row: { event, ...fields }, ...(detail ? { detail } : {}) });
+
+/** Whether the `models` option steers a model: `*` names every model, any other entry a model id prefix. */
+export function steers(models: readonly string[], model: string): boolean {
+  return models.some((entry) => entry === '*' || model.startsWith(entry));
+}
 
 export class Controller {
   level: Effort;
@@ -82,6 +96,16 @@ export class Controller {
   private model = '';
   private gated = false;
   private line: string | undefined;
+  /** Whether the latest request went on a model and effort this controller steers. */
+  private steeredNow = true;
+  /** The effort the latest steered request went at; undefined before the first. */
+  private wire: Effort | undefined;
+  /** Whether a cache mark held the latest steered request's effort. */
+  private holding = false;
+  private last: Sample | undefined;
+  private inflight: Inflight | undefined;
+  /** A compaction of the agent's conversation stood since its last request: the next one's check judges nothing. */
+  private compacted = false;
 
   constructor(private readonly setup: Setup) {
     this.level = clamp(setup.home, setup.floor, setup.ceiling);
@@ -101,16 +125,33 @@ export class Controller {
     return this.struggle !== undefined;
   }
 
-  /** The effort to send for one request, or undefined to pass it through untouched. */
-  onRequest(model: string, requested: unknown): RequestOutcome {
+  /** The effort to send for one request, or undefined to pass it through untouched; `messages` is how many it carries. */
+  onRequest(model: string, requested: unknown, messages = 0): RequestOutcome {
     this.model = model;
     const actions: Action[] = [];
-    if (!this.setup.models.some((prefix) => model.startsWith(prefix))) {
-      if (!this.gated) actions.push(log('model-gated', { model }));
+    // A model the option leaves out, or a request with no level to steer (a model without effort, or a number), goes untouched.
+    const listed = steers(this.setup.models, model);
+    this.steeredNow = listed && isLevel(requested);
+    if (!this.steeredNow) {
+      if (!this.gated) actions.push(log('model-gated', listed ? { model, requested: requested ?? null } : { model }));
       this.gated = true;
+      this.inflight = undefined;
+      this.last = undefined;
       return { send: undefined, actions };
     }
-    const sent = this.level;
+    const now = this.setup.now();
+    const waiting = this.setup.marks.waiting(model, now);
+    // A waiting cache mark keeps the effort the agent has; its first request has no cache to lose and goes at its level.
+    const sent = waiting !== undefined && this.wire !== undefined ? this.wire : this.level;
+    if (waiting !== undefined && !this.holding) actions.push(log('gate', { model, status: 'unsafe', why: 'cache mark', recheckAt: new Date(recheckAt(waiting)).toISOString() }));
+    this.holding = waiting !== undefined;
+    const variant = modelVariant(model);
+    // A request that never answered leaves nothing to compare the next one with.
+    const prev = this.inflight === undefined ? this.last : undefined;
+    const switched = prev !== undefined && prev.model === variant && prev.wire !== sent;
+    this.inflight = { name: model, request: { model: variant, wire: sent, usage: null, endedAt: now, messages, startedAt: now, compacted: this.compacted }, prev: switched ? prev : undefined };
+    this.compacted = false;
+    this.wire = sent;
     this.requests[sent] = (this.requests[sent] ?? 0) + 1;
     if (this.struggle) {
       this.struggle.requests += 1;
@@ -119,6 +160,37 @@ export class Controller {
     actions.push(log('step', { model, requested: requested ?? null, sent, struggle: this.struggle !== undefined }));
     if (this.struggle && this.setup.struggleDecay > 0 && this.struggle.quiet >= this.setup.struggleDecay) this.close(actions, 'decay');
     return { send: sent, actions };
+  }
+
+  /**
+   * The request answered. One that went at another effort than the request before it on the same model is checked against
+   * it (`judgeStep`) and the verdict kept in the shared marks: a failure stops every effort change on that model and context
+   * window, here, in the other agents and in the main chat, until its recheck. A compaction in between (`onCompaction`, or
+   * fewer messages) judges nothing.
+   * `changed` names the model whose stored marks changed, to be saved; `warning` is a failure's notice.
+   */
+  onResponse(usage: CacheUsage | null, check: { ttlMs: number; threshold: number }): Outcome & { changed?: string; warning?: string } {
+    const inf = this.inflight;
+    this.inflight = undefined;
+    if (inf === undefined) return { actions: [] };
+    const cur: Switched = { ...inf.request, usage, endedAt: this.setup.now() };
+    this.last = usage === null ? undefined : cur;
+    if (inf.prev === undefined) return { actions: [] };
+    const verdict = judgeStep(inf.prev, cur, check.ttlMs, check.threshold);
+    const actions = [log('canary', { model: inf.name, from: inf.prev.wire, to: cur.wire, ...verdict })];
+    const kept = this.setup.marks.keep(verdict, inf.prev, cur);
+    const changed = kept.stored ? { changed: cur.model } : {};
+    if (kept.lifted) actions.push(log('gate', { model: inf.name, status: 'steered', why: 'cache check passed' }));
+    if (verdict.verdict !== 'fail' || kept.mark === undefined) return { actions, ...changed };
+    this.holding = true;
+    actions.push(log('gate', { model: inf.name, status: 'unsafe', why: 'cache canary', ratio: verdict.ratio, fails: kept.mark.fails }));
+    const warning = canaryNotice({ model: inf.name, variant: cur.model, from: kept.mark.from, to: kept.mark.to, ratio: verdict.ratio, threshold: check.threshold, recheck: recheckAt(kept.mark) });
+    return { actions, ...changed, warning };
+  }
+
+  /** A compaction of the agent's conversation stood: it rewrote the prompt, so the next request's cache check judges nothing. */
+  onCompaction(): void {
+    this.compacted = true;
   }
 
   /** The agent's reply text of one request; a non-empty one becomes its last words. */
@@ -221,6 +293,8 @@ export class Controller {
 
   /** A press of effort_up or effort_down: one step within the range, and the level holds, a press at a bound included. */
   onButton(direction: Direction): Outcome & { text: string } {
+    const waiting = this.waiting();
+    if (waiting !== undefined) return this.unsafe(direction, waiting);
     const { floor, ceiling } = this.setup;
     const to = step(this.level, direction === 'up' ? 1 : -1, floor, ceiling);
     const from = this.level;
@@ -236,6 +310,8 @@ export class Controller {
 
   /** effort_auto: the hold ends, the level and the resting level go home, and an open struggle resolves to home. */
   onAuto(): Outcome & { text: string } {
+    const waiting = this.waiting();
+    if (waiting !== undefined) return this.unsafe('auto', waiting);
     const { floor, ceiling } = this.setup;
     const to = clamp(this.home, floor, ceiling);
     const from = this.level;
@@ -248,12 +324,21 @@ export class Controller {
     return { text: autoText(to, from, floor, ceiling) + this.unsteered(), actions: [log('auto', { from, to, held })] };
   }
 
+  /** A press refused while a cache mark holds the agent's model: nothing changes, a hold included. */
+  private unsafe(direction: Direction | 'auto', mark: Unsafe): Outcome & { text: string } {
+    return { text: unsafeText(this.model, this.wire ?? this.level, recheckAt(mark)), actions: [log('button-refused', { direction, model: this.model, status: 'unsafe' })] };
+  }
+
+  /** The cache mark that holds this agent's effort while it waits; undefined when none does. */
+  private waiting(): Unsafe | undefined {
+    return this.model === '' || !this.steeredNow ? undefined : this.setup.marks.waiting(this.model, this.setup.now());
+  }
+
   /**
-   * A press's note while the last request went to a model outside `models`: the level waits for a request it can go on.
+   * A press's note while the last request went untouched (a model outside `models`, or no level): the level waits for a request it can go on.
    */
   private unsteered(): string {
-    if (this.model === '') return '';
-    return this.setup.models.some((prefix) => this.model.startsWith(prefix)) ? '' : unsteeredNote(this.model);
+    return this.model === '' || this.steeredNow ? '' : unsteeredNote(this.model);
   }
 
   /** The line owed to the agent's next tool result, handed over once. */
@@ -315,16 +400,17 @@ export class Controller {
     this.judgeTokens.output += usage.output_tokens;
   }
 
-  /** The mark a row of an automatic rule carries while a press holds the level. */
+  /** The marks a row of an automatic rule carries while a press or a cache mark holds the level. */
   private heldMark(): Row {
-    return this.held ? { held: true } : {};
+    return { ...(this.held ? { held: true } : {}), ...(this.waiting() !== undefined ? { unsafe: true } : {}) };
   }
 
-  // Every automatic rule moves the level here, so a held level stays put.
+  // Every automatic rule moves the level here, so a held level stays put. While a cache mark waits the requests keep their
+  // effort (`onRequest`): the level moves unannounced and goes out once the wait is over, as the switch its recheck judges.
   private setLevel(to: Effort, why: string): void {
     if (this.held || to === this.level) return;
     this.level = to;
-    if (this.setup.announce) this.line = announceLine(to, why);
+    if (this.setup.announce && this.waiting() === undefined) this.line = announceLine(to, why);
   }
 
   private tripwire(kind: Tripwire, why: string, actions: Action[], returnHead?: string): void {
@@ -334,8 +420,8 @@ export class Controller {
       this.struggles += 1;
     }
     this.struggle.quiet = 0;
-    if (this.held) {
-      actions.push(log('tripwire', { tripwire: kind, level: this.level, held: true }));
+    if (this.held || this.waiting() !== undefined) {
+      actions.push(log('tripwire', { tripwire: kind, level: this.level, ...this.heldMark() }));
       return;
     }
     if (!this.setup.judge) {

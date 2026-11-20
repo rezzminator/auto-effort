@@ -31,7 +31,7 @@ A live check loads the checkout with `--plugin-dir plugins/auto-effort` and `CLA
 ## Rules
 
 - An error never holds a request or a spawn: log it with context (`auto-effort: {what} failed: {why}; {what happens instead}`) and let it through at the effort it already had.
-- The main loop follows the main-chat rules, a sub-agent only the tag and `effortControl` rules; neither scope's request reaches the other's controller.
+- The main loop follows the main-chat rules, a sub-agent only the tag and `effortControl` rules and the cache check; neither scope's request reaches the other's controller, and the two share only the cache marks (`Marks` in `plugins/auto-effort/src/gate.ts`).
 - A malformed tag refuses the spawn with a message naming the valid levels; it is never silently dropped.
 - A setting under a former name — a `pluginConfigs` entry of `auto-effort-control@…` or `effort-live-control@…`, an `AUTO_EFFORT_CONTROL_*` or `EFFORT_LIVE_CONTROL_*` variable — is read under the `auto-effort` name or reported naming the old and the new key, never dropped.
 - The state file (`~/.local/state/auto-effort/state.json` by default) is a published interface: `version` 3 with `mode`, `level`, `reason`, `keeper`, `updatedAt`, a failing-test raise's reason `{N} failing test runs`, the keeper's last argument `auto-effort-keeper`; a change to any of them bumps `STATE_VERSION`.

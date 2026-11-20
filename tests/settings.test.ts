@@ -16,7 +16,7 @@ describe('resolveSettings', () => {
       escalateAfterFailures: 2,
       lowerOnPass: true,
       userEffortPins: true,
-      unknownModels: 'off',
+      unknownModels: 'probation',
       probationSwitches: 5,
       canaryThreshold: 0.9,
       statusLine: true,
@@ -24,13 +24,7 @@ describe('resolveSettings', () => {
     expect(DEFAULTS.planUpshiftPatterns).toEqual([]);
     expect(DEFAULTS.failurePatterns).toEqual(['--- FAIL', 'FAIL(ED)?', '(?<!\\d)[1-9]\\d* (failed|failing)', 'AssertionError', 'panic:', 'Traceback']);
     expect(DEFAULTS.testCommandPatterns).toHaveLength(15);
-    expect(DEFAULTS.models).toEqual([
-      'claude-opus-5-5=allow',
-      'claude-fable-5-1=allow',
-      'claude-sonnet-5-5=probation',
-      'claude-haiku-5-5=probation',
-      'claude-sonnet-5=deny',
-    ]);
+    expect(DEFAULTS.models).toEqual([]);
   });
 
   it('takes valid values, a number or a boolean given as text included', () => {
@@ -50,7 +44,7 @@ describe('resolveSettings', () => {
     ['canaryThreshold', 1.5, 0.9],
     ['turnReminder', 'maybe', true],
     ['lowerOnPass', 'sometimes', true],
-    ['unknownModels', 'sometimes', 'off'],
+    ['unknownModels', 'sometimes', 'probation'],
     ['cacheTtlSeconds', 0, 300],
   ] as const)('reports %s = %j and applies the default %j', (key, value, fallback) => {
     const { settings, errors } = resolveSettings({ [key]: value });
@@ -239,9 +233,12 @@ describe('resolveSettings with environment variables', () => {
 describe('compile', () => {
   it('turns the lists into regular expressions and the model entries into a map', () => {
     const compiled = compile(DEFAULTS);
-    expect(compiled.models).toEqual({
+    const rows = ['claude-opus-5-5=allow', 'claude-fable-5-1=allow', 'claude-fable-5-2=probation', 'claude-sonnet-5-5=probation', 'claude-haiku-5-5=probation', 'claude-sonnet-5=deny'];
+    expect(compiled.models).toEqual({});
+    expect(compile(resolveSettings({ models: rows }).settings).models).toEqual({
       'claude-opus-5-5': 'allow',
       'claude-fable-5-1': 'allow',
+      'claude-fable-5-2': 'probation',
       'claude-sonnet-5-5': 'probation',
       'claude-haiku-5-5': 'probation',
       'claude-sonnet-5': 'deny',
