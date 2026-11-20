@@ -4,6 +4,8 @@ All notable changes to this plugin are recorded here. The format follows [Keep a
 
 ## [Unreleased]
 
+## [3.2.0] — 2026-11-20
+
 ### Changed
 
 - The model calls `set_effort` only to change the level. The turn's reminder said "Call set_effort first, with the level the work ahead needs", so the model called it on every turn, the level the turn already ran at included; it now says to call it only when the work needs another level. A reply with no tool work calls it only to raise the level: lowering it there costs one more request and saves nothing.
