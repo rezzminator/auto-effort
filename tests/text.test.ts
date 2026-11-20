@@ -5,11 +5,10 @@ import { deescalationLine, escalationLine, handBackText, heldLine, reminderLine,
 describe('toolDescription', () => {
   it('guides the model across the default range and mentions no level below the floor', () => {
     const text = toolDescription('medium', 'xhigh');
-    expect(text).toContain('Call it in your first response of a user turn whose work needs another level than the one in effect, alongside your first tool calls.');
+    expect(text).toContain('Call it in your first response of a user turn whose work needs another level than the one in effect, alongside your first tool calls; a reply with no tool work calls it only to raise the level, then answers after its result.');
     for (const level of ['xhigh:', 'high:', 'medium:']) expect(text).toContain(`- ${level}`);
     expect(text).not.toContain('- low:');
     expect(text).not.toContain('- max:');
-    expect(text).toContain('If the answer itself needs deep thought and there is no tool work, call this first and answer after its result.');
   });
 
   // Pilot (first round): a sub-agent saw the always-loaded schema and called the tool; the plugin refused it.
@@ -39,7 +38,7 @@ describe('reminderLine', () => {
         const words = hints.length === 1 ? '"design"' : hints.length === 2 ? '"design" and "architecture"' : '"design", "architecture" and "spec"';
         const hint = hints.length ? ` This prompt names ${words}: the set_effort guide places that kind of work at xhigh; whether this turn is that work is your call.` : '';
         const line = reminderLine({ level: 'high', tool: 'set_effort', upshift, chars: 1600, hints, hintLevel: 'xhigh' });
-        expect(line).toBe(`Your reasoning effort starts this turn at high${why}, and this first response runs at high. Call set_effort first, with the level the work ahead needs; a level you set lasts until this turn ends. With no call, the turn stays at high.${hint}`);
+        expect(line).toBe(`Your reasoning effort starts this turn at high${why}, and this first response runs at high. Call set_effort only when the work ahead needs another level; a level you set lasts until this turn ends, and with no call the turn stays at high.${hint}`);
         expect(line.split('\n')).toHaveLength(1);
       });
     }

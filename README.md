@@ -69,7 +69,7 @@ It is built against the plugin API of Claude Code 2.1.296 (`types/claude-code.d.
 2. **The reminder.** With `turnReminder` on, the prompt carries one line:
 
    ```text
-   Your reasoning effort starts this turn at high, and this first response runs at high. Call set_effort first, with the level the work ahead needs; a level you set lasts until this turn ends. With no call, the turn stays at high.
+   Your reasoning effort starts this turn at high, and this first response runs at high. Call set_effort only when the work ahead needs another level; a level you set lasts until this turn ends, and with no call the turn stays at high.
    ```
 
    A length or pattern upshift adds why (`because the prompt is long (2210 characters)`). When the prompt matches `hintPatterns` (design, architecture, trade-offs, root causes, specs, "think hard", ultrathink), the line names up to three matched words and the guide's level for that work, held within the range, and leaves the call to the model. Hints never move the planned level.
@@ -256,7 +256,7 @@ An unset or blank variable is absent. A variable that does not fit is reported b
 | `planUpshiftPatterns` | `AUTO_EFFORT_PLAN_UPSHIFT_PATTERNS` | *(none)* | One regular expression per entry, matched case-insensitively against the prompt. A prompt that matches any entry starts its turn at xhigh instead of planLevel. |
 | `hintPatterns` | `AUTO_EFFORT_HINT_PATTERNS` | `\bdesign`<br>`\barchitect`<br>`\btrade-?offs?\b`<br>`\broot[- ]?causes?\b`<br>`\bspec(s\|ced\|ification)?\b`<br>`\bthink (hard\|harder\|deeply\|carefully\|it through)\b`<br>`\bultrathink\b` | Main chat only. Regular expressions matched case-insensitively against the prompt. The reminder names up to three matching words as hints to the model; they never change the planned level. |
 | `planUpshiftChars` | `AUTO_EFFORT_PLAN_UPSHIFT_CHARS` | `1500` | A prompt longer than this many characters starts its turn at xhigh instead of planLevel. |
-| `turnReminder` | `AUTO_EFFORT_TURN_REMINDER` | `true` | On: each prompt carries one line naming the effort the turn starts at and asking the model to call set_effort in its first response. Off: only the tool's description asks for the call. |
+| `turnReminder` | `AUTO_EFFORT_TURN_REMINDER` | `true` | On: each prompt carries one line naming the effort the turn starts at and asking the model to call set_effort only when the work needs another level. Off: only the tool's description asks for the call. |
 | `escalateAfterFailures` | `AUTO_EFFORT_ESCALATE_AFTER_FAILURES` | `2` | After this many failing test runs in a row in one turn the effort rises one step, up to the ceiling, for the requests that follow; the count then starts again. A passing test run sets the count back to 0. |
 | `lowerOnPass` | `AUTO_EFFORT_LOWER_ON_PASS` | `true` | On: the first passing test run after a rise returns the effort to the level the turn had before its failing streak raised it (never below floor), unless the model set a level with set_effort since. Off: the raised level holds until the turn ends. |
 | `failureTools` | `AUTO_EFFORT_FAILURE_TOOLS` | `Bash` | One tool name per entry (Bash runs the tests). A call of these tools whose command matches testCommandPatterns is a test run; its result is matched against failurePatterns. |
